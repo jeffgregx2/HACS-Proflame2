@@ -1,0 +1,157 @@
+{
+  "title": "Proflame 2 Fireplace",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add fireplace profile",
+        "menu_options": {
+          "learn": "Learn from remote",
+          "manual": "Manual entry"
+        },
+        "menu_option_descriptions": {
+          "learn": "Listen for handheld remote packets and derive the permanent remote profile automatically.",
+          "manual": "Enter the permanent remote ID and learned C/D values directly."
+        }
+      },
+      "manual": {
+        "title": "Manual fireplace profile",
+        "description": "Enter the permanent learned remote profile for one Proflame2 fireplace.",
+        "data": {
+          "name": "Fireplace name",
+          "backend_type": "RF backend",
+          "remote_id": "Remote ID",
+          "c1": "C1",
+          "d1": "D1",
+          "c2": "C2",
+          "d2": "D2",
+          "fan": "Fan supported",
+          "light": "Light supported",
+          "front": "Front burner supported",
+          "aux": "Aux supported",
+          "cpi": "CPI supported"
+        }
+      },
+      "learn": {
+        "title": "Learn fireplace profile",
+        "description": "Choose the RF backend to use for guided learning, then press the handheld remote when prompted.",
+        "data": {
+          "name": "Fireplace name",
+          "backend_type": "RF backend"
+        }
+      },
+      "learn_features": {
+        "title": "Select supported features",
+        "description": "Learning found the permanent remote profile. Select the fireplace features that should be enabled.",
+        "data": {
+          "fan": "Fan supported",
+          "light": "Light supported",
+          "front": "Front burner supported",
+          "aux": "Aux supported",
+          "cpi": "CPI supported"
+        }
+      },
+      "learn_failed": {
+        "title": "Learning did not complete",
+        "description": "Guided learning could not produce a trustworthy remote profile.\n\nReason: {error}",
+        "menu_options": {
+          "retry_learn": "Retry learning",
+          "manual": "Manual entry"
+        },
+        "menu_option_descriptions": {
+          "retry_learn": "Start guided learning again with the same backend.",
+          "manual": "Enter the permanent remote profile yourself instead."
+        }
+      }
+    },
+    "progress": {
+      "learn_remote": "Listening for Proflame2 remote packets. Press different buttons on the handheld remote."
+    },
+    "error": {
+      "invalid_remote_id": "Remote ID must be a 24-bit hexadecimal value.",
+      "invalid_nibble": "C and D values must be integers from 0 to 15.",
+      "invalid_profile": "The saved profile contains an invalid fireplace state.",
+      "invalid_profile_name": "Profile name is required.",
+      "duplicate_profile_id": "A saved profile with that name already exists.",
+      "unknown_profile": "Choose an existing saved profile."
+    },
+    "abort": {
+      "already_configured": "A fireplace with this remote ID is already configured."
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_profile": "The saved profile contains an invalid fireplace state.",
+      "invalid_profile_name": "Profile name is required.",
+      "duplicate_profile_id": "A saved profile with that name already exists.",
+      "unknown_profile": "Choose an existing saved profile."
+    },
+    "step": {
+      "init": {
+        "title": "Manage fireplace settings",
+        "menu_options": {
+          "features": "Edit supported features",
+          "profiles": "Manage saved profiles"
+        }
+      },
+      "features": {
+        "title": "Edit supported features",
+        "data": {
+          "fan": "Fan supported",
+          "light": "Light supported",
+          "front": "Front burner supported",
+          "aux": "Aux supported",
+          "cpi": "CPI supported"
+        }
+      },
+      "profiles": {
+        "title": "Manage saved profiles",
+        "menu_options": {
+          "add_profile": "Add profile",
+          "select_profile": "Edit or delete profile"
+        }
+      },
+      "select_profile": {
+        "title": "Choose saved profile",
+        "data": {
+          "profile_id": "Profile",
+          "action": "Action"
+        }
+      },
+      "add_profile": {
+        "title": "Add saved profile",
+        "description": "Saved profiles are the normal user-facing way to apply a complete fireplace state.",
+        "data": {
+          "name": "Profile name",
+          "power": "Power",
+          "flame": "Flame",
+          "fan": "Fan",
+          "light": "Light",
+          "front": "Front burner",
+          "aux": "Aux",
+          "cpi": "CPI"
+        }
+      },
+      "edit_profile": {
+        "title": "Edit saved profile",
+        "description": "Editing saved profile: {profile_name}",
+        "data": {
+          "name": "Profile name",
+          "power": "Power",
+          "flame": "Flame",
+          "fan": "Fan",
+          "light": "Light",
+          "front": "Front burner",
+          "aux": "Aux",
+          "cpi": "CPI"
+        }
+      },
+      "delete_profile": {
+        "title": "Delete saved profile",
+        "description": "Delete saved profile: {profile_name}",
+        "data": {
+          "confirm": "Confirm delete"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "domain": "proflame2",
+  "name": "Proflame 2 Fireplace",
+  "codeowners": [
+    "@jeffa"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/jeffa/HACS-proflame2",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/jeffa/HACS-proflame2/issues",
+  "loggers": [
+    "custom_components.proflame2",
+    "proflame2_protocol",
+    "proflame2_rf"
+  ],
+  "requirements": [],
+  "version": "0.1.0"
+}
