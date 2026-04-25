@@ -206,8 +206,7 @@ Still in progress:
 
 Future work:
 
-* CC1101 backend
-* ESP32 + CC1101 deployment path
+* ESPHome-based CC1101 backend
 * native thermostat investigation
 * optional HA thermostat policy layer
 * global/shared profiles (v2, not initial release)
