@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass, field
 
-from proflame2_protocol.packet import ProflameFrame, ProflamePacket
+from ..protocol.packet import ProflameFrame, ProflamePacket
 
 from .base import BackendCapabilities, CaptureResult, RFBackend, SendResult
 from .capture import CaptureSample
@@ -20,6 +22,8 @@ class FakeRFBackend(RFBackend):
     sent_results: list[SendResult] = field(default_factory=list)
     receive_queue: list[ProflamePacket | None] = field(default_factory=list)
     learned_samples: list[CaptureSample] = field(default_factory=list)
+    receive_delay_seconds: float = 0.0
+    _next_receive_ready_monotonic: float | None = None
 
     async def connect(self) -> None:
         self.connected = True
@@ -50,8 +54,22 @@ class FakeRFBackend(RFBackend):
         if not self.connected:
             raise RuntimeError("FakeRFBackend.connect() must be called before receive().")
         if not self.receive_queue:
+            self._next_receive_ready_monotonic = None
             return None
-        return self.receive_queue.pop(0)
+        if self.receive_delay_seconds > 0:
+            now = time.monotonic()
+            if self._next_receive_ready_monotonic is None:
+                self._next_receive_ready_monotonic = now + self.receive_delay_seconds
+            remaining = self._next_receive_ready_monotonic - now
+            if remaining > 0:
+                wait_time = remaining if timeout is None else min(timeout, remaining)
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
+                if time.monotonic() < self._next_receive_ready_monotonic:
+                    return None
+        packet = self.receive_queue.pop(0)
+        self._next_receive_ready_monotonic = None
+        return packet
 
     def queue_packets(self, *packets: ProflamePacket | None) -> None:
         """Append deterministic receive results for tests and dry runs."""

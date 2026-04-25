@@ -6,7 +6,7 @@ import pytest
 
 pytestmark = pytest.mark.protocol
 
-from proflame2_protocol.ecc import (
+from custom_components.proflame2.protocol.ecc import (
     combine_cd,
     derive_cd_candidates,
     derive_ecc_profile,

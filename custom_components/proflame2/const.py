@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .version import BUILD_FLAVOR, INTEGRATION_VERSION, is_dev_build
+
 DOMAIN = "proflame2"
 MANUFACTURER = "Proflame2"
 
@@ -27,6 +29,24 @@ CONF_CPI = "cpi"
 BACKEND_FAKE = "fake"
 BACKEND_YARDSTICK = "yardstick"
 BACKEND_TYPES: tuple[str, ...] = (BACKEND_YARDSTICK, BACKEND_FAKE)
+PRODUCTION_BACKEND_TYPES: tuple[str, ...] = (BACKEND_YARDSTICK,)
+BACKEND_LABELS: dict[str, str] = {
+    BACKEND_YARDSTICK: "YARD Stick One USB Controller",
+    BACKEND_FAKE: "Fake Controller (Simulated Learn/Test)",
+}
+
+
+def available_backend_types() -> tuple[str, ...]:
+    """Return the backend types exposed by the current build."""
+
+    return BACKEND_TYPES if is_dev_build() else PRODUCTION_BACKEND_TYPES
+
+
+def available_backend_labels() -> dict[str, str]:
+    """Return the backend labels exposed by the current build."""
+
+    return {backend_type: BACKEND_LABELS[backend_type] for backend_type in available_backend_types()}
+
 
 FEATURE_OPTION_KEYS: tuple[str, ...] = (
     CONF_FAN,
@@ -52,3 +72,4 @@ DATA_SERVICES_REGISTERED = "services_registered"
 DATA_LEARNING_BACKEND_FACTORY = "learning_backend_factory"
 DATA_LEARNING_TIMEOUT = "learning_timeout"
 DATA_LEARNING_RECEIVE_TIMEOUT = "learning_receive_timeout"
+DATA_FAKE_LEARNING_DELAY = "fake_learning_delay"

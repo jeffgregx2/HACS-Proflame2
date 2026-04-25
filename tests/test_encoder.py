@@ -6,9 +6,9 @@ import pytest
 
 pytestmark = pytest.mark.protocol
 
-from proflame2_protocol.ecc import derive_ecc_profile
-from proflame2_protocol.encoder import build_cmd1, build_cmd2, encode_state
-from proflame2_protocol.models import FireplaceFeatures, FireplaceState, RemoteProfile
+from custom_components.proflame2.protocol.ecc import derive_ecc_profile
+from custom_components.proflame2.protocol.encoder import build_cmd1, build_cmd2, encode_state
+from custom_components.proflame2.protocol.models import FireplaceFeatures, FireplaceState, RemoteProfile
 
 
 def test_encoder_maps_validated_manual_state(remote_profile) -> None:

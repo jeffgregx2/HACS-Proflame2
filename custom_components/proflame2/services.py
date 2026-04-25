@@ -9,8 +9,8 @@ from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 
-from proflame2_protocol.encoder import encode_packet
-from proflame2_rf.waveform import build_transmission_plan
+from .protocol.encoder import encode_packet
+from .rf.waveform import build_transmission_plan
 
 from .control import StateValidationError, build_requested_state
 from .const import (
@@ -209,8 +209,11 @@ async def async_execute_set_state(
     runtime_entry.last_packet = packet
     runtime_entry.last_send_result = None
     runtime_entry.last_error = None
+    runtime_entry.sending_in_progress = True
+    async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
 
     if runtime_entry.backend_type == BACKEND_YARDSTICK or runtime_entry.backend is None:
+        runtime_entry.sending_in_progress = False
         runtime_entry.last_error = "YARD Stick One transmit is not implemented yet."
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         raise HomeAssistantError(runtime_entry.last_error)
@@ -218,14 +221,17 @@ async def async_execute_set_state(
     try:
         send_result = await runtime_entry.backend.send(packet)
     except NotImplementedError as exc:
+        runtime_entry.sending_in_progress = False
         runtime_entry.last_error = str(exc)
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         raise HomeAssistantError(str(exc)) from exc
     except RuntimeError as exc:
+        runtime_entry.sending_in_progress = False
         runtime_entry.last_error = str(exc)
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         raise HomeAssistantError(str(exc)) from exc
 
+    runtime_entry.sending_in_progress = False
     runtime_entry.last_send_result = send_result
     runtime_entry.last_applied_profile_id = applied_profile_id
     runtime_entry.last_applied_profile_name = applied_profile_name

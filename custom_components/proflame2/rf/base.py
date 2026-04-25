@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from proflame2_protocol.models import FireplaceState
-from proflame2_protocol.packet import ProflameFrame, ProflamePacket
+from ..protocol.models import FireplaceState
+from ..protocol.packet import ProflameFrame, ProflamePacket
 from .capture import CaptureSample
 
 

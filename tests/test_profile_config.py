@@ -24,10 +24,11 @@ from custom_components.proflame2.const import (
     CONF_PROFILES,
     CONF_REMOTE_ID,
 )
-from proflame2_protocol.models import FireplaceFeatures
+from custom_components.proflame2.protocol.models import FireplaceFeatures
 from custom_components.proflame2.profile import (
     build_profile_id,
     default_entry_options,
+    InvalidBackendError,
     InvalidNibbleError,
     InvalidSavedProfileError,
     InvalidRemoteIdError,
@@ -39,6 +40,8 @@ from custom_components.proflame2.profile import (
     parse_nibble,
     parse_remote_id,
 )
+from custom_components.proflame2.const import available_backend_types
+from custom_components.proflame2.version import build_flavor, integration_version, is_dev_build
 
 
 def test_parse_remote_id_accepts_24_bit_hex() -> None:
@@ -221,3 +224,44 @@ def test_build_profile_id_slugifies_display_name() -> None:
     """Saved profile ids should be stable slug values."""
 
     assert build_profile_id("Evening Relax") == "evening_relax"
+
+
+def test_build_metadata_defaults_to_dev(monkeypatch) -> None:
+    """Dev builds should expose fake for local testing by default."""
+
+    monkeypatch.delenv("PROFLAME2_VERSION", raising=False)
+    monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
+
+    assert integration_version() == "0.1.0-dev"
+    assert build_flavor() == "dev"
+    assert is_dev_build() is True
+    assert "fake" in available_backend_types()
+
+
+
+def test_prod_build_hides_fake_backend(monkeypatch) -> None:
+    """Production builds should not expose the fake backend in the UI."""
+
+    monkeypatch.setenv("PROFLAME2_BUILD", "prod")
+
+    assert build_flavor() == "prod"
+    assert is_dev_build() is False
+    assert available_backend_types() == ("yardstick",)
+
+    with pytest.raises(InvalidBackendError):
+        normalize_manual_profile_input(
+            {
+                "name": "Living Room Fireplace",
+                CONF_BACKEND_TYPE: "fake",
+                CONF_REMOTE_ID: "3b3f02",
+                CONF_C1: "5",
+                CONF_D1: "7",
+                CONF_C2: "1",
+                CONF_D2: "8",
+                CONF_FAN: True,
+                CONF_LIGHT: True,
+                CONF_FRONT: False,
+                CONF_AUX: False,
+                CONF_CPI: False,
+            }
+        )

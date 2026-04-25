@@ -16,8 +16,8 @@ from custom_components.proflame2.learning import (
     ERROR_TIMEOUT,
     async_learn_remote_profile,
 )
-from proflame2_protocol.packet import ProflameFrame, ProflamePacket
-from proflame2_rf.fake import FakeRFBackend
+from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
+from custom_components.proflame2.rf.fake import FakeRFBackend
 
 
 def _packet(

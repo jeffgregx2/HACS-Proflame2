@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from proflame2_protocol.packet import ProflameFrame
+from ..protocol.packet import ProflameFrame
 
 SYMBOL_TO_BITS = {
     "S": "11",

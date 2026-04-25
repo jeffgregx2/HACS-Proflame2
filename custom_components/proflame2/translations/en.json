@@ -33,7 +33,7 @@
       },
       "learn": {
         "title": "Learn fireplace profile",
-        "description": "Choose the RF backend to use for guided learning, then press the handheld remote when prompted.",
+        "description": "Choose the RF backend to use for guided learning. After this step, listening starts automatically. Press Power first, then press one or two different remote buttons so the integration can confirm one stable remote profile while leaving the fireplace in a known state.",
         "data": {
           "name": "Fireplace name",
           "backend_type": "RF backend"
@@ -64,7 +64,7 @@
       }
     },
     "progress": {
-      "learn_remote": "Listening for Proflame2 remote packets. Press different buttons on the handheld remote."
+      "learn_remote": "Listening with {backend_name}.\n\n**Do this now:**\n**{instruction}**\n\nThis step times out after 2 minutes if no packet is observed. Close this dialog to cancel listening."
     },
     "error": {
       "invalid_remote_id": "Remote ID must be a 24-bit hexadecimal value.",

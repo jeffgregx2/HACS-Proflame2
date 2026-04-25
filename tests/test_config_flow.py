@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 
 import pytest
@@ -31,13 +32,14 @@ from custom_components.proflame2.const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    DATA_FAKE_LEARNING_DELAY,
     DATA_LEARNING_BACKEND_FACTORY,
     DATA_LEARNING_RECEIVE_TIMEOUT,
     DATA_LEARNING_TIMEOUT,
     DOMAIN,
 )
-from proflame2_protocol.packet import ProflameFrame, ProflamePacket
-from proflame2_rf.fake import FakeRFBackend
+from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
+from custom_components.proflame2.rf.fake import FakeRFBackend
 
 
 @pytest.fixture(autouse=True)
@@ -67,6 +69,19 @@ def _packet(
     )
 
 
+class DelayedFakeRFBackend(FakeRFBackend):
+    """Fake backend that delays each queued receive result for timing tests."""
+
+    def __init__(self, delays: list[float]):
+        super().__init__()
+        self._delays = delays
+
+    async def receive(self, timeout: float | None = None) -> ProflamePacket | None:
+        if self._delays:
+            await asyncio.sleep(self._delays.pop(0))
+        return await super().receive(timeout)
+
+
 def _backend_factory(*backends: FakeRFBackend):
     queued = deque(backends)
 
@@ -75,6 +90,28 @@ def _backend_factory(*backends: FakeRFBackend):
         return queued.popleft()
 
     return factory
+
+
+async def _advance_guided_learning(
+    hass,
+    flow_id: str,
+    result: dict | None = None,
+):
+    """Advance guided learning until it reaches a non-progress step."""
+
+    current = result or await hass.config_entries.flow.async_configure(flow_id)
+
+    for _ in range(100):
+        if current["type"] is FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0.01)
+            current = await hass.config_entries.flow.async_configure(flow_id)
+            continue
+        if current["type"] is FlowResultType.SHOW_PROGRESS_DONE:
+            current = await hass.config_entries.flow.async_configure(flow_id)
+            continue
+        return current
+
+    raise AssertionError("Guided learning did not reach a terminal flow step in time during test.")
 
 
 async def test_config_flow_creates_entry_with_normalized_profile_data(hass) -> None:
@@ -283,6 +320,7 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass) -> None:
     hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
     hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
     hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.01
 
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     assert result["type"] is FlowResultType.MENU
@@ -302,8 +340,9 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass) -> None:
         },
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert result["step_id"] == "learn_progress"
 
-    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "learn_features"
 
@@ -328,13 +367,19 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass) -> None:
     assert result["options"][CONF_PROFILES] == {}
 
 
-async def test_config_flow_can_fallback_to_manual_after_learn_failure(hass) -> None:
-    """Failed guided learning should allow a manual-entry fallback."""
+async def test_guided_learning_timeout_is_per_prompt_not_overall(hass) -> None:
+    """Each guided prompt should get its own timeout window."""
 
-    backend = FakeRFBackend()
+    backend = DelayedFakeRFBackend([0.03, 0.03, 0.03])
+    backend.queue_packets(
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x16, err2=0xEF),
+        _packet(remote_id=0x3B3F02, cmd1=0x31, err1=0x25, cmd2=0x26, err2=0xBC),
+        _packet(remote_id=0x3B3F02, cmd1=0x51, err1=0x83, cmd2=0x36, err2=0x8D),
+    )
     hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
-    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.02
-    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.04
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.04
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.01
 
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     result = await hass.config_entries.flow.async_configure(
@@ -349,8 +394,65 @@ async def test_config_flow_can_fallback_to_manual_after_learn_failure(hass) -> N
         },
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert result["step_id"] == "learn_progress"
 
-    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "learn_features"
+
+
+async def test_builtin_fake_backend_auto_completes_learning(hass) -> None:
+    """The built-in fake backend should auto-supply packets and complete learning."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.01
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"next_step_id": "learn"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            "name": "Living Room Fireplace",
+            CONF_BACKEND_TYPE: "fake",
+        },
+    )
+    assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert result["step_id"] == "learn_progress"
+
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "learn_features"
+
+
+async def test_config_flow_can_fallback_to_manual_after_learn_failure(hass) -> None:
+    """Failed guided learning should allow a manual-entry fallback."""
+
+    backend = FakeRFBackend()
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.02
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.01
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"next_step_id": "learn"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            "name": "Living Room Fireplace",
+            CONF_BACKEND_TYPE: "fake",
+        },
+    )
+    assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert result["step_id"] == "learn_progress"
+
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "learn_failed"
 
@@ -399,6 +501,7 @@ async def test_config_flow_retry_can_succeed_after_initial_failure(hass) -> None
     )
     hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.02
     hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.01
 
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     result = await hass.config_entries.flow.async_configure(
@@ -412,7 +515,10 @@ async def test_config_flow_retry_can_succeed_after_initial_failure(hass) -> None
             CONF_BACKEND_TYPE: "fake",
         },
     )
-    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert result["step_id"] == "learn_progress"
+
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "learn_failed"
 
@@ -421,8 +527,9 @@ async def test_config_flow_retry_can_succeed_after_initial_failure(hass) -> None
         user_input={"next_step_id": "retry_learn"},
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert result["step_id"] == "learn_progress"
 
-    result = await hass.config_entries.flow.async_configure(result["flow_id"])
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "learn_features"
 

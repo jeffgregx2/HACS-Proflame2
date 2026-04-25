@@ -10,11 +10,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers import device_registry as dr
 
-from proflame2_protocol.models import ECCProfile, FireplaceFeatures, RemoteProfile
-from proflame2_protocol.packet import ProflamePacket
-from proflame2_rf.base import RFBackend, SendResult
-from proflame2_rf.fake import FakeRFBackend
-from proflame2_rf.waveform import ProflameTransmissionPlan
+from .protocol.encoder import encode_packet
+from .protocol.models import FireplaceState
+from .protocol.models import ECCProfile, FireplaceFeatures, RemoteProfile
+from .protocol.packet import ProflamePacket
+from .rf.base import RFBackend, SendResult
+from .rf.fake import FakeRFBackend
+from .rf.waveform import ProflameTransmissionPlan
 
 from .const import (
     BACKEND_FAKE,
@@ -50,6 +52,7 @@ class Proflame2RuntimeEntry:
     backend: RFBackend | None
     device_id: str
     learning_in_progress: bool = False
+    sending_in_progress: bool = False
     last_packet: ProflamePacket | None = None
     last_send_result: SendResult | None = None
     last_error: str | None = None
@@ -133,6 +136,20 @@ async def async_setup_runtime_entry(
             features=features,
         ),
     )
+    if backend_type == BACKEND_FAKE:
+        runtime_entry.last_packet = encode_packet(
+            FireplaceState(
+                power=True,
+                flame=1,
+                fan=0,
+                light=0,
+                front=False,
+                aux=False,
+                cpi=False,
+            ),
+            remote_profile,
+            source="fake_default",
+        )
     async_get_runtime_entries(hass)[entry.entry_id] = runtime_entry
     return runtime_entry
 
@@ -156,6 +173,7 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "backend_type": runtime_entry.backend_type,
         "device_id": runtime_entry.device_id,
         "learning_in_progress": runtime_entry.learning_in_progress,
+        "sending_in_progress": runtime_entry.sending_in_progress,
         "remote_profile": {
             "serial_id": runtime_entry.remote_profile.serial_id,
             "ecc": asdict(runtime_entry.remote_profile.ecc),

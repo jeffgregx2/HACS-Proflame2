@@ -190,7 +190,8 @@ Implemented today:
 * per-fireplace saved profile management through options flow
 * proflame2.apply_profile as the primary user-facing control service
 * proflame2.set_state for advanced/direct control
-* read-only entity surface for status, last state, and issue reporting
+* single primary read-only fireplace entity that doubles as the compact Lovelace-facing summary
+* separate last issue sensor for alerting and automation
 * diagnostic entities hidden by default
 * fake RF backend for deterministic testing
 
@@ -257,7 +258,9 @@ This project builds on that idea with a different product goal: a production-qua
 
 Diagnostic Visibility
 
-The default entity surface is intentionally simple. Users see operational state, last known fireplace state, and clear natural-language issue reporting.
+The default entity surface is intentionally simple. Users see one primary fireplace entity whose state is a compact human-readable fireplace summary suitable for Lovelace display. Its attributes expose operational status, selected human-readable fireplace fields such as power, flame level, optional enabled features, active profile, last issue, and last update source. A separate last-issue sensor remains available for alerting and automation.
+
+Protocol internals remain available as diagnostic sensors, but those entities stay disabled by default so the normal UI is not cluttered with command bytes, ECC details, waveform summaries, or backend internals.
 
 Protocol internals such as raw packet data, Cmd1/Cmd2, Err1/Err2, C/D values, waveform summaries, and backend details exist as Home Assistant diagnostic entities but are disabled by default.
 

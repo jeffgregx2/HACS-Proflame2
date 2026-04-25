@@ -10,9 +10,9 @@
   "issue_tracker": "https://github.com/jeffa/HACS-proflame2/issues",
   "loggers": [
     "custom_components.proflame2",
-    "proflame2_protocol",
-    "proflame2_rf"
+    "custom_components.proflame2.protocol",
+    "custom_components.proflame2.rf"
   ],
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.1.0-dev"
 }

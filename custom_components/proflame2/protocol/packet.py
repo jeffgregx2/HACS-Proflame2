@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from .models import FireplaceState
 
 if TYPE_CHECKING:
-    from proflame2_rf.waveform import ProflameTransmissionPlan
+    from ..rf.waveform import ProflameTransmissionPlan
 
 
 @dataclass(frozen=True)

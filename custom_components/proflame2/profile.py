@@ -6,11 +6,11 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
-from proflame2_protocol.models import FireplaceFeatures
+from .protocol.models import FireplaceFeatures
 
 from .control import StateValidationError, build_requested_state
 from .const import (
-    BACKEND_TYPES,
+    available_backend_types,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -150,7 +150,7 @@ def normalize_manual_profile_input(user_input: dict[str, Any]) -> ManualProfileI
     """Normalize config-flow input into config entry data and options."""
 
     backend_type = str(user_input[CONF_BACKEND_TYPE]).strip().lower()
-    if backend_type not in BACKEND_TYPES:
+    if backend_type not in available_backend_types():
         raise InvalidBackendError(f"Unsupported backend type: {backend_type}")
 
     data = {

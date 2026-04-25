@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable
 
-from proflame2_protocol.packet import ProflameFrame, ProflamePacket
+from ..protocol.packet import ProflameFrame, ProflamePacket
 from .waveform import (
     AIR_PACKET_BYTES,
     PROFLAME_WORD_COUNT,

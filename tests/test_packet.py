@@ -8,11 +8,11 @@ import pytest
 
 pytestmark = pytest.mark.protocol
 
-from proflame2_protocol.ecc import derive_ecc_profile
-from proflame2_protocol.encoder import encode_packet
-from proflame2_protocol.models import FireplaceState
-from proflame2_protocol.packet import ProflameFrame, ProflamePacket
-from proflame2_rf.waveform import build_transmission_plan
+from custom_components.proflame2.protocol.ecc import derive_ecc_profile
+from custom_components.proflame2.protocol.encoder import encode_packet
+from custom_components.proflame2.protocol.models import FireplaceState
+from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
+from custom_components.proflame2.rf.waveform import build_transmission_plan
 
 
 def test_packet_from_frame_decodes_state_and_preserves_metadata() -> None:

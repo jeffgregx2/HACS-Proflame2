@@ -1,4 +1,4 @@
-"""Read-only sensor surface for Proflame2 runtime status and diagnostics."""
+"""Read-only sensor surface for Proflame2 fireplace summaries and diagnostics."""
 
 from __future__ import annotations
 
@@ -31,16 +31,6 @@ class Proflame2SensorDefinition(SensorEntityDescription):
 
 
 USER_SENSORS: tuple[Proflame2SensorDefinition, ...] = (
-    Proflame2SensorDefinition(
-        key="status",
-        name="Status",
-        value_fn=lambda runtime: _status_value(runtime),
-    ),
-    Proflame2SensorDefinition(
-        key="last_state",
-        name="Last State",
-        value_fn=lambda runtime: _last_state_summary(runtime),
-    ),
     Proflame2SensorDefinition(
         key="last_issue",
         name="Last Issue",
@@ -173,36 +163,20 @@ async def async_setup_entry(
 
     runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
     async_add_entities(
-        Proflame2RuntimeSensor(runtime_entry, definition)
-        for definition in (*USER_SENSORS, *DIAGNOSTIC_SENSORS)
+        [
+            Proflame2PrimaryFireplaceSensor(runtime_entry),
+            *(Proflame2RuntimeSensor(runtime_entry, definition) for definition in (*USER_SENSORS, *DIAGNOSTIC_SENSORS)),
+        ]
     )
 
 
-class Proflame2RuntimeSensor(SensorEntity):
-    """Sensor that exposes one runtime-derived Proflame2 summary value."""
+class _Proflame2BaseSensor(SensorEntity):
+    """Shared device binding and update wiring for Proflame2 sensors."""
 
     _attr_should_poll = False
-    _attr_has_entity_name = True
 
-    def __init__(
-        self,
-        runtime_entry: Proflame2RuntimeEntry,
-        definition: Proflame2SensorDefinition,
-    ) -> None:
+    def __init__(self, runtime_entry: Proflame2RuntimeEntry) -> None:
         self._runtime_entry = runtime_entry
-        self.entity_description = definition
-        self._attr_name = definition.name
-        self._attr_unique_id = (
-            f"{remote_id_as_hex(runtime_entry.remote_profile.serial_id)}_{definition.key}"
-        )
-        self._attr_entity_category = definition.entity_category
-        self._attr_entity_registry_enabled_default = definition.enabled_default
-
-    @property
-    def native_value(self) -> Any:
-        """Return the current runtime-derived value."""
-
-        return self.entity_description.value_fn(self._runtime_entry)
 
     @property
     def available(self) -> bool:
@@ -239,11 +213,62 @@ class Proflame2RuntimeSensor(SensorEntity):
         self.async_write_ha_state()
 
 
+class Proflame2PrimaryFireplaceSensor(_Proflame2BaseSensor):
+    """Primary read-only fireplace entity with user-facing attributes."""
+
+    _attr_has_entity_name = False
+
+    def __init__(self, runtime_entry: Proflame2RuntimeEntry) -> None:
+        super().__init__(runtime_entry)
+        self._attr_name = runtime_entry.title
+        self._attr_unique_id = remote_id_as_hex(runtime_entry.remote_profile.serial_id)
+
+    @property
+    def native_value(self) -> str:
+        """Return the human-readable fireplace summary."""
+
+        return _summary_value(self._runtime_entry)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        """Return human-readable fireplace attributes only."""
+
+        return _primary_attributes(self._runtime_entry)
+
+
+class Proflame2RuntimeSensor(_Proflame2BaseSensor):
+    """Secondary or diagnostic sensor backed by runtime-derived values."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        runtime_entry: Proflame2RuntimeEntry,
+        definition: Proflame2SensorDefinition,
+    ) -> None:
+        super().__init__(runtime_entry)
+        self.entity_description = definition
+        self._attr_name = definition.name
+        self._attr_unique_id = (
+            f"{remote_id_as_hex(runtime_entry.remote_profile.serial_id)}_{definition.key}"
+        )
+        self._attr_entity_category = definition.entity_category
+        self._attr_entity_registry_enabled_default = definition.enabled_default
+
+    @property
+    def native_value(self) -> Any:
+        """Return the current runtime-derived value."""
+
+        return self.entity_description.value_fn(self._runtime_entry)
+
+
 def _status_value(runtime: Proflame2RuntimeEntry) -> str:
     if runtime.learning_in_progress:
         return "learning"
+    if runtime.sending_in_progress:
+        return "sending"
     if not _backend_available(runtime):
-        return "backend_unavailable"
+        return "unavailable"
     if runtime.last_error:
         return "last_command_failed"
     if runtime.last_send_result:
@@ -251,29 +276,107 @@ def _status_value(runtime: Proflame2RuntimeEntry) -> str:
     return "ready"
 
 
-def _last_state_summary(runtime: Proflame2RuntimeEntry) -> str:
+def _summary_value(runtime: Proflame2RuntimeEntry) -> str:
+    if runtime.learning_in_progress:
+        return "Learning"
+    if runtime.sending_in_progress:
+        return "Sending"
+
+    issue = _last_issue_summary(runtime)
+    if issue != "No recent errors.":
+        return f"Error · {_strip_terminal_punctuation(issue)}"
+
     packet = runtime.last_packet
     if packet is None:
-        return "No fireplace state known yet."
+        return "Unknown"
 
     state = packet.state
     if not state.power:
-        summary = "Fireplace off."
-        if runtime.last_applied_profile_name:
-            return f"Profile {runtime.last_applied_profile_name}: {summary}"
-        return summary
+        return "Off"
 
-    parts = [f"On, flame {state.flame}", f"fan {state.fan}", f"light {state.light}"]
-    if state.front:
-        parts.append("front burner on")
-    if state.aux:
-        parts.append("aux on")
-    if state.cpi:
-        parts.append("CPI on")
-    summary = ", ".join(parts) + "."
+    parts = ["On", f"Flame {state.flame}"]
+    if runtime.features.fan and state.fan > 0:
+        parts.append(f"Fan {state.fan}")
+    if runtime.features.light and state.light > 0:
+        parts.append(f"Light {state.light}")
+    if runtime.features.front and state.front:
+        parts.append("Front On")
+    if runtime.features.aux and state.aux:
+        parts.append("Aux On")
+    if runtime.features.cpi and state.cpi:
+        parts.append("CPI On")
     if runtime.last_applied_profile_name:
-        return f"Profile {runtime.last_applied_profile_name}: {summary}"
-    return summary
+        parts.append(runtime.last_applied_profile_name)
+    return " · ".join(parts)
+
+
+def _primary_attributes(runtime: Proflame2RuntimeEntry) -> dict[str, str]:
+    attributes: dict[str, str] = {
+        "operational_status": _status_value(runtime),
+        "last_issue": _none_if_clear(_last_issue_summary(runtime)),
+    }
+
+    packet = runtime.last_packet
+    if packet is None:
+        attributes["power"] = "Unknown"
+        attributes["flame"] = "Unavailable"
+        if runtime.features.fan:
+            attributes["fan"] = "Unavailable"
+        if runtime.features.light:
+            attributes["light"] = "Unavailable"
+        if runtime.features.front:
+            attributes["front_burner"] = "Unavailable"
+        if runtime.features.aux:
+            attributes["aux"] = "Unavailable"
+        if runtime.features.cpi:
+            attributes["cpi"] = "Unavailable"
+        attributes["last_update_source"] = "Unknown"
+        return attributes
+
+    state = packet.state
+    attributes["power"] = "On" if state.power else "Off"
+    attributes["flame"] = "Off" if not state.power else f"Level {state.flame}"
+
+    if runtime.features.fan:
+        attributes["fan"] = f"Level {state.fan}"
+    if runtime.features.light:
+        attributes["light"] = f"Level {state.light}"
+    if runtime.features.front:
+        attributes["front_burner"] = "On" if state.front else "Off"
+    if runtime.features.aux:
+        attributes["aux"] = "On" if state.aux else "Off"
+    if runtime.features.cpi:
+        attributes["cpi"] = "On" if state.cpi else "Off"
+
+    if runtime.last_applied_profile_name:
+        attributes["active_profile"] = runtime.last_applied_profile_name
+
+    attributes["last_update_source"] = _humanize_update_source(packet.source)
+    return attributes
+
+
+def _none_if_clear(value: str) -> str:
+    return "None" if value == "No recent errors." else value
+
+
+def _humanize_update_source(source: str | None) -> str:
+    if source == "saved_profile":
+        return "Profile"
+    if source == "homeassistant_service":
+        return "Direct Control"
+    if source == "fake_learn":
+        return "Learned Packet"
+    if source == "fake_default":
+        return "Simulated Packet"
+    if source == "fake":
+        return "Simulated Packet"
+    if source is None:
+        return "Unknown"
+    return source.replace("_", " ").title()
+
+
+def _strip_terminal_punctuation(value: str) -> str:
+    return value[:-1] if value.endswith((".", "!", "?")) else value
 
 
 def _last_issue_summary(runtime: Proflame2RuntimeEntry) -> str:
@@ -346,9 +449,7 @@ def _humanize_message(message: str) -> str:
         return "Learning failed because packets from more than one remote were observed."
     if message.startswith("Ignored ") and " disabled for this fireplace." in message:
         feature = message.split(" ", 1)[1].split(" ", 1)[0]
-        return (
-            f"{feature.capitalize()} was ignored because it is disabled for this fireplace."
-        )
+        return f"{feature.capitalize()} was ignored because it is disabled for this fireplace."
     normalized = message.strip()
     if not normalized:
         return "No recent errors."

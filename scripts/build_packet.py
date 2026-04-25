@@ -10,9 +10,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from proflame2_protocol.encoder import encode_state
-from proflame2_protocol.models import ECCProfile, FireplaceFeatures, FireplaceState, RemoteProfile
-from proflame2_rf.waveform import build_transmission_plan
+from custom_components.proflame2.protocol.encoder import encode_state
+from custom_components.proflame2.protocol.models import ECCProfile, FireplaceFeatures, FireplaceState, RemoteProfile
+from custom_components.proflame2.rf.waveform import build_transmission_plan
 
 
 def _build_parser() -> argparse.ArgumentParser:

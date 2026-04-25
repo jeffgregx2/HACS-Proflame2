@@ -12,8 +12,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from proflame2_protocol.ecc import derive_ecc_profile
-from proflame2_rf.yardstick import YardStickBackend, YardStickDependencyError
+from custom_components.proflame2.protocol.ecc import derive_ecc_profile
+from custom_components.proflame2.rf.yardstick import YardStickBackend, YardStickDependencyError
 
 
 def _build_parser() -> argparse.ArgumentParser:

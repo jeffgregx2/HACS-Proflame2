@@ -7,10 +7,10 @@ import pytest
 
 pytestmark = pytest.mark.protocol
 
-from proflame2_protocol.encoder import encode_packet, encode_state
-from proflame2_protocol.models import FireplaceState
-from proflame2_rf.fake import FakeRFBackend
-from proflame2_rf.waveform import (
+from custom_components.proflame2.protocol.encoder import encode_packet, encode_state
+from custom_components.proflame2.protocol.models import FireplaceState
+from custom_components.proflame2.rf.fake import FakeRFBackend
+from custom_components.proflame2.rf.waveform import (
     AIR_PACKET_BYTES,
     SMARTFIRE_DEFAULT_RFCAT_REPEAT,
     SMARTFIRE_DEFAULT_TOTAL_TRANSMISSIONS,

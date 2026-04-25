@@ -6,10 +6,10 @@ import pytest
 
 pytestmark = pytest.mark.protocol
 
-from proflame2_protocol.decoder import decode_bytes, decode_state
-from proflame2_protocol.encoder import encode_state
-from proflame2_protocol.models import FireplaceState
-from proflame2_protocol.packet import ProflameFrame
+from custom_components.proflame2.protocol.decoder import decode_bytes, decode_state
+from custom_components.proflame2.protocol.encoder import encode_state
+from custom_components.proflame2.protocol.models import FireplaceState
+from custom_components.proflame2.protocol.packet import ProflameFrame
 
 
 def test_decoder_round_trips_encoded_state(remote_profile) -> None:

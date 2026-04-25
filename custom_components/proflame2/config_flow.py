@@ -9,9 +9,12 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry, OptionsFlowWithReload
 from homeassistant.core import callback
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
 
 from .const import (
-    BACKEND_TYPES,
+    BACKEND_YARDSTICK,
+    available_backend_labels,
+    available_backend_types,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -33,7 +36,17 @@ from .const import (
     DEFAULT_FEATURE_OPTIONS,
     DOMAIN,
 )
-from .learning import LearnResult, async_run_learning_with_backend
+from .protocol.packet import ProflamePacket
+from .learning import (
+    DEFAULT_LEARN_TIMEOUT_SECONDS,
+    DEFAULT_RECEIVE_TIMEOUT_SECONDS,
+    LearnResult,
+    LearnSession,
+    async_capture_next_learning_packet,
+    async_close_learning_session,
+    async_start_learning_session,
+    derive_learn_result_from_session,
+)
 from .profile import (
     DuplicateProfileIdError,
     InvalidNibbleError,
@@ -49,29 +62,51 @@ from .profile import (
     remote_id_as_hex,
 )
 
-MANUAL_PROFILE_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_NAME): str,
-        vol.Required(CONF_BACKEND_TYPE, default=BACKEND_TYPES[0]): vol.In(BACKEND_TYPES),
-        vol.Required(CONF_REMOTE_ID): str,
-        vol.Required(CONF_C1): vol.Any(int, str),
-        vol.Required(CONF_D1): vol.Any(int, str),
-        vol.Required(CONF_C2): vol.Any(int, str),
-        vol.Required(CONF_D2): vol.Any(int, str),
-        vol.Required(CONF_FAN, default=DEFAULT_FEATURE_OPTIONS[CONF_FAN]): bool,
-        vol.Required(CONF_LIGHT, default=DEFAULT_FEATURE_OPTIONS[CONF_LIGHT]): bool,
-        vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
-        vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
-        vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
-    }
-)
+def _backend_selector() -> SelectSelector:
+    """Return the backend selector for the active build."""
 
-LEARN_SETUP_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_NAME): str,
-        vol.Required(CONF_BACKEND_TYPE, default=BACKEND_TYPES[0]): vol.In(BACKEND_TYPES),
-    }
-)
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=[
+                {"value": backend_type, "label": available_backend_labels()[backend_type]}
+                for backend_type in available_backend_types()
+            ],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _manual_profile_schema() -> vol.Schema:
+    """Build the manual-entry schema for the active build."""
+
+    return vol.Schema(
+        {
+            vol.Required(CONF_NAME): str,
+            vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _backend_selector(),
+            vol.Required(CONF_REMOTE_ID): str,
+            vol.Required(CONF_C1): vol.Any(int, str),
+            vol.Required(CONF_D1): vol.Any(int, str),
+            vol.Required(CONF_C2): vol.Any(int, str),
+            vol.Required(CONF_D2): vol.Any(int, str),
+            vol.Required(CONF_FAN, default=DEFAULT_FEATURE_OPTIONS[CONF_FAN]): bool,
+            vol.Required(CONF_LIGHT, default=DEFAULT_FEATURE_OPTIONS[CONF_LIGHT]): bool,
+            vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
+            vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
+            vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
+        }
+    )
+
+
+def _learn_setup_schema() -> vol.Schema:
+    """Build the learn-entry schema for the active build."""
+
+    return vol.Schema(
+        {
+            vol.Required(CONF_NAME): str,
+            vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _backend_selector(),
+        }
+    )
+
 
 FEATURE_SELECTION_SCHEMA = vol.Schema(
     {
@@ -83,6 +118,19 @@ FEATURE_SELECTION_SCHEMA = vol.Schema(
     }
 )
 
+LEARN_PROMPTS: tuple[tuple[str, str], ...] = (
+    ("power_on", "Press the Power button to turn the fireplace on."),
+    ("power_off", "Press the Power button again to turn the fireplace off."),
+    ("power_on_again", "Press the Power button again to turn the fireplace back on."),
+    ("flame_down", "Press the Flame Down button once."),
+    ("flame_up", "Press the Flame Up button once."),
+)
+
+EXTRA_LEARN_PROMPT = (
+    "additional_input",
+    "Press Flame Down or Flame Up once more so the integration can collect additional distinct packets if needed.",
+)
+
 class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Proflame2."""
 
@@ -90,7 +138,9 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     _learn_input: dict[str, Any] | None = None
     _learn_result: LearnResult | None = None
-    _learn_task: asyncio.Task[LearnResult] | None = None
+    _learn_task: asyncio.Task[ProflamePacket | LearnResult] | None = None
+    _learn_session: LearnSession | None = None
+    _learn_prompt_index: int = 0
 
     @staticmethod
     @callback
@@ -100,6 +150,16 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Return the options flow handler."""
 
         return Proflame2OptionsFlow()
+
+    @callback
+    def async_remove(self) -> None:
+        """Cancel any in-flight learn task if the flow is closed."""
+
+        self.async_cancel_progress_task()
+        if self.hass is not None and self._learn_session is not None:
+            self.hass.async_create_task(async_close_learning_session(self._learn_session))
+            self._learn_session = None
+        super().async_remove()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Handle the first user step.
@@ -142,7 +202,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="manual",
             data_schema=self.add_suggested_values_to_schema(
-                MANUAL_PROFILE_SCHEMA, user_input or suggested_values
+                _manual_profile_schema(), user_input or suggested_values
             ),
             errors=errors,
         )
@@ -153,12 +213,12 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             suggested_values = self._learn_input or {
                 CONF_NAME: "",
-                CONF_BACKEND_TYPE: BACKEND_TYPES[0],
+                CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
             }
             return self.async_show_form(
                 step_id="learn",
                 data_schema=self.add_suggested_values_to_schema(
-                    LEARN_SETUP_SCHEMA, suggested_values
+                    _learn_setup_schema(), suggested_values
                 ),
             )
 
@@ -167,40 +227,75 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_BACKEND_TYPE: str(user_input[CONF_BACKEND_TYPE]).strip().lower(),
         }
         self._learn_result = None
+        await self._async_dispose_learning_session()
         domain_data = self.hass.data.setdefault(DOMAIN, {})
+        self._learn_session = await async_start_learning_session(
+            self.hass,
+            self._learn_input[CONF_BACKEND_TYPE],
+            timeout=float(domain_data.get(DATA_LEARNING_TIMEOUT, DEFAULT_LEARN_TIMEOUT_SECONDS)),
+            receive_timeout=float(
+                domain_data.get(DATA_LEARNING_RECEIVE_TIMEOUT, DEFAULT_RECEIVE_TIMEOUT_SECONDS)
+            ),
+        )
+        self._learn_prompt_index = 0
+        return await self.async_step_learn_prompt()
+
+    async def async_step_learn_prompt(self, user_input: dict[str, Any] | None = None):
+        """Begin listening immediately for the next guided prompt."""
+
+        if self._learn_input is None or self._learn_session is None:
+            return await self.async_step_learn()
+
         self._learn_task = self.hass.async_create_task(
-            async_run_learning_with_backend(
-                self.hass,
-                self._learn_input[CONF_BACKEND_TYPE],
-                timeout=float(domain_data.get(DATA_LEARNING_TIMEOUT, 10.0)),
-                receive_timeout=float(domain_data.get(DATA_LEARNING_RECEIVE_TIMEOUT, 0.5)),
-            )
+            async_capture_next_learning_packet(self._learn_session)
         )
         return self.async_show_progress(
             step_id="learn_progress",
             progress_action="learn_remote",
+            description_placeholders={
+                "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
+                "instruction": self._current_learn_instruction(),
+            },
             progress_task=self._learn_task,
         )
 
     async def async_step_learn_progress(self, user_input: dict[str, Any] | None = None):
-        """Show guided learn progress while the backend-independent task runs."""
+        """Show guided learn progress while waiting for the next prompted packet."""
 
-        if self._learn_task is None:
+        if self._learn_task is None or self._learn_input is None:
             return await self.async_step_learn()
 
         if not self._learn_task.done():
             return self.async_show_progress(
                 step_id="learn_progress",
                 progress_action="learn_remote",
+                description_placeholders={
+                    "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
+                    "instruction": self._current_learn_instruction(),
+                },
                 progress_task=self._learn_task,
             )
 
-        if self._learn_result is None:
-            self._learn_result = await self._learn_task
+        capture_result = await self._learn_task
+        self._learn_task = None
 
-        return self.async_show_progress_done(
-            next_step_id="learn_features" if self._learn_result.success else "learn_failed"
-        )
+        if isinstance(capture_result, LearnResult):
+            self._learn_result = capture_result
+            await self._async_dispose_learning_session()
+            return self.async_show_progress_done(
+                next_step_id="learn_features" if capture_result.success else "learn_failed"
+            )
+
+        self._learn_prompt_index += 1
+        maybe_result = derive_learn_result_from_session(self._learn_session)
+        if maybe_result is not None:
+            self._learn_result = maybe_result
+            await self._async_dispose_learning_session()
+            return self.async_show_progress_done(
+                next_step_id="learn_features" if self._learn_result.success else "learn_failed"
+            )
+
+        return self.async_show_progress_done(next_step_id="learn_prompt")
 
     async def async_step_learn_features(self, user_input: dict[str, Any] | None = None):
         """Collect feature support after a successful learn pass."""
@@ -251,20 +346,18 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_learn()
 
         self._learn_result = None
+        await self._async_dispose_learning_session()
         domain_data = self.hass.data.setdefault(DOMAIN, {})
-        self._learn_task = self.hass.async_create_task(
-            async_run_learning_with_backend(
-                self.hass,
-                self._learn_input[CONF_BACKEND_TYPE],
-                timeout=float(domain_data.get(DATA_LEARNING_TIMEOUT, 10.0)),
-                receive_timeout=float(domain_data.get(DATA_LEARNING_RECEIVE_TIMEOUT, 0.5)),
-            )
+        self._learn_session = await async_start_learning_session(
+            self.hass,
+            self._learn_input[CONF_BACKEND_TYPE],
+            timeout=float(domain_data.get(DATA_LEARNING_TIMEOUT, DEFAULT_LEARN_TIMEOUT_SECONDS)),
+            receive_timeout=float(
+                domain_data.get(DATA_LEARNING_RECEIVE_TIMEOUT, DEFAULT_RECEIVE_TIMEOUT_SECONDS)
+            ),
         )
-        return self.async_show_progress(
-            step_id="learn_progress",
-            progress_action="learn_remote",
-            progress_task=self._learn_task,
-        )
+        self._learn_prompt_index = 0
+        return await self.async_step_learn_prompt()
 
     async def _async_create_profile_entry(
         self,
@@ -288,7 +381,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         suggested = {
             CONF_NAME: "",
-            CONF_BACKEND_TYPE: BACKEND_TYPES[0],
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
             CONF_REMOTE_ID: "",
             CONF_C1: "",
             CONF_D1: "",
@@ -305,6 +398,20 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             suggested[CONF_REMOTE_ID] = remote_id_as_hex(self._learn_result.remote_id)
 
         return suggested
+
+    def _current_learn_instruction(self) -> str:
+        """Return the current guided-learning prompt."""
+
+        if self._learn_prompt_index < len(LEARN_PROMPTS):
+            return LEARN_PROMPTS[self._learn_prompt_index][1]
+        return EXTRA_LEARN_PROMPT[1]
+
+    async def _async_dispose_learning_session(self) -> None:
+        """Close the current guided-learning backend session, if any."""
+
+        if self._learn_session is not None:
+            await async_close_learning_session(self._learn_session)
+            self._learn_session = None
 
 
 class Proflame2OptionsFlow(OptionsFlowWithReload):

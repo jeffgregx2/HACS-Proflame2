@@ -10,6 +10,9 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .version import INTEGRATION_VERSION
+
+__version__ = INTEGRATION_VERSION
 
 PLATFORMS: list["Platform"] = ["sensor"]
 

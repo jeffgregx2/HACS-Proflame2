@@ -6,14 +6,14 @@ import pytest
 
 pytestmark = pytest.mark.protocol
 
-from proflame2_protocol.packet import ProflameFrame
-from proflame2_rf.capture import (
+from custom_components.proflame2.protocol.packet import ProflameFrame
+from custom_components.proflame2.rf.capture import (
     AIR_PACKET_BYTES,
     decode_single_sample,
     extract_samples_from_air_bytes,
     frame_to_capture_sample,
 )
-from proflame2_rf.waveform import frame_to_air_bytes
+from custom_components.proflame2.rf.waveform import frame_to_air_bytes
 
 
 def test_air_packet_round_trip(remote_profile) -> None:

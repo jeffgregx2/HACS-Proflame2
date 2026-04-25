@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from proflame2_protocol.models import ECCProfile, FireplaceFeatures, RemoteProfile
+from custom_components.proflame2.protocol.models import ECCProfile, FireplaceFeatures, RemoteProfile
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "rtl433_samples.json"
