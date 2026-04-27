@@ -14,7 +14,7 @@ from .version import INTEGRATION_VERSION
 
 __version__ = INTEGRATION_VERSION
 
-PLATFORMS: list["Platform"] = ["sensor", "switch", "number"]
+PLATFORMS: list["Platform"] = ["sensor", "switch", "number", "button"]
 
 
 async def async_setup(hass: "HomeAssistant", config: dict) -> bool:

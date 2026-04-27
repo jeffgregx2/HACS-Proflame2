@@ -539,22 +539,11 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_apply_profile(call: ServiceCall) -> None:
         runtime_entry = _resolve_runtime_entry(hass, call)
-        profile_id = str(call.data[CONF_PROFILE_ID]).strip().lower()
-        profile = (runtime_entry.saved_profiles or {}).get(profile_id)
-        if profile is None:
-            runtime_entry.last_error = (
-                f"Unknown saved profile '{profile_id}' for this fireplace."
-            )
-            async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
-            raise HomeAssistantError(runtime_entry.last_error)
-
-        await async_execute_set_state(
+        await async_execute_apply_profile(
             hass,
             runtime_entry,
-            profile,
+            str(call.data[CONF_PROFILE_ID]).strip().lower(),
             source="saved_profile",
-            applied_profile_id=profile[CONF_PROFILE_ID],
-            applied_profile_name=profile[CONF_NAME],
         )
 
     hass.services.async_register(
@@ -681,6 +670,49 @@ async def async_execute_set_state(
         applied_profile_id=applied_profile_id,
         applied_profile_name=applied_profile_name,
         clear_active_profile=(source != "saved_profile"),
+    )
+
+
+async def async_execute_apply_profile(
+    hass: HomeAssistant,
+    runtime_entry: Proflame2RuntimeEntry,
+    profile_id: str,
+    *,
+    source: str,
+) -> None:
+    """Apply one saved profile through the shared atomic send path."""
+
+    normalized_profile_id = str(profile_id).strip().lower()
+    profile = (runtime_entry.saved_profiles or {}).get(normalized_profile_id)
+    if profile is None:
+        runtime_entry.last_error = (
+            f"Unknown saved profile '{normalized_profile_id}' for this fireplace."
+        )
+        _log_control_event(
+            runtime_entry,
+            "apply profile failed source=%s profile_id=%s error=%s",
+            source,
+            normalized_profile_id,
+            runtime_entry.last_error,
+            level=logging.ERROR,
+        )
+        async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
+        raise HomeAssistantError(runtime_entry.last_error)
+
+    _log_control_event(
+        runtime_entry,
+        "apply profile requested source=%s profile_id=%s profile_name=%s",
+        source,
+        normalized_profile_id,
+        profile[CONF_NAME],
+    )
+    await async_execute_set_state(
+        hass,
+        runtime_entry,
+        profile,
+        source=source,
+        applied_profile_id=profile[CONF_PROFILE_ID],
+        applied_profile_name=profile[CONF_NAME],
     )
 
 
