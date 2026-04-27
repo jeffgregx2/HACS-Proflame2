@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers import device_registry as dr
@@ -97,6 +98,8 @@ class Proflame2RuntimeEntry:
     active_send_task: asyncio.Task[None] | None = None
     confirmation_task: asyncio.Task[None] | None = None
     active_listener_task: asyncio.Task[None] | None = None
+    shutting_down: bool = False
+    shutdown_reason: str | None = None
 
 
 def _runtime_store(hass: HomeAssistant) -> Store[dict[str, Any]]:
@@ -434,6 +437,9 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
 
     runtime_entry = async_get_runtime_entries(hass).pop(entry.entry_id, None)
     if runtime_entry:
+        runtime_entry.shutting_down = True
+        runtime_entry.shutdown_reason = "config_entry_unload"
+        runtime_entry.active_listening_enabled = False
         for task in (
             runtime_entry.debounce_task,
             runtime_entry.active_send_task,
@@ -442,10 +448,88 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
         ):
             if task is not None:
                 task.cancel()
+        pending_tasks = [
+            task
+            for task in (
+                runtime_entry.debounce_task,
+                runtime_entry.active_send_task,
+                runtime_entry.confirmation_task,
+                runtime_entry.active_listener_task,
+            )
+            if task is not None
+        ]
+        if pending_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending_tasks, return_exceptions=True),
+                    timeout=2.0,
+                )
+            except asyncio.TimeoutError:
+                _LOGGER.warning(
+                    "Proflame2 runtime task shutdown timed out config_entry_id=%s",
+                    runtime_entry.config_entry_id,
+                )
         if runtime_entry.backend is not None:
-            await runtime_entry.backend.close()
+            await runtime_entry.backend.close(reason="config_entry_unload")
         if runtime_entry.debug_logging_enabled:
             await async_disable_packet_debug_logging(hass)
+
+
+async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
+    """Shut down all runtime entries on Home Assistant stop."""
+
+    runtime_entries = list(async_get_runtime_entries(hass).values())
+    for runtime_entry in runtime_entries:
+        runtime_entry.shutting_down = True
+        runtime_entry.shutdown_reason = "ha_shutdown"
+        runtime_entry.active_listening_enabled = False
+        for task in (
+            runtime_entry.debounce_task,
+            runtime_entry.active_send_task,
+            runtime_entry.confirmation_task,
+            runtime_entry.active_listener_task,
+        ):
+            if task is not None:
+                task.cancel()
+        pending_tasks = [
+            task
+            for task in (
+                runtime_entry.debounce_task,
+                runtime_entry.active_send_task,
+                runtime_entry.confirmation_task,
+                runtime_entry.active_listener_task,
+            )
+            if task is not None
+        ]
+        if pending_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending_tasks, return_exceptions=True),
+                    timeout=2.0,
+                )
+            except asyncio.TimeoutError:
+                _LOGGER.warning(
+                    "Proflame2 HA-stop task shutdown timed out config_entry_id=%s",
+                    runtime_entry.config_entry_id,
+                )
+        if runtime_entry.backend is not None:
+            await runtime_entry.backend.close(reason="ha_shutdown")
+
+
+@callback
+def async_register_shutdown_listener(hass: HomeAssistant) -> None:
+    """Register a one-time Home Assistant stop handler."""
+
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get("shutdown_listener_registered"):
+        return
+
+    async def _handle_stop(event) -> None:
+        del event
+        await async_handle_homeassistant_stop(hass)
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _handle_stop)
+    domain_data["shutdown_listener_registered"] = True
 
 
 def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, Any]:
@@ -462,6 +546,8 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "sending_in_progress": runtime_entry.sending_in_progress,
         "operational_status": runtime_entry.operational_status,
         "state_confidence": runtime_entry.state_confidence,
+        "shutting_down": runtime_entry.shutting_down,
+        "shutdown_reason": runtime_entry.shutdown_reason,
         "desired_state": (
             asdict(runtime_entry.desired_state) if runtime_entry.desired_state is not None else None
         ),

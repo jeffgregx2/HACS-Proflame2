@@ -9,6 +9,7 @@ import multiprocessing as mp
 from multiprocessing.connection import Connection
 import os
 import signal
+import threading
 import time
 import traceback
 from typing import Any, Callable
@@ -106,6 +107,11 @@ class WorkerDiagnostics:
     consecutive_failures: int = 0
     last_operation: str | None = None
     last_operation_duration_ms: float | None = None
+    last_shutdown_reason: str | None = None
+    final_exit_code: int | None = None
+    shutdown_in_progress: bool = False
+    outstanding_request_id: int | None = None
+    outstanding_command: str | None = None
 
 
 class YardStickBackendUnavailableError(RuntimeError):
@@ -203,6 +209,67 @@ def _response(
 
 def _worker_log(level: int, message: str, *args: Any) -> None:
     _LOGGER.log(level, "Yard Stick worker: " + message, *args)
+
+
+def _cleanup_radio_for_exit(radio: Any) -> None:
+    """Best-effort rflib cleanup before worker exit.
+
+    The rflib codebase does not expose a documented close lifecycle. The only
+    clearly intentional radio-side cleanup hook is setModeIDLE(), which rflib
+    itself uses in its interactive atexit path. We therefore keep cleanup
+    conservative:
+    - force radio idle
+    - prevent further worker-thread activity where possible
+    - clear pending resetup triggers
+    - release the claimed interface only if a low-level handle exposes it
+    """
+
+    _worker_log(logging.INFO, "cleanup start")
+    try:
+        if hasattr(radio, "setModeIDLE"):
+            _worker_log(logging.INFO, "idle start")
+            radio.setModeIDLE()
+            _worker_log(logging.INFO, "idle success")
+    except Exception as exc:
+        _worker_log(logging.ERROR, "idle failure exception_type=%s error=%s", type(exc).__name__, exc)
+
+    try:
+        thread_go = getattr(radio, "_threadGo", None)
+        if thread_go is not None and hasattr(thread_go, "clear"):
+            thread_go.clear()
+        reset_event = getattr(radio, "reset_event", None)
+        if reset_event is not None and hasattr(reset_event, "clear"):
+            reset_event.clear()
+        xmit_event = getattr(radio, "xmit_event", None)
+        if xmit_event is not None and hasattr(xmit_event, "set"):
+            xmit_event.set()
+    except Exception as exc:
+        _worker_log(
+            logging.ERROR,
+            "thread/reset cleanup failure exception_type=%s error=%s",
+            type(exc).__name__,
+            exc,
+        )
+
+    try:
+        usb_handle = getattr(radio, "_do", None)
+        if usb_handle is not None:
+            release_interface = getattr(usb_handle, "releaseInterface", None)
+            if callable(release_interface):
+                try:
+                    release_interface(0)
+                except TypeError:
+                    release_interface()
+                _worker_log(logging.INFO, "usb release interface success")
+    except Exception as exc:
+        _worker_log(
+            logging.ERROR,
+            "usb release interface failure exception_type=%s error=%s",
+            type(exc).__name__,
+            exc,
+        )
+
+    _worker_log(logging.INFO, "cleanup complete")
 
 
 def _open_radio(device_index: int, *, mock_mode: bool = False) -> tuple[Any, type[Exception], int]:
@@ -505,12 +572,18 @@ def yardstick_worker_main(conn: Connection, args: dict[str, Any]) -> None:
                     )
                 last_error = None
             elif command == COMMAND_STOP:
-                _worker_log(logging.INFO, "stop requested")
-                if radio is not None and hasattr(radio, "setModeIDLE"):
+                _worker_log(logging.INFO, "STOP received")
+                if radio is not None:
                     try:
-                        radio.setModeIDLE()
-                    except Exception:
-                        pass
+                        _cleanup_radio_for_exit(radio)
+                    except Exception as exc:
+                        _worker_log(
+                            logging.ERROR,
+                            "cleanup failure during STOP exception_type=%s error=%s\n%s",
+                            type(exc).__name__,
+                            exc,
+                            traceback.format_exc(),
+                        )
                 response = _response(
                     request_id=request_id,
                     kind=KIND_OK,
@@ -518,7 +591,7 @@ def yardstick_worker_main(conn: Connection, args: dict[str, Any]) -> None:
                     timing_ms=(time.monotonic() - started) * 1000,
                 )
                 conn.send(response)
-                _worker_log(logging.INFO, "stop complete")
+                _worker_log(logging.INFO, "STOP complete")
                 break
             else:
                 raise RuntimeError(f"Unsupported worker command: {command}")
@@ -574,6 +647,9 @@ class YardStickWorkerSupervisor:
         self._next_allowed_start_monotonic = 0.0
         self._packet_logger = get_packet_debug_logger()
         self._diagnostics = WorkerDiagnostics()
+        self._lock = threading.RLock()
+        self._shutdown_requested = False
+        self._shutdown_reason: str | None = None
 
     @property
     def diagnostics(self) -> WorkerDiagnostics:
@@ -586,93 +662,177 @@ class YardStickWorkerSupervisor:
         *,
         timeout: float,
     ) -> dict[str, Any]:
-        self._ensure_worker_started()
-        assert self._process is not None
-        assert self._conn is not None
-        self._request_id += 1
-        self._diagnostics.last_operation = command
-        self._log_debug("supervisor: request sent id=%s command=%s timeout=%.2fs", self._request_id, command, timeout)
+        with self._lock:
+            if self._shutdown_requested and command != COMMAND_STOP:
+                raise YardStickBackendUnavailableError(
+                    f"Yard Stick unavailable; shutdown in progress ({self._shutdown_reason or 'unknown'}).",
+                    reason=REASON_UNKNOWN,
+                )
+            self._ensure_worker_started()
+            assert self._process is not None
+            assert self._conn is not None
+            self._request_id += 1
+            request_id = self._request_id
+            self._diagnostics.last_operation = command
+            self._diagnostics.outstanding_request_id = request_id
+            self._diagnostics.outstanding_command = command
+            self._log_debug("supervisor: request sent id=%s command=%s timeout=%.2fs", request_id, command, timeout)
+            try:
+                self._conn.send({"request_id": request_id, "command": command, "payload": payload or {}})
+            except (BrokenPipeError, EOFError, OSError) as exc:
+                self._diagnostics.last_error = f"Yard Stick worker exited unexpectedly during {command}: {exc}"
+                self._diagnostics.consecutive_failures += 1
+                self._diagnostics.backend_available = False
+                self._diagnostics.last_restart_reason = f"worker_exit:{command}"
+                self._diagnostics.outstanding_request_id = None
+                self._diagnostics.outstanding_command = None
+                self._terminate_worker(reason=f"worker_exit:{command}")
+                raise YardStickBackendUnavailableError(
+                    f"Yard Stick worker exited unexpectedly during {command}.",
+                    reason=REASON_UNKNOWN,
+                ) from exc
         try:
-            self._conn.send({"request_id": self._request_id, "command": command, "payload": payload or {}})
-        except (BrokenPipeError, EOFError, OSError) as exc:
-            self._diagnostics.last_error = f"Yard Stick worker exited unexpectedly during {command}: {exc}"
-            self._diagnostics.consecutive_failures += 1
-            self._diagnostics.backend_available = False
-            self._diagnostics.last_restart_reason = f"worker_exit:{command}"
-            self._terminate_worker(reason=f"worker_exit:{command}")
-            raise YardStickBackendUnavailableError(
-                f"Yard Stick worker exited unexpectedly during {command}.",
-                reason=REASON_UNKNOWN,
-            ) from exc
-        if not self._conn.poll(timeout):
-            self._diagnostics.last_error = f"Yard Stick worker timed out during {command}."
-            self._diagnostics.consecutive_failures += 1
-            self._diagnostics.backend_available = False
-            self._diagnostics.worker_alive = self._process.is_alive()
-            self._diagnostics.last_restart_reason = f"timeout:{command}"
-            _LOGGER.error(
-                "Yard Stick worker timed out command=%s timeout=%.2fs pid=%s generation=%s",
-                command,
-                timeout,
-                self._process.pid,
-                self._diagnostics.worker_generation,
-            )
+            if not self._conn.poll(timeout):
+                self._diagnostics.last_error = f"Yard Stick worker timed out during {command}."
+                self._diagnostics.consecutive_failures += 1
+                self._diagnostics.backend_available = False
+                self._diagnostics.worker_alive = self._process.is_alive()
+                self._diagnostics.last_restart_reason = f"timeout:{command}"
+                _LOGGER.error(
+                    "Yard Stick worker timed out command=%s timeout=%.2fs pid=%s generation=%s",
+                    command,
+                    timeout,
+                    self._process.pid,
+                    self._diagnostics.worker_generation,
+                )
+                self._log_debug(
+                    "supervisor: timeout command=%s timeout=%.2fs pid=%s generation=%s",
+                    command,
+                    timeout,
+                    self._process.pid,
+                    self._diagnostics.worker_generation,
+                )
+                self._terminate_worker(reason=f"timeout:{command}")
+                raise YardStickBackendUnavailableError(
+                    f"Yard Stick worker timed out during {command}.",
+                    reason=REASON_UNKNOWN,
+                )
+            try:
+                response = self._conn.recv()
+            except (EOFError, OSError) as exc:
+                self._diagnostics.last_error = f"Yard Stick worker exited unexpectedly during {command}: {exc}"
+                self._diagnostics.consecutive_failures += 1
+                self._diagnostics.backend_available = False
+                self._diagnostics.last_restart_reason = f"worker_exit:{command}"
+                self._terminate_worker(reason=f"worker_exit:{command}")
+                raise YardStickBackendUnavailableError(
+                    f"Yard Stick worker exited unexpectedly during {command}.",
+                    reason=REASON_UNKNOWN,
+                ) from exc
+            self._update_diagnostics_from_response(command, response)
             self._log_debug(
-                "supervisor: timeout command=%s timeout=%.2fs pid=%s generation=%s",
+                "supervisor: response received id=%s command=%s kind=%s success=%s timing_ms=%s pid=%s generation=%s",
+                response["request_id"],
                 command,
-                timeout,
-                self._process.pid,
-                self._diagnostics.worker_generation,
+                response["kind"],
+                response["success"],
+                response["timing_ms"],
+                response["worker_pid"],
+                response["worker_generation"],
             )
-            self._terminate_worker(reason=f"timeout:{command}")
-            raise YardStickBackendUnavailableError(
-                f"Yard Stick worker timed out during {command}.",
-                reason=REASON_UNKNOWN,
-            )
-        try:
-            response = self._conn.recv()
-        except (EOFError, OSError) as exc:
-            self._diagnostics.last_error = f"Yard Stick worker exited unexpectedly during {command}: {exc}"
-            self._diagnostics.consecutive_failures += 1
-            self._diagnostics.backend_available = False
-            self._diagnostics.last_restart_reason = f"worker_exit:{command}"
-            self._terminate_worker(reason=f"worker_exit:{command}")
-            raise YardStickBackendUnavailableError(
-                f"Yard Stick worker exited unexpectedly during {command}.",
-                reason=REASON_UNKNOWN,
-            ) from exc
-        self._update_diagnostics_from_response(command, response)
-        self._log_debug(
-            "supervisor: response received id=%s command=%s kind=%s success=%s timing_ms=%s pid=%s generation=%s",
-            response["request_id"],
-            command,
-            response["kind"],
-            response["success"],
-            response["timing_ms"],
-            response["worker_pid"],
-            response["worker_generation"],
-        )
-        if not response["success"]:
-            error = response.get("error") or "unknown worker failure"
-            error_class = response.get("error_class")
-            _LOGGER.error(
-                "Yard Stick worker request failed command=%s error_class=%s error=%s",
-                command,
-                error_class,
-                error,
-            )
-            raise YardStickBackendUnavailableError(error, reason=REASON_UNKNOWN)
-        return response
-
-    def stop(self) -> None:
-        if self._process is None:
-            return
-        try:
-            self.request(COMMAND_STOP, timeout=self._stop_timeout_seconds)
-        except Exception as exc:
-            _LOGGER.warning("Yard Stick worker STOP failed before terminate: %s", exc)
+            if not response["success"]:
+                error = response.get("error") or "unknown worker failure"
+                error_class = response.get("error_class")
+                _LOGGER.error(
+                    "Yard Stick worker request failed command=%s error_class=%s error=%s",
+                    command,
+                    error_class,
+                    error,
+                )
+                raise YardStickBackendUnavailableError(error, reason=REASON_UNKNOWN)
+            return response
         finally:
-            self._terminate_worker(reason="stop")
+            self._diagnostics.outstanding_request_id = None
+            self._diagnostics.outstanding_command = None
+
+    def stop(self, *, reason: str = "stop") -> None:
+        with self._lock:
+            self._shutdown_requested = True
+            self._shutdown_reason = reason
+            self._diagnostics.shutdown_in_progress = True
+            self._diagnostics.last_shutdown_reason = reason
+            process = self._process
+            conn = self._conn
+            outstanding_request_id = self._diagnostics.outstanding_request_id
+            outstanding_command = self._diagnostics.outstanding_command
+        _LOGGER.info(
+            "Yard Stick worker shutdown requested reason=%s pid=%s generation=%s outstanding_request_id=%s outstanding_command=%s",
+            reason,
+            None if process is None else process.pid,
+            self._diagnostics.worker_generation,
+            outstanding_request_id,
+            outstanding_command,
+        )
+        self._log_debug(
+            "supervisor: shutdown requested reason=%s pid=%s generation=%s outstanding_request_id=%s outstanding_command=%s",
+            reason,
+            None if process is None else process.pid,
+            self._diagnostics.worker_generation,
+            outstanding_request_id,
+            outstanding_command,
+        )
+        if process is None:
+            self._diagnostics.shutdown_in_progress = False
+            return
+
+        stop_timed_out = False
+        if conn is not None and process.is_alive() and outstanding_request_id is None:
+            try:
+                self._request_id += 1
+                stop_request_id = self._request_id
+                self._diagnostics.outstanding_request_id = stop_request_id
+                self._diagnostics.outstanding_command = COMMAND_STOP
+                _LOGGER.info(
+                    "Yard Stick worker graceful STOP sent reason=%s pid=%s generation=%s request_id=%s",
+                    reason,
+                    process.pid,
+                    self._diagnostics.worker_generation,
+                    stop_request_id,
+                )
+                conn.send({"request_id": stop_request_id, "command": COMMAND_STOP, "payload": {}})
+                if conn.poll(self._stop_timeout_seconds):
+                    stop_response = conn.recv()
+                    _LOGGER.info(
+                        "Yard Stick worker STOP response received pid=%s generation=%s request_id=%s kind=%s",
+                        process.pid,
+                        self._diagnostics.worker_generation,
+                        stop_request_id,
+                        stop_response.get("kind"),
+                    )
+                else:
+                    stop_timed_out = True
+                    _LOGGER.warning(
+                        "Yard Stick worker STOP timed out pid=%s generation=%s timeout=%.2fs",
+                        process.pid,
+                        self._diagnostics.worker_generation,
+                        self._stop_timeout_seconds,
+                    )
+            except Exception as exc:
+                _LOGGER.warning("Yard Stick worker STOP failed before terminate: %s", exc)
+            finally:
+                self._diagnostics.outstanding_request_id = None
+                self._diagnostics.outstanding_command = None
+        elif outstanding_request_id is not None:
+            _LOGGER.warning(
+                "Yard Stick worker shutdown skipping graceful STOP because request is in flight pid=%s generation=%s request_id=%s command=%s",
+                process.pid,
+                self._diagnostics.worker_generation,
+                outstanding_request_id,
+                outstanding_command,
+            )
+
+        self._terminate_worker(reason=reason if not stop_timed_out else f"{reason}:stop_timeout")
+        self._diagnostics.shutdown_in_progress = False
 
     def _ensure_worker_started(self) -> None:
         now = time.monotonic()
@@ -715,6 +875,7 @@ class YardStickWorkerSupervisor:
         self._conn = parent_conn
         self._diagnostics.worker_pid = self._process.pid
         self._diagnostics.worker_alive = True
+        self._diagnostics.shutdown_in_progress = False
         _LOGGER.info(
             "Yard Stick worker started pid=%s generation=%s device_index=%s",
             self._process.pid,
@@ -771,12 +932,29 @@ class YardStickWorkerSupervisor:
         if self._process.is_alive():
             self._process.terminate()
             self._process.join(timeout=self._stop_timeout_seconds)
+            _LOGGER.warning(
+                "Yard Stick worker terminate result pid=%s generation=%s alive=%s",
+                self._process.pid,
+                self._diagnostics.worker_generation,
+                self._process.is_alive(),
+            )
             if self._process.is_alive():
+                _LOGGER.warning(
+                    "Yard Stick worker kill requested pid=%s generation=%s",
+                    self._process.pid,
+                    self._diagnostics.worker_generation,
+                )
                 try:
                     os.kill(self._process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 self._process.join(timeout=self._stop_timeout_seconds)
+                _LOGGER.warning(
+                    "Yard Stick worker kill result pid=%s generation=%s alive=%s",
+                    self._process.pid,
+                    self._diagnostics.worker_generation,
+                    self._process.is_alive(),
+                )
         exitcode = self._process.exitcode
         _LOGGER.warning(
             "Yard Stick worker terminated pid=%s generation=%s exitcode=%s reason=%s",
@@ -795,6 +973,7 @@ class YardStickWorkerSupervisor:
         self._diagnostics.worker_alive = False
         self._diagnostics.backend_available = False
         self._diagnostics.last_restart_reason = reason
+        self._diagnostics.final_exit_code = exitcode
         self._next_allowed_start_monotonic = time.monotonic() + self._cooldown_seconds
         self._cleanup_process_handles()
 

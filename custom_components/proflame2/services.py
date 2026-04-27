@@ -230,6 +230,8 @@ async def async_stage_control_change(
     ) -> None:
     """Stage a debounced user-facing control edit without sending immediately."""
 
+    _ensure_runtime_entry_accepts_actions(runtime_entry)
+
     _log_control_event(
         runtime_entry,
         "user action received changes=%s current_state=%s desired_state=%s",
@@ -407,7 +409,7 @@ async def async_start_active_listener(
 ) -> None:
     """Start background active listening when the hidden test flag enables it."""
 
-    if not runtime_entry.active_listening_enabled or runtime_entry.backend is None:
+    if runtime_entry.shutting_down or not runtime_entry.active_listening_enabled or runtime_entry.backend is None:
         return
     if runtime_entry.active_listener_task is not None and not runtime_entry.active_listener_task.done():
         return
@@ -423,7 +425,11 @@ async def _async_active_listener_loop(
     """Continuously receive observed packets when active listening is enabled."""
 
     try:
-        while runtime_entry.active_listening_enabled and runtime_entry.backend is not None:
+        while (
+            not runtime_entry.shutting_down
+            and runtime_entry.active_listening_enabled
+            and runtime_entry.backend is not None
+        ):
             packet = await runtime_entry.backend.receive(
                 timeout=_confirmation_receive_timeout_seconds(hass)
             )
@@ -487,6 +493,8 @@ async def _async_confirmation_task(
             receive_timeout,
         )
         while asyncio.get_running_loop().time() < deadline:
+            if runtime_entry.shutting_down:
+                break
             if runtime_entry.backend is None:
                 break
             packet = await runtime_entry.backend.receive(timeout=receive_timeout)
@@ -644,6 +652,16 @@ def _coerce_target_ids(raw_value: Any) -> list[str]:
     return [str(raw_value)]
 
 
+def _ensure_runtime_entry_accepts_actions(runtime_entry: Proflame2RuntimeEntry) -> None:
+    """Fail fast when an entry is shutting down or unavailable."""
+
+    if runtime_entry.shutting_down:
+        reason = runtime_entry.shutdown_reason or "shutdown"
+        raise HomeAssistantError(
+            f"This Proflame2 fireplace is shutting down ({reason}); new actions are temporarily unavailable."
+        )
+
+
 async def async_execute_set_state(
     hass: HomeAssistant,
     runtime_entry: Proflame2RuntimeEntry,
@@ -655,6 +673,7 @@ async def async_execute_set_state(
 ) -> None:
     """Execute the shared atomic state-application path for all services."""
 
+    _ensure_runtime_entry_accepts_actions(runtime_entry)
     _log_control_event(
         runtime_entry,
         "service action received source=%s data=%s",
@@ -696,6 +715,7 @@ async def async_execute_apply_profile(
 ) -> None:
     """Apply one saved profile through the shared atomic send path."""
 
+    _ensure_runtime_entry_accepts_actions(runtime_entry)
     normalized_profile_id = str(profile_id).strip().lower()
     profile = (runtime_entry.saved_profiles or {}).get(normalized_profile_id)
     if profile is None:
@@ -743,6 +763,7 @@ async def _async_execute_requested_state(
 ) -> None:
     """Send one already-validated full-state request and update runtime state."""
 
+    _ensure_runtime_entry_accepts_actions(runtime_entry)
     request_summary = _state_summary(requested_state)
     _cancel_runtime_task(
         runtime_entry,

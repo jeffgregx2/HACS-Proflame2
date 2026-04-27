@@ -20,7 +20,10 @@ PLATFORMS: list["Platform"] = ["sensor", "switch", "number", "button"]
 async def async_setup(hass: "HomeAssistant", config: dict) -> bool:
     """Set up the Proflame2 integration domain."""
 
+    from .runtime import async_register_shutdown_listener
+
     hass.data.setdefault(DOMAIN, {})
+    async_register_shutdown_listener(hass)
     return True
 
 

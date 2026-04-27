@@ -15,6 +15,7 @@ pytestmark = pytest.mark.ha
 
 from homeassistant.util import slugify
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.proflame2.const import (
@@ -1102,6 +1103,45 @@ async def test_active_listening_updates_current_state_when_forced_in_tests(hass)
     assert primary is not None
     assert primary.state == "On · Flame 3"
     assert primary.attributes["state_confidence"] == STATE_CONFIDENCE_OBSERVED
+
+
+async def test_control_actions_fail_quickly_when_runtime_entry_is_shutting_down(hass) -> None:
+    """Controls should not stage or send new work once shutdown has started."""
+
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    runtime_entry.shutting_down = True
+    runtime_entry.shutdown_reason = "config_entry_unload"
+
+    with pytest.raises(HomeAssistantError, match="shutting down"):
+        await hass.services.async_call(
+            "switch",
+            "turn_on",
+            {"entity_id": _switch_entity_id(entry.title, "Power")},
+            blocking=True,
+        )
+
+
+async def test_homeassistant_stop_closes_backend_and_marks_shutdown(hass, monkeypatch) -> None:
+    """Home Assistant stop should shut down runtime backends without unloading entries first."""
+
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    close_reasons: list[str | None] = []
+
+    async def fake_close(*, reason: str | None = None) -> None:
+        close_reasons.append(reason)
+
+    monkeypatch.setattr(runtime_entry.backend, "close", fake_close)
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+
+    assert runtime_entry.shutting_down is True
+    assert runtime_entry.shutdown_reason == "ha_shutdown"
+    assert close_reasons == ["ha_shutdown"]
 
 
 async def test_startup_restores_last_known_state_without_transmitting(hass) -> None:

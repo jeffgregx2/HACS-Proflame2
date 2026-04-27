@@ -28,7 +28,7 @@ class FakeRFBackend(RFBackend):
     async def connect(self) -> None:
         self.connected = True
 
-    async def close(self) -> None:
+    async def close(self, *, reason: str | None = None) -> None:
         self.connected = False
 
     @property

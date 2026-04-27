@@ -11,7 +11,7 @@ class ESPHomeAPIBackend(RFBackend):
     async def connect(self) -> None:
         return None
 
-    async def close(self) -> None:
+    async def close(self, *, reason: str | None = None) -> None:
         return None
 
     async def send(self, packet):

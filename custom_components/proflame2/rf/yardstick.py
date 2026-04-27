@@ -314,6 +314,7 @@ class YardStickBackend(RFBackend):
         self._worker_supervisor = worker_supervisor
         self._worker_supervisor_factory = worker_supervisor_factory or YardStickWorkerSupervisor
         self._worker_mode = (radio is None) if worker_mode is None else worker_mode
+        self._shutdown_requested = False
         if self._worker_mode and self._worker_supervisor is None:
             self._worker_supervisor = self._worker_supervisor_factory(device_index=device_index)
         _LOGGER.info(
@@ -333,6 +334,8 @@ class YardStickBackend(RFBackend):
     async def connect(self) -> None:
         """Open the Yard Stick and configure it for Proflame2 receive."""
 
+        if self._shutdown_requested:
+            raise RuntimeError("Yard Stick unavailable; shutdown in progress.")
         lock_acquired = False
         self._debug(
             "connect: backend connected=%s radio_exists=%s lock_acquire_start timeout=%.2fs",
@@ -443,28 +446,29 @@ class YardStickBackend(RFBackend):
                 self._debug("connect: modulation load complete value=%s", modulation)
         self._modulation = modulation
 
-    async def close(self) -> None:
+    async def close(self, *, reason: str | None = None) -> None:
         """Close the backend connection."""
 
+        self._shutdown_requested = True
         if self._radio is None:
             if not self._worker_mode:
                 _LOGGER.info("Proflame2 Yard Stick close requested but no radio is open.")
                 return None
         if self._worker_mode:
-            _LOGGER.info("Proflame2 Yard Stick close requested device_index=%s", self._device_index)
+            _LOGGER.info("Proflame2 Yard Stick close requested device_index=%s reason=%s", self._device_index, reason or "close")
             lock_acquired = False
             await self._acquire_operation_lock("close")
             lock_acquired = True
             try:
                 if self._worker_supervisor is not None:
-                    await self._async_in_executor(self._worker_supervisor.stop)
+                    await self._async_in_executor(partial(self._worker_supervisor.stop, reason=reason or "close"))
                     self._debug("Close skipped/no-op idx=%s reason=worker_stop", self._device_index)
             finally:
                 if lock_acquired:
                     self._release_operation_lock("close")
-                _LOGGER.info("Proflame2 Yard Stick close completed device_index=%s", self._device_index)
+                _LOGGER.info("Proflame2 Yard Stick close completed device_index=%s reason=%s", self._device_index, reason or "close")
             return None
-        _LOGGER.info("Proflame2 Yard Stick close requested device_index=%s", self._device_index)
+        _LOGGER.info("Proflame2 Yard Stick close requested device_index=%s reason=%s", self._device_index, reason or "close")
         self._debug("Closing Yard Stick One idx=%s", self._device_index)
         lock_acquired = False
         await self._acquire_operation_lock("close")
@@ -504,11 +508,13 @@ class YardStickBackend(RFBackend):
                 self._radio = None
             if lock_acquired:
                 self._release_operation_lock("close")
-            _LOGGER.info("Proflame2 Yard Stick close completed device_index=%s", self._device_index)
+            _LOGGER.info("Proflame2 Yard Stick close completed device_index=%s reason=%s", self._device_index, reason or "close")
 
     async def send(self, packet) -> SendResult:
         """Transmit one prepared Proflame2 packet via Yard Stick One."""
 
+        if self._shutdown_requested:
+            raise RuntimeError("Yard Stick unavailable; shutdown in progress.")
         self._debug(
             "Entered YardStickBackend.send remote_id=%06x tx_frequency_hz=%s packet_has_plan=%s",
             packet.remote_id,
@@ -657,6 +663,8 @@ class YardStickBackend(RFBackend):
     async def receive_raw_payload(self, timeout: float | None = None) -> bytes | None:
         """Receive one raw RF payload without attempting Proflame2 decode."""
 
+        if self._shutdown_requested:
+            raise RuntimeError("Yard Stick unavailable; shutdown in progress.")
         if not self._worker_mode and self._radio is None:
             raise RuntimeError("YardStickBackend.connect() must be called before receive().")
         if self._worker_mode:
@@ -940,6 +948,8 @@ class YardStickBackend(RFBackend):
     async def learn(self, timeout: float | None = None) -> CaptureResult:
         """Collect decodable samples until the timeout expires."""
 
+        if self._shutdown_requested:
+            raise RuntimeError("Yard Stick unavailable; shutdown in progress.")
         deadline = None if timeout is None else (time.monotonic() + timeout)
         samples: list[CaptureSample] = []
         raw_payloads = 0

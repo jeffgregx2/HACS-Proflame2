@@ -86,7 +86,7 @@ class RFBackend(ABC):
         """Open the backend connection."""
 
     @abstractmethod
-    async def close(self) -> None:
+    async def close(self, *, reason: str | None = None) -> None:
         """Close the backend connection."""
 
     @abstractmethod

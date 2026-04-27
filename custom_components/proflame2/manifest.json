@@ -16,5 +16,5 @@
     "custom_components.proflame2.packet_debug.decode_failures"
   ],
   "requirements": ["rfcat>=2.0.1"],
-  "version": "0.2.0-dev"
+  "version": "0.3.0-dev"
 }

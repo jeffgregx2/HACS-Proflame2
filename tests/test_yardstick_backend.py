@@ -36,7 +36,9 @@ from custom_components.proflame2.rf.yardstick_worker import (
     COMMAND_PING,
     COMMAND_RECEIVE,
     COMMAND_SEND,
+    COMMAND_STOP,
     YardStickWorkerSupervisor,
+    _cleanup_radio_for_exit,
 )
 
 
@@ -126,6 +128,7 @@ class _FakeWorkerSupervisor:
         self.error = error
         self.requests: list[tuple[str, dict, float]] = []
         self.stopped = False
+        self.stop_reason: str | None = None
 
     def request(self, command: str, payload: dict | None = None, *, timeout: float):
         self.requests.append((command, payload or {}, timeout))
@@ -156,8 +159,9 @@ class _FakeWorkerSupervisor:
             },
         )
 
-    def stop(self) -> None:
+    def stop(self, *, reason: str = "stop") -> None:
         self.stopped = True
+        self.stop_reason = reason
 
     def serialize_diagnostics(self) -> dict:
         return {
@@ -172,6 +176,88 @@ class _FakeWorkerSupervisor:
             "last_operation": self.requests[-1][0] if self.requests else None,
             "last_operation_duration_ms": 1.0,
         }
+
+
+class _FakeEvent:
+    def __init__(self) -> None:
+        self.cleared = False
+        self.set_called = False
+
+    def clear(self) -> None:
+        self.cleared = True
+
+    def set(self) -> None:
+        self.set_called = True
+
+
+class _FakeUsbHandle:
+    def __init__(self) -> None:
+        self.released = False
+
+    def releaseInterface(self, index: int = 0) -> None:
+        assert index == 0
+        self.released = True
+
+
+class _CleanupRadio:
+    def __init__(self) -> None:
+        self.idle_called = False
+        self._threadGo = _FakeEvent()
+        self.reset_event = _FakeEvent()
+        self.xmit_event = _FakeEvent()
+        self._do = _FakeUsbHandle()
+
+    def setModeIDLE(self) -> None:
+        self.idle_called = True
+
+
+class _FakeConn:
+    def __init__(self, *, poll_result: bool = True, recv_value: dict | None = None) -> None:
+        self.poll_result = poll_result
+        self.recv_value = recv_value or {
+            "request_id": 1,
+            "kind": "OK",
+            "success": True,
+            "timing_ms": 1.0,
+            "worker_pid": 999,
+            "worker_generation": 1,
+            "status": {"backend_available": True},
+            "payload": {},
+        }
+        self.sent: list[dict] = []
+        self.closed = False
+
+    def send(self, value: dict) -> None:
+        self.sent.append(value)
+
+    def poll(self, _timeout: float) -> bool:
+        return self.poll_result
+
+    def recv(self) -> dict:
+        return self.recv_value
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeProcess:
+    def __init__(self, *, alive: bool = True, pid: int = 111, exitcode: int | None = None) -> None:
+        self._alive = alive
+        self.pid = pid
+        self.exitcode = exitcode
+        self.terminate_calls = 0
+        self.join_calls: list[float] = []
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+        self._alive = False
+        self.exitcode = -15
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_calls.append(timeout or 0.0)
 
 
 def test_connect_uses_executor_for_radio_open_and_configuration(monkeypatch) -> None:
@@ -204,6 +290,20 @@ def test_connect_uses_executor_for_radio_open_and_configuration(monkeypatch) -> 
         assert fake_radio.calls
 
     asyncio.run(_run())
+
+
+def test_cleanup_radio_for_exit_idles_and_releases_interface() -> None:
+    """Worker cleanup should idle the radio and release USB interface if exposed."""
+
+    radio = _CleanupRadio()
+
+    _cleanup_radio_for_exit(radio)
+
+    assert radio.idle_called is True
+    assert radio._threadGo.cleared is True
+    assert radio.reset_event.cleared is True
+    assert radio.xmit_event.set_called is True
+    assert radio._do.released is True
 
 
 def test_worker_supervisor_mock_mode_start_send_ping_stop() -> None:
@@ -260,6 +360,41 @@ def test_worker_supervisor_honors_cooldown_after_timeout() -> None:
             supervisor.request(COMMAND_OPEN, timeout=1.0)
     finally:
         supervisor.stop()
+
+
+def test_worker_supervisor_stop_sends_graceful_stop_and_records_reason() -> None:
+    """Supervisor stop should send STOP when no request is in flight."""
+
+    supervisor = YardStickWorkerSupervisor(mock_mode=True)
+    supervisor._process = _FakeProcess()
+    supervisor._conn = _FakeConn(
+        recv_value={
+            "request_id": 1,
+            "kind": "OK",
+            "success": True,
+            "timing_ms": 1.0,
+            "worker_pid": 111,
+            "worker_generation": 1,
+            "status": {"backend_available": True},
+            "payload": {},
+        }
+    )
+    supervisor.stop(reason="config_entry_unload")
+
+    assert supervisor.diagnostics.last_shutdown_reason == "config_entry_unload"
+    assert supervisor.diagnostics.final_exit_code == -15
+    assert supervisor.diagnostics.worker_alive is False
+
+
+def test_worker_supervisor_rejects_new_requests_during_shutdown() -> None:
+    """Requests should fail quickly once shutdown has begun."""
+
+    supervisor = YardStickWorkerSupervisor(mock_mode=True)
+    supervisor._shutdown_requested = True
+    supervisor._shutdown_reason = "ha_shutdown"
+
+    with pytest.raises(Exception, match="shutdown in progress"):
+        supervisor.request(COMMAND_PING, timeout=1.0)
 
 
 def test_yardstick_defaults_match_smartfire_reference_frequency() -> None:
@@ -538,8 +673,9 @@ def test_worker_backed_close_stops_supervisor() -> None:
     async def _run() -> None:
         fake_supervisor = _FakeWorkerSupervisor()
         backend = YardStickBackend(worker_supervisor=fake_supervisor)
-        await backend.close()
+        await backend.close(reason="config_entry_unload")
         assert fake_supervisor.stopped is True
+        assert fake_supervisor.stop_reason == "config_entry_unload"
 
     asyncio.run(_run())
 

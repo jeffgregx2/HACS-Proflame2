@@ -130,6 +130,7 @@ Developer note:
 * The production Yard Stick backend now uses a dedicated worker process so `rflib` and libusb do not run inside the main Home Assistant process.
 * Worker restart provides a recovery boundary for many `rflib` / libusb hangs, crashes, and timeouts without restarting Home Assistant.
 * The Yard Stick / `rflib` stack may still fail if the VM or USB stack wedges below the process boundary, but worker restart is now the first-line recovery model before resorting to a Home Assistant restart, container restart, or USB reattach.
+* In virtualized environments, a wedged Yard Stick or libusb path may affect other devices that share the same virtual USB controller. Prefer a dedicated USB controller or passthrough path for Yard Stick testing where possible.
 * For bench TX work, prefer the long-lived `scripts/yardstick_tx_console.py` tool over repeated one-shot invocations.
 * The stock remote sends a command burst as multiple repeated identical frames. The fireplace appears to require multiple matching frames before accepting the command, so the Yard Stick backend uses explicit software repetition: five separate `RFxmit(payload)` calls mirroring the observed remote burst.
 
