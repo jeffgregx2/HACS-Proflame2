@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from functools import partial
 import logging
 import time
 from pprint import pformat
@@ -49,6 +50,12 @@ from ..packet_debug import (
     get_packet_decode_failure_logger,
 )
 from .waveform import SMARTFIRE_DEFAULT_TOTAL_TRANSMISSIONS
+from .yardstick_worker import (
+    COMMAND_OPEN,
+    COMMAND_RECEIVE,
+    COMMAND_SEND,
+    YardStickWorkerSupervisor,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -77,6 +84,7 @@ REASON_PERMISSION_DENIED = "permission_denied"
 REASON_UNKNOWN = "unknown"
 
 ExecutorJobCallable = Callable[..., Awaitable[Any]]
+WorkerSupervisorFactory = Callable[..., YardStickWorkerSupervisor]
 
 
 class YardStickBackendUnavailableError(RuntimeError):
@@ -115,6 +123,8 @@ def normalize_yardstick_backend_error(exc: BaseException) -> YardStickBackendUna
 
     message = str(exc).strip()
     lowered = message.lower()
+    if "yard stick worker" in lowered or "retry after cooldown" in lowered:
+        return YardStickBackendUnavailableError(message, reason=REASON_UNKNOWN)
     if "no backend available" in lowered or "libusb" in lowered:
         return YardStickBackendUnavailableError(
             "YARD Stick One support is unavailable because the libusb backend could not be loaded.",
@@ -268,6 +278,9 @@ class YardStickBackend(RFBackend):
         operation_lock_timeout_seconds: float = YARDSTICK_OPERATION_LOCK_TIMEOUT_SECONDS,
         connect_timeout_seconds: float = YARDSTICK_CONNECT_TIMEOUT_SECONDS,
         transmit_timeout_seconds: float = YARDSTICK_TRANSMIT_TIMEOUT_SECONDS,
+        worker_supervisor: YardStickWorkerSupervisor | None = None,
+        worker_supervisor_factory: WorkerSupervisorFactory | None = None,
+        worker_mode: bool | None = None,
     ) -> None:
         self.name = "yardstick"
         self._executor_job = executor_job or (
@@ -298,8 +311,13 @@ class YardStickBackend(RFBackend):
         self._connect_timeout_seconds = connect_timeout_seconds
         self._transmit_timeout_seconds = transmit_timeout_seconds
         self._operation_lock = asyncio.Lock()
+        self._worker_supervisor = worker_supervisor
+        self._worker_supervisor_factory = worker_supervisor_factory or YardStickWorkerSupervisor
+        self._worker_mode = (radio is None) if worker_mode is None else worker_mode
+        if self._worker_mode and self._worker_supervisor is None:
+            self._worker_supervisor = self._worker_supervisor_factory(device_index=device_index)
         _LOGGER.info(
-            "Proflame2 Yard Stick backend constructed device_index=%s rx_frequency_hz=%s tx_frequency_hz=%s packet_length_bytes=%s sweep_enabled=%s probe_mode=%s tx_mode=%s tx_transmissions=%s tx_inter_frame_gap_ms=%s",
+            "Proflame2 Yard Stick backend constructed device_index=%s rx_frequency_hz=%s tx_frequency_hz=%s packet_length_bytes=%s sweep_enabled=%s probe_mode=%s tx_mode=%s tx_transmissions=%s tx_inter_frame_gap_ms=%s worker_mode=%s",
             self._device_index,
             self._frequency_hz,
             self._tx_frequency_hz,
@@ -309,6 +327,7 @@ class YardStickBackend(RFBackend):
             "software_repeat",
             self._tx_transmissions or YARDSTICK_TX_DEFAULT_TRANSMISSIONS,
             self._tx_inter_frame_gap_ms,
+            self._worker_mode,
         )
 
     async def connect(self) -> None:
@@ -317,7 +336,7 @@ class YardStickBackend(RFBackend):
         lock_acquired = False
         self._debug(
             "connect: backend connected=%s radio_exists=%s lock_acquire_start timeout=%.2fs",
-            self._radio is not None,
+            self._radio is not None or self._worker_mode,
             self._radio is not None,
             self._operation_lock_timeout_seconds,
         )
@@ -326,12 +345,29 @@ class YardStickBackend(RFBackend):
         try:
             self._debug("connect: lock acquired")
             await self._async_connect_locked()
-            self._debug("connect: rx configure start")
-            radio_settings = await self._await_with_timeout(
-                self._async_in_executor(self._configure_radio, self._modulation),
-                timeout=self._connect_timeout_seconds,
-                label="receive_radio_configuration",
-            )
+            if self._worker_mode:
+                radio_settings = {
+                    "smartfire_reference_url": SMARTFIRE_REFERENCE_URL,
+                    "smartfire_reference_baseline": {
+                        "frequency_hz": PROFLAME2_FREQUENCY_HZ,
+                        "modulation_mode": "MOD_ASK_OOK",
+                        "data_rate": PROFLAME2_DATA_RATE,
+                    },
+                    "frequency_hz": self._active_frequency_hz,
+                    "configured_frequency_hz": self._frequency_hz,
+                    "frequency_scan_hz": self._frequency_scan_hz,
+                    "sweep_enabled": self._sweep_enabled,
+                    "packet_length_bytes": self._packet_length_bytes,
+                    "probe_mode": self._probe_mode,
+                    "worker_mode": True,
+                }
+            else:
+                self._debug("connect: rx configure start")
+                radio_settings = await self._await_with_timeout(
+                    self._async_in_executor(self._configure_radio, self._modulation),
+                    timeout=self._connect_timeout_seconds,
+                    label="receive_radio_configuration",
+                )
             _LOGGER.info(
                 "Proflame2 Yard Stick open succeeded device_index=%s rx_frequency_hz=%s tx_frequency_hz=%s",
                 self._device_index,
@@ -369,6 +405,19 @@ class YardStickBackend(RFBackend):
             self._frequency_hz,
             self._tx_frequency_hz,
         )
+        if self._worker_mode:
+            self._debug("connect: open required worker=yes")
+            response = await self._await_with_timeout(
+                self._async_worker_request(COMMAND_OPEN, {}, timeout=self._connect_timeout_seconds),
+                timeout=self._connect_timeout_seconds,
+                label="yardstick_worker_open",
+            )
+            self._debug(
+                "connect: worker open complete pid=%s generation=%s",
+                response["worker_pid"],
+                response["worker_generation"],
+            )
+            return
         if self._radio is None:
             self._debug("connect: open required yes")
             self._debug("connect: RfCat open start")
@@ -398,7 +447,22 @@ class YardStickBackend(RFBackend):
         """Close the backend connection."""
 
         if self._radio is None:
-            _LOGGER.info("Proflame2 Yard Stick close requested but no radio is open.")
+            if not self._worker_mode:
+                _LOGGER.info("Proflame2 Yard Stick close requested but no radio is open.")
+                return None
+        if self._worker_mode:
+            _LOGGER.info("Proflame2 Yard Stick close requested device_index=%s", self._device_index)
+            lock_acquired = False
+            await self._acquire_operation_lock("close")
+            lock_acquired = True
+            try:
+                if self._worker_supervisor is not None:
+                    await self._async_in_executor(self._worker_supervisor.stop)
+                    self._debug("Close skipped/no-op idx=%s reason=worker_stop", self._device_index)
+            finally:
+                if lock_acquired:
+                    self._release_operation_lock("close")
+                _LOGGER.info("Proflame2 Yard Stick close completed device_index=%s", self._device_index)
             return None
         _LOGGER.info("Proflame2 Yard Stick close requested device_index=%s", self._device_index)
         self._debug("Closing Yard Stick One idx=%s", self._device_index)
@@ -458,39 +522,76 @@ class YardStickBackend(RFBackend):
             self._debug(
                 "send: lock acquire start timeout=%.2fs radio_exists=%s",
                 self._operation_lock_timeout_seconds,
-                self._radio is not None,
+                self._radio is not None or self._worker_mode,
             )
             await self._acquire_operation_lock("send")
             lock_acquired = True
             self._debug("send: lock acquired")
-            self._debug("send: connect required=%s", self._radio is None)
+            self._debug("send: connect required=%s", self._radio is None or self._worker_mode)
             await self._async_connect_locked()
-            assert self._radio is not None
+            if not self._worker_mode:
+                assert self._radio is not None
 
-            modulation = self._modulation
-            if modulation is None:
-                modulation = getattr(self._radio, "MOD_ASK_OOK", None)
-                if modulation is None:
-                    try:
-                        modulation = await self._await_with_timeout(
-                            self._async_in_executor(_load_mod_ask_ook),
-                            timeout=self._connect_timeout_seconds,
-                            label="load_modulation_constant_for_send",
-                        )
-                    except Exception:
-                        modulation = 0x30
-                self._modulation = modulation
-
-            self._debug("send: TX configure start")
-            tx_settings = await self._await_with_timeout(
-                self._async_in_executor(self._configure_transmit_radio, modulation),
-                timeout=self._connect_timeout_seconds,
-                label="transmit_radio_configuration",
-            )
-            self._debug("send: TX configure complete")
             plan = packet.transmission_plan
             effective_transmissions = self._tx_transmissions or plan.repeat_count
             transmission_mode = "software_repeat"
+            if self._worker_mode:
+                self._debug("send: blocking TX executor submit")
+                response = await self._await_with_timeout(
+                    self._async_worker_request(
+                        COMMAND_SEND,
+                        {
+                            "air_payload_hex": plan.air_payload.hex(),
+                            "tx_frequency_hz": self._tx_frequency_hz,
+                            "software_transmissions": effective_transmissions,
+                            "inter_frame_gap_ms": self._tx_inter_frame_gap_ms,
+                        },
+                        timeout=self._transmit_timeout_seconds,
+                    ),
+                    timeout=self._transmit_timeout_seconds,
+                    label="yardstick_worker_send",
+                )
+                tx_settings = response.get("payload", {}).get(
+                    "tx_settings",
+                    {
+                        "frequency_hz": self._tx_frequency_hz,
+                        "modulation_mode": 0x30,
+                        "data_rate": PROFLAME2_DATA_RATE,
+                    },
+                )
+            else:
+                modulation = self._modulation
+                if modulation is None:
+                    modulation = getattr(self._radio, "MOD_ASK_OOK", None)
+                    if modulation is None:
+                        try:
+                            modulation = await self._await_with_timeout(
+                                self._async_in_executor(_load_mod_ask_ook),
+                                timeout=self._connect_timeout_seconds,
+                                label="load_modulation_constant_for_send",
+                            )
+                        except Exception:
+                            modulation = 0x30
+                    self._modulation = modulation
+
+                self._debug("send: TX configure start")
+                tx_settings = await self._await_with_timeout(
+                    self._async_in_executor(self._configure_transmit_radio, modulation),
+                    timeout=self._connect_timeout_seconds,
+                    label="transmit_radio_configuration",
+                )
+                self._debug("send: TX configure complete")
+                self._debug("send: blocking TX executor submit")
+                await self._await_with_timeout(
+                    self._async_in_executor(
+                        self._transmit_air_payload,
+                        plan.air_payload,
+                        effective_transmissions,
+                        self._tx_inter_frame_gap_ms,
+                    ),
+                    timeout=self._transmit_timeout_seconds,
+                    label="blocking_transmit_executor",
+                )
             _LOGGER.info(
                 "Proflame2 Yard Stick TX remote_id=%06x tx_frequency_hz=%s modulation=%s data_rate=%s payload_length_bytes=%s transmission_mode=%s software_transmissions=%s inter_frame_gap_ms=%s",
                 packet.remote_id,
@@ -519,17 +620,6 @@ class YardStickBackend(RFBackend):
                 packet.frame.cmd2,
                 packet.frame.err2,
                 plan.air_payload.hex(),
-            )
-            self._debug("send: blocking TX executor submit")
-            await self._await_with_timeout(
-                self._async_in_executor(
-                    self._transmit_air_payload,
-                    plan.air_payload,
-                    effective_transmissions,
-                    self._tx_inter_frame_gap_ms,
-                ),
-                timeout=self._transmit_timeout_seconds,
-                label="blocking_transmit_executor",
             )
         except Exception as exc:
             _LOGGER.exception(
@@ -567,8 +657,37 @@ class YardStickBackend(RFBackend):
     async def receive_raw_payload(self, timeout: float | None = None) -> bytes | None:
         """Receive one raw RF payload without attempting Proflame2 decode."""
 
-        if self._radio is None:
+        if not self._worker_mode and self._radio is None:
             raise RuntimeError("YardStickBackend.connect() must be called before receive().")
+        if self._worker_mode:
+            lock_acquired = False
+            try:
+                await self._acquire_operation_lock("receive")
+                lock_acquired = True
+                await self._async_connect_locked()
+                request_timeout = self._connect_timeout_seconds + (timeout or 0.0) + 1.0
+                response = await self._await_with_timeout(
+                    self._async_worker_request(
+                        COMMAND_RECEIVE,
+                        {
+                            "timeout": timeout,
+                            "frequency_hz": self._active_frequency_hz,
+                            "data_rate": self._data_rate,
+                            "packet_length_bytes": self._packet_length_bytes,
+                            "probe_mode": self._probe_mode,
+                        },
+                        timeout=request_timeout,
+                    ),
+                    timeout=request_timeout,
+                    label="yardstick_worker_receive",
+                )
+                if response["kind"] == "NO_PACKET":
+                    return None
+                raw_payload_hex = response.get("payload", {}).get("raw_payload_hex")
+                return None if raw_payload_hex is None else bytes.fromhex(raw_payload_hex)
+            finally:
+                if lock_acquired:
+                    self._release_operation_lock("receive")
         return await self._async_in_executor(self._recv_once, timeout)
 
     async def receive(self, timeout: float | None = None):
@@ -587,7 +706,7 @@ class YardStickBackend(RFBackend):
     async def receive_sample(self, timeout: float | None = None) -> CaptureSample | None:
         """Receive and decode one Proflame2 sample when possible."""
 
-        if self._radio is None:
+        if not self._worker_mode and self._radio is None:
             raise RuntimeError("YardStickBackend.connect() must be called before receive().")
 
         start_wall = datetime.now(timezone.utc)
@@ -604,7 +723,7 @@ class YardStickBackend(RFBackend):
             start_wall.isoformat(),
         )
         try:
-            raw_payload = await self._async_in_executor(self._recv_once, timeout)
+            raw_payload = await self.receive_raw_payload(timeout)
         except Exception as exc:
             end_wall = datetime.now(timezone.utc)
             elapsed_ms = (time.monotonic() - start_monotonic) * 1000
@@ -828,7 +947,7 @@ class YardStickBackend(RFBackend):
 
         while deadline is None or time.monotonic() < deadline:
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
-            raw_payload = await self._async_in_executor(self._recv_once, remaining)
+            raw_payload = await self.receive_raw_payload(remaining)
             if raw_payload is None:
                 break
             raw_payloads += 1
@@ -861,10 +980,11 @@ class YardStickBackend(RFBackend):
 
     async def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
-            can_send=False,
+            can_send=True,
             can_receive=True,
             can_learn=True,
             notes=(
+                "Transmit and receive operations are isolated behind a dedicated Yard Stick worker process.",
                 "Receive path tunes the Yard Stick One for ASK/OOK near 315 MHz.",
                 "Successful decodes are normalized into Proflame remote_id/cmd/err samples.",
                 "Undecodable payloads are counted in learn-mode metadata for follow-up decoder work.",
@@ -1094,7 +1214,7 @@ class YardStickBackend(RFBackend):
     async def _advance_frequency(self, reason: str, *, log_to_decode_failure: bool) -> None:
         """Retune to the next frequency in the receive scan window."""
 
-        if self._radio is None or len(self._frequency_scan_hz) <= 1:
+        if len(self._frequency_scan_hz) <= 1:
             return
         if not self._sweep_enabled:
             return
@@ -1102,7 +1222,9 @@ class YardStickBackend(RFBackend):
         previous_frequency_hz = self._active_frequency_hz
         self._frequency_index = (self._frequency_index + 1) % len(self._frequency_scan_hz)
         next_frequency_hz = self._active_frequency_hz
-        await self._async_in_executor(self._retune_radio_frequency, next_frequency_hz)
+        if not self._worker_mode:
+            assert self._radio is not None
+            await self._async_in_executor(self._retune_radio_frequency, next_frequency_hz)
         if log_to_decode_failure:
             self._debug_decode_failure(
                 "Advanced receive frequency reason=%s previous_freq_hz=%s next_freq_hz=%s scan_index=%s/%s",
@@ -1332,3 +1454,21 @@ class YardStickBackend(RFBackend):
         if isinstance(payload, str):
             return payload.encode("latin1")
         return bytes(payload)
+
+    async def _async_worker_request(
+        self,
+        command: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float,
+    ) -> dict[str, Any]:
+        if self._worker_supervisor is None:
+            raise RuntimeError("Yard Stick worker supervisor is not available.")
+        return await self._async_in_executor(
+            partial(self._worker_supervisor.request, command, payload, timeout=timeout),
+        )
+
+    def serialize_worker_diagnostics(self) -> dict[str, Any] | None:
+        if self._worker_supervisor is None:
+            return None
+        return self._worker_supervisor.serialize_diagnostics()

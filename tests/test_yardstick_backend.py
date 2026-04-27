@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing as mp
+import time
 
 import pytest
 
@@ -28,6 +30,13 @@ from custom_components.proflame2.rf.yardstick import (
     YardStickBackend,
     _should_suppress_verbose_failure,
     normalize_yardstick_backend_error,
+)
+from custom_components.proflame2.rf.yardstick_worker import (
+    COMMAND_OPEN,
+    COMMAND_PING,
+    COMMAND_RECEIVE,
+    COMMAND_SEND,
+    YardStickWorkerSupervisor,
 )
 
 
@@ -111,6 +120,60 @@ class _FakeLogger:
         return True
 
 
+class _FakeWorkerSupervisor:
+    def __init__(self, responses: dict[str, dict] | None = None, *, error: Exception | None = None) -> None:
+        self.responses = responses or {}
+        self.error = error
+        self.requests: list[tuple[str, dict, float]] = []
+        self.stopped = False
+
+    def request(self, command: str, payload: dict | None = None, *, timeout: float):
+        self.requests.append((command, payload or {}, timeout))
+        if self.error is not None:
+            raise self.error
+        if command == COMMAND_RECEIVE and command not in self.responses:
+            return {
+                "request_id": len(self.requests),
+                "kind": "NO_PACKET",
+                "success": True,
+                "timing_ms": 1.0,
+                "worker_pid": 1234,
+                "worker_generation": 1,
+                "status": {"backend_available": True},
+                "payload": {},
+            }
+        return self.responses.get(
+            command,
+            {
+                "request_id": len(self.requests),
+                "kind": "OK",
+                "success": True,
+                "timing_ms": 1.0,
+                "worker_pid": 1234,
+                "worker_generation": 1,
+                "status": {"backend_available": True},
+                "payload": {},
+            },
+        )
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def serialize_diagnostics(self) -> dict:
+        return {
+            "backend_available": True,
+            "worker_alive": True,
+            "worker_pid": 1234,
+            "worker_generation": 1,
+            "last_restart_reason": None,
+            "last_error": None,
+            "last_success_time": None,
+            "consecutive_failures": 0,
+            "last_operation": self.requests[-1][0] if self.requests else None,
+            "last_operation_duration_ms": 1.0,
+        }
+
+
 def test_connect_uses_executor_for_radio_open_and_configuration(monkeypatch) -> None:
     """RfCat construction and radio setup should stay off the HA event loop."""
 
@@ -131,6 +194,7 @@ def test_connect_uses_executor_for_radio_open_and_configuration(monkeypatch) -> 
         backend = YardStickBackend(
             device_index=3,
             executor_job=fake_executor_job,
+            worker_mode=False,
         )
         await backend.connect()
 
@@ -140,6 +204,62 @@ def test_connect_uses_executor_for_radio_open_and_configuration(monkeypatch) -> 
         assert fake_radio.calls
 
     asyncio.run(_run())
+
+
+def test_worker_supervisor_mock_mode_start_send_ping_stop() -> None:
+    """The production supervisor should work through a spawned mock worker."""
+
+    supervisor = YardStickWorkerSupervisor(
+        device_index=0,
+        cooldown_seconds=0.01,
+        mock_mode=True,
+        mp_context=mp.get_context("spawn"),
+    )
+    try:
+        open_response = supervisor.request(COMMAND_OPEN, timeout=5.0)
+        assert open_response["success"] is True
+        ping_response = supervisor.request(COMMAND_PING, timeout=5.0)
+        assert ping_response["kind"] == "STATUS"
+        send_response = supervisor.request(
+            COMMAND_SEND,
+            {
+                "air_payload_hex": "e5a9a9b96aa96e55596b95559ae55695b9a9a5aea6a9580000",
+                "tx_frequency_hz": PROFLAME2_FREQUENCY_HZ,
+                "software_transmissions": 5,
+                "inter_frame_gap_ms": 0.0,
+            },
+            timeout=5.0,
+        )
+        assert send_response["success"] is True
+        assert send_response["payload"]["burst"]["software_transmissions"] == 5
+        diagnostics = supervisor.serialize_diagnostics()
+        assert diagnostics["backend_available"] is True
+        assert diagnostics["worker_alive"] is True
+        assert diagnostics["worker_generation"] >= 1
+    finally:
+        supervisor.stop()
+
+
+def test_worker_supervisor_honors_cooldown_after_timeout() -> None:
+    """A timed out worker request should terminate the worker and activate cooldown."""
+
+    supervisor = YardStickWorkerSupervisor(
+        device_index=0,
+        cooldown_seconds=0.5,
+        mock_mode=True,
+        mp_context=mp.get_context("spawn"),
+    )
+    try:
+        with pytest.raises(RuntimeError):
+            supervisor.request(COMMAND_OPEN, timeout=0.0001)
+        diagnostics = supervisor.serialize_diagnostics()
+        assert diagnostics["backend_available"] is False
+        assert diagnostics["consecutive_failures"] >= 1
+        assert diagnostics["last_restart_reason"] == "timeout:OPEN"
+        with pytest.raises(RuntimeError, match="retry after cooldown"):
+            supervisor.request(COMMAND_OPEN, timeout=1.0)
+    finally:
+        supervisor.stop()
 
 
 def test_yardstick_defaults_match_smartfire_reference_frequency() -> None:
@@ -305,6 +425,121 @@ def test_receive_status_reports_decoded_packet() -> None:
         assert backend.last_receive_status.outcome == "decoded_packet"
         assert backend.last_receive_status.candidate_count is not None
         assert backend.last_receive_status.candidate_count >= 1
+
+    asyncio.run(_run())
+
+
+def test_worker_backed_send_uses_supervisor_and_never_calls_rflib(remote_profile, monkeypatch) -> None:
+    """Production worker mode should delegate send through the worker supervisor."""
+
+    async def _run() -> None:
+        fake_supervisor = _FakeWorkerSupervisor(
+            responses={
+                COMMAND_OPEN: {
+                    "request_id": 1,
+                    "kind": "OK",
+                    "success": True,
+                    "timing_ms": 2.0,
+                    "worker_pid": 2001,
+                    "worker_generation": 3,
+                    "status": {"backend_available": True},
+                    "payload": {},
+                },
+                COMMAND_SEND: {
+                    "request_id": 2,
+                    "kind": "OK",
+                    "success": True,
+                    "timing_ms": 5.0,
+                    "worker_pid": 2001,
+                    "worker_generation": 3,
+                    "status": {"backend_available": True},
+                    "payload": {
+                        "tx_settings": {
+                            "frequency_hz": PROFLAME2_FREQUENCY_HZ,
+                            "modulation_mode": 0x30,
+                            "data_rate": PROFLAME2_DATA_RATE,
+                        },
+                        "burst": {"software_transmissions": 5},
+                    },
+                },
+            }
+        )
+
+        def explode_open_radio(_device_index: int):
+            raise AssertionError("HA-side _open_radio should not run in worker mode")
+
+        monkeypatch.setattr(yardstick, "_open_radio", explode_open_radio)
+
+        backend = YardStickBackend(worker_supervisor=fake_supervisor)
+        state = FireplaceState(power=True, flame=1, fan=0, light=0)
+        packet = encode_packet(state, remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        result = await backend.send(packet)
+
+        assert result.backend_name == "yardstick"
+        assert [command for command, _payload, _timeout in fake_supervisor.requests] == [
+            COMMAND_OPEN,
+            COMMAND_SEND,
+        ]
+        assert fake_supervisor.requests[-1][1]["air_payload_hex"] == packet.transmission_plan.air_payload.hex()
+
+    asyncio.run(_run())
+
+
+def test_worker_backed_receive_decodes_payload(remote_profile) -> None:
+    """Worker-mode receive should decode a raw payload returned from IPC."""
+
+    async def _run() -> None:
+        fake_supervisor = _FakeWorkerSupervisor(
+            responses={
+                COMMAND_OPEN: {
+                    "request_id": 1,
+                    "kind": "OK",
+                    "success": True,
+                    "timing_ms": 2.0,
+                    "worker_pid": 2001,
+                    "worker_generation": 3,
+                    "status": {"backend_available": True},
+                    "payload": {},
+                },
+                COMMAND_RECEIVE: {
+                    "request_id": 2,
+                    "kind": "OK",
+                    "success": True,
+                    "timing_ms": 5.0,
+                    "worker_pid": 2001,
+                    "worker_generation": 3,
+                    "status": {"backend_available": True},
+                    "payload": {
+                        "raw_payload_hex": "e5a9a9b96aa96e55596b95559ae55695b9a9a5aea6a9580000",
+                    },
+                },
+            }
+        )
+        backend = YardStickBackend(
+            worker_supervisor=fake_supervisor,
+            sweep_enabled=False,
+        )
+
+        packet = await backend.receive(timeout=1.0)
+
+        assert packet is not None
+        assert packet.remote_id == remote_profile.serial_id
+        assert backend.last_receive_status is not None
+        assert backend.last_receive_status.outcome == "decoded_packet"
+
+    asyncio.run(_run())
+
+
+def test_worker_backed_close_stops_supervisor() -> None:
+    """Backend close should stop the worker supervisor in worker mode."""
+
+    async def _run() -> None:
+        fake_supervisor = _FakeWorkerSupervisor()
+        backend = YardStickBackend(worker_supervisor=fake_supervisor)
+        await backend.close()
+        assert fake_supervisor.stopped is True
 
     asyncio.run(_run())
 
@@ -513,7 +748,7 @@ def test_send_times_out_when_connect_hangs(remote_profile) -> None:
         packet = encode_packet(FireplaceState(power=True, flame=1), remote_profile, source="test")
         packet.transmission_plan = build_transmission_plan(packet.frame)
 
-        with pytest.raises(RuntimeError, match="Timed out while rflib_open_radio."):
+        with pytest.raises(RuntimeError, match="Yard Stick worker timed out during OPEN."):
             await backend.send(packet)
 
     asyncio.run(_run())

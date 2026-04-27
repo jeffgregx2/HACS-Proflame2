@@ -496,6 +496,11 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "last_applied_profile_id": runtime_entry.last_applied_profile_id,
         "last_applied_profile_name": runtime_entry.last_applied_profile_name,
         "saved_profiles": runtime_entry.saved_profiles,
+        "backend_diagnostics": (
+            runtime_entry.backend.serialize_worker_diagnostics()
+            if isinstance(runtime_entry.backend, YardStickBackend)
+            else None
+        ),
     }
 
 

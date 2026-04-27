@@ -127,8 +127,9 @@ Developer note:
 
 * Yard Stick TX packets are decodable by `rtl_433`.
 * Fireplace acceptance still requires physical RF validation against the real receiver.
-* `rflib` / Yard Stick lifecycle instability is still under investigation.
-* The Yard Stick / `rflib` stack may occasionally go offline and require a Home Assistant restart, container restart, or USB reattach to recover.
+* The production Yard Stick backend now uses a dedicated worker process so `rflib` and libusb do not run inside the main Home Assistant process.
+* Worker restart provides a recovery boundary for many `rflib` / libusb hangs, crashes, and timeouts without restarting Home Assistant.
+* The Yard Stick / `rflib` stack may still fail if the VM or USB stack wedges below the process boundary, but worker restart is now the first-line recovery model before resorting to a Home Assistant restart, container restart, or USB reattach.
 * For bench TX work, prefer the long-lived `scripts/yardstick_tx_console.py` tool over repeated one-shot invocations.
 * The stock remote sends a command burst as multiple repeated identical frames. The fireplace appears to require multiple matching frames before accepting the command, so the Yard Stick backend uses explicit software repetition: five separate `RFxmit(payload)` calls mirroring the observed remote burst.
 
@@ -214,6 +215,7 @@ sequence:
 * diagnostic entities hidden by default
 * packet debug logging plus split decode-failure logs
 * fake RF backend for deterministic testing
+* production Yard Stick worker-process isolation for `rflib` / libusb operations
 * real Yard Stick One RX for guided learning and post-TX confirmation
 * real Yard Stick One TX using explicit five-frame software burst transmission
 
@@ -222,7 +224,7 @@ sequence:
 * protocol-faithful hardware timing validation
 * production backend setup and long-run operational validation
 * expanded diagnostics polish
-* long-session Yard Stick / `rflib` lifecycle hardening
+* long-session Yard Stick worker / USB recovery hardening
 * HACS release hardening
 
 **Future work:**
@@ -290,11 +292,12 @@ Current code-level status is stronger than the packaging/release status:
 * guided learning works
 * Yard Stick RX works
 * Yard Stick TX works using the explicit five-frame software burst path
+* Yard Stick production runtime now isolates `rflib` in a dedicated worker process
 * debounced Home Assistant controls exist and send through the same atomic state pipeline as `proflame2.set_state`
 * per-fireplace profile button entities exist
 * active listening and passive observed-state synchronization exist in the codebase, but should not yet be treated as production-ready features
 * ESPHome-based CC1101 support remains future work
-* Yard Stick lifecycle stability is still being improved
+* Yard Stick lifecycle stability is improved by worker restart, but VM/USB-level failure cases are still being improved
 
 ## Developer Note
 
