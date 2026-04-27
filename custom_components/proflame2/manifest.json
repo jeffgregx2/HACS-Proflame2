@@ -6,7 +6,6 @@
   ],
   "config_flow": true,
   "documentation": "https://github.com/jeffgregx2/HACS-Proflame2",
-  "homeassistant": "2025.1.0",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/jeffgregx2/HACS-Proflame2/issues",
   "loggers": [
