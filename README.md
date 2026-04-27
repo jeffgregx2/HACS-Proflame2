@@ -6,7 +6,7 @@ This project provides a Home Assistant integration for fireplaces using the Prof
 
 Instead of relying on repeated +/- button presses, this integration is designed around explicit full-state control: power, flame height, fan speed, light level, front burner, aux output, and CPI where supported.
 
-The integration supports two complementary control models: saved Profiles and direct Service Layer control. Saved profiles are typically applied through the proflame2.apply_profile service for simple one-click operation, while proflame2.set_state provides direct atomic control when finer precision is needed.
+The integration supports three complementary control models: saved Profiles, direct Service Layer control, and debounced Home Assistant UI controls. Saved profiles can be applied through the `proflame2.apply_profile` service or through per-fireplace profile button entities for simple one-click operation, while `proflame2.set_state` provides direct atomic control when finer precision is needed.
 
 Profiles are intended for one-click activation of complete desired fireplace states such as Minimum Flame, Evening Relax, or Warmup. They make common day-to-day use simple and predictable.
 
@@ -139,7 +139,7 @@ Until CC1101 support is implemented and validated, it should be treated as futur
 
 The integration supports both profile-based control and direct service-layer control.
 
-Users can create saved profiles inside the integration options flow and apply them using proflame2.apply_profile for simple one-click activation of common fireplace states.
+Users can create saved profiles inside the integration options flow and apply them using `proflame2.apply_profile` or the generated per-fireplace profile button entities for simple one-click activation of common fireplace states.
 
 Direct proflame2.set_state remains available for advanced users, scripts, and custom automations when finer control is desired. Both approaches are valid. Profiles optimize convenience and reuse, while direct service calls optimize precision and flexibility.
 
@@ -176,27 +176,32 @@ sequence:
 * command byte encoding and decoding
 * ECC calculation and stable C/D derivation validated against real captures
 * SmartFire-compatible logical frame generation
-* SmartFire-compatible waveform generation boundary
+* SmartFire-compatible waveform generation
 * unified ProflamePacket model for TX/RX/runtime
 * backend-independent remote learning orchestration
-* Home Assistant config flow with manual entry and learn-from-remote workflow
+* Home Assistant config flow with manual entry and guided learn-from-remote workflow
 * persistent fireplace profile storage (remote ID + C/D)
 * per-fireplace saved profile management through options flow
-* proflame2.apply_profile as the primary user-facing control service
+* per-fireplace profile activation button entities
+* `proflame2.apply_profile` as a primary user-facing control path
 * proflame2.set_state for advanced/direct control
 * single primary read-only fireplace entity that doubles as the compact Lovelace-facing summary
 * debounced Home Assistant control entities for power, flame, and enabled optional features
+* post-TX confirmation listening with requested vs observed state confidence tracking
+* restored-state bootstrapping so fireplaces come back with the last known state after restart
 * separate last issue sensor for alerting and automation
 * diagnostic entities hidden by default
+* packet debug logging plus split decode-failure logs
 * fake RF backend for deterministic testing
+* real Yard Stick One RX for guided learning and post-TX confirmation
+* real Yard Stick One TX using explicit five-frame software burst transmission
 
 **Still in progress:**
 
-* real YARD Stick One TX validation
-* real YARD Stick One RX/learning validation
 * protocol-faithful hardware timing validation
 * production backend setup and operational validation
 * expanded diagnostics polish
+* long-session Yard Stick / `rflib` lifecycle hardening
 * HACS release hardening
 
 **Future work:**
@@ -244,9 +249,11 @@ This project builds on that idea with a different product goal: a production-qua
 
 ## Diagnostic Visibility
 
-The default entity surface is intentionally simple. Users see one primary fireplace entity whose state is a compact human-readable fireplace summary suitable for Lovelace display. Its attributes expose operational status, state confidence, pending desired state, selected human-readable fireplace fields such as power, flame level, optional enabled features, active profile, last issue, and last update source. A separate last-issue sensor remains available for alerting and automation.
+The default entity surface is intentionally simple. Users see one primary fireplace entity whose state is a compact human-readable fireplace summary suitable for Lovelace display. Its attributes expose operational status, state confidence, pending desired state, selected human-readable fireplace fields such as power, flame level, optional enabled features, active profile, last issue, and last update source. A separate last-issue sensor remains available for alerting and automation, and saved per-fireplace profiles also appear as one-click button entities.
 
 Supported Home Assistant control entities are also created for the enabled features of each fireplace. Those controls do not transmit immediately. They stage a desired state, debounce for a short window, and then send one full-state Proflame2 command through the same internal execution path used by `proflame2.set_state`.
+
+Profile buttons do not debounce. Pressing a profile button applies that fireplace's saved full-state profile immediately through the same internal execution path used by `proflame2.apply_profile`.
 
 Protocol internals remain available as diagnostic sensors, but those entities stay disabled by default so the normal UI is not cluttered with command bytes, ECC details, waveform summaries, or backend internals.
 
