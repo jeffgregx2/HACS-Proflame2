@@ -1,0 +1,686 @@
+"""Unit tests for the Yard Stick backend async/executor integration."""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+pytestmark = pytest.mark.protocol
+
+from custom_components.proflame2.protocol.encoder import encode_packet
+from custom_components.proflame2.protocol.models import FireplaceState
+from custom_components.proflame2.rf import yardstick
+from custom_components.proflame2.rf.capture import diagnose_air_payload
+from custom_components.proflame2.rf.waveform import build_transmission_plan
+from custom_components.proflame2.rf.yardstick import (
+    DEFAULT_RX_SCAN_OFFSETS_HZ,
+    DIAGNOSTIC_PACKET_BYTES,
+    PROFLAME2_FREQUENCY_HZ,
+    PROFLAME2_DATA_RATE,
+    REASON_DEVICE_NOT_FOUND,
+    REASON_LIBUSB_UNAVAILABLE,
+    REASON_PERMISSION_DENIED,
+    REASON_RFLIB_MISSING,
+    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+    YARDSTICK_RX_LEARNING_PACKET_BYTES,
+    YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+    YardStickBackend,
+    _should_suppress_verbose_failure,
+    normalize_yardstick_backend_error,
+)
+
+
+class _FakeRadio:
+    """Minimal radio stub for backend executor tests."""
+
+    def __init__(self) -> None:
+        self.MOD_ASK_OOK = 0x30
+        self.calls: list[tuple[str, int | bool | None]] = []
+
+    def setModeIDLE(self) -> None:
+        self.calls.append(("setModeIDLE", None))
+
+    def setFreq(self, value: int) -> None:
+        self.calls.append(("setFreq", value))
+
+    def setMdmModulation(self, value: int) -> None:
+        self.calls.append(("setMdmModulation", value))
+
+    def setMdmDRate(self, value: int) -> None:
+        self.calls.append(("setMdmDRate", value))
+
+    def makePktFLEN(self, value: int) -> None:
+        self.calls.append(("makePktFLEN", value))
+
+    def setPktPQT(self, value: int) -> None:
+        self.calls.append(("setPktPQT", value))
+
+    def setMdmSyncMode(self, value: int) -> None:
+        self.calls.append(("setMdmSyncMode", value))
+
+    def setEnableMdmManchester(self, value: bool) -> None:
+        self.calls.append(("setEnableMdmManchester", value))
+
+    def setMaxPower(self) -> None:
+        self.calls.append(("setMaxPower", None))
+
+    def setModeRX(self) -> None:
+        self.calls.append(("setModeRX", None))
+
+    def RFxmit(self, payload: bytes, repeat: int = 0) -> None:
+        self.calls.append(("RFxmit", repeat))
+        self.last_payload = payload
+        self.last_repeat = repeat
+
+
+class _FakeRadioRfXmitFailure(_FakeRadio):
+    """Radio stub whose RFxmit fails after being invoked."""
+
+    def RFxmit(self, payload: bytes, repeat: int = 0) -> None:
+        super().RFxmit(payload, repeat=repeat)
+        raise RuntimeError("rfxmit boom")
+
+
+class _FakeRadioPostTxIdleFailure(_FakeRadio):
+    """Radio stub whose post-TX idle cleanup fails on the second idle call."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._idle_calls = 0
+
+    def setModeIDLE(self) -> None:
+        self._idle_calls += 1
+        self.calls.append(("setModeIDLE", None))
+        if self._idle_calls >= 2:
+            raise RuntimeError("idle cleanup boom")
+
+
+class _FakeLogger:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+        self.handlers = [object()]
+
+    def info(self, message: str, *args) -> None:
+        self.messages.append(message % args if args else message)
+
+    def exception(self, message: str, *args) -> None:
+        self.messages.append(message % args if args else message)
+
+    def isEnabledFor(self, _level: int) -> bool:
+        return True
+
+
+def test_connect_uses_executor_for_radio_open_and_configuration(monkeypatch) -> None:
+    """RfCat construction and radio setup should stay off the HA event loop."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+        executor_calls: list[tuple[object, tuple[object, ...]]] = []
+
+        def fake_open_radio(device_index: int):
+            assert device_index == 3
+            return fake_radio, TimeoutError, 0x30
+
+        async def fake_executor_job(func, *args):
+            executor_calls.append((func, args))
+            return func(*args)
+
+        monkeypatch.setattr(yardstick, "_open_radio", fake_open_radio)
+
+        backend = YardStickBackend(
+            device_index=3,
+            executor_job=fake_executor_job,
+        )
+        await backend.connect()
+
+        assert executor_calls[0][0] is fake_open_radio
+        assert executor_calls[0][1] == (3,)
+        assert getattr(executor_calls[1][0], "__name__", "") == "_configure_radio"
+        assert fake_radio.calls
+
+    asyncio.run(_run())
+
+
+def test_yardstick_defaults_match_smartfire_reference_frequency() -> None:
+    """The default Proflame2 Yard Stick frequency should match SmartFire."""
+
+    assert PROFLAME2_FREQUENCY_HZ == 314_973_000
+
+
+def test_yardstick_learning_profile_constants_match_hardware_results() -> None:
+    """The Yard Stick learning profile should track the proven RX settings."""
+
+    assert YARDSTICK_RX_LEARNING_FREQUENCY_HZ == 315_000_000
+    assert YARDSTICK_RX_LEARNING_PACKET_BYTES == 255
+    assert YARDSTICK_RX_LEARNING_SWEEP_ENABLED is False
+    assert YARDSTICK_RX_LEARNING_FREQUENCY_HZ != PROFLAME2_FREQUENCY_HZ
+
+
+def test_default_frequency_scan_includes_smartfire_and_rtl433_centers() -> None:
+    """The default scan window should include both known relevant frequencies."""
+
+    backend = YardStickBackend()
+
+    assert backend._frequency_scan_hz == tuple(
+        PROFLAME2_FREQUENCY_HZ + offset_hz for offset_hz in DEFAULT_RX_SCAN_OFFSETS_HZ
+    )
+    assert PROFLAME2_FREQUENCY_HZ in backend._frequency_scan_hz
+    assert 315_000_000 in backend._frequency_scan_hz
+
+
+def test_receive_timeout_advances_to_next_frequency() -> None:
+    """A timeout should move the Yard Stick backend to the next scan frequency."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            frequency_scan_hz=(314_973_000, 315_000_000),
+        )
+        backend._timeout_exception = TimeoutError
+
+        def fake_recv_once(timeout):
+            return None
+
+        backend._recv_once = fake_recv_once  # type: ignore[method-assign]
+
+        sample = await backend.receive_sample(timeout=0.5)
+
+        assert sample is None
+        assert backend._active_frequency_hz == 315_000_000
+        assert ("setFreq", 315_000_000) in fake_radio.calls
+
+    asyncio.run(_run())
+
+
+def test_fixed_frequency_mode_does_not_retune_after_decode_failure() -> None:
+    """Diagnostic fixed-frequency mode should not retune after a failed decode."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            frequency_scan_hz=(314_973_000, 315_000_000),
+            sweep_enabled=False,
+        )
+        backend._timeout_exception = TimeoutError
+
+        backend._recv_once = lambda timeout: bytes.fromhex(  # type: ignore[method-assign]
+            "fffffff47bfffffffffffefffffd6bffffffffffffbffffff7"
+        )
+
+        sample = await backend.receive_sample(timeout=0.5)
+
+        assert sample is None
+        assert backend._active_frequency_hz == 314_973_000
+        assert ("setFreq", 315_000_000) not in fake_radio.calls
+        assert backend.last_receive_status is not None
+        assert backend.last_receive_status.outcome == "payload_no_candidates"
+
+    asyncio.run(_run())
+
+
+def test_diagnostic_packet_length_is_applied_in_probe_mode() -> None:
+    """Probe mode should still apply the configured receive payload length."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            probe_mode=True,
+            packet_length_bytes=DIAGNOSTIC_PACKET_BYTES,
+        )
+        await backend.connect()
+
+        assert ("makePktFLEN", DIAGNOSTIC_PACKET_BYTES) in fake_radio.calls
+
+    asyncio.run(_run())
+
+
+def test_receive_status_reports_no_payload() -> None:
+    """A timeout should leave a structured no-payload status behind."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+        backend._timeout_exception = TimeoutError
+        backend._recv_once = lambda timeout: None  # type: ignore[method-assign]
+
+        sample = await backend.receive_sample(timeout=1.0)
+
+        assert sample is None
+        assert backend.last_receive_status is not None
+        assert backend.last_receive_status.outcome == "no_payload"
+
+    asyncio.run(_run())
+
+
+def test_receive_status_reports_decoded_packet() -> None:
+    """A successful decode should publish compact receive status metadata."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+        backend._timeout_exception = TimeoutError
+        backend._recv_once = lambda timeout: bytes.fromhex(  # type: ignore[method-assign]
+            "e5a9a9b96aa96e55596b95559ae55695b9a9a5aea6a9580000"
+        )
+
+        sample = await backend.receive_sample(timeout=1.0)
+
+        assert sample is not None
+        assert backend.last_receive_status is not None
+        assert backend.last_receive_status.outcome == "decoded_packet"
+        assert backend.last_receive_status.candidate_count is not None
+        assert backend.last_receive_status.candidate_count >= 1
+
+    asyncio.run(_run())
+
+
+def test_receive_status_reports_post_processing_exception(monkeypatch) -> None:
+    """Decoder/post-processing exceptions should populate structured exception details."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+        backend._timeout_exception = TimeoutError
+        backend._recv_once = lambda timeout: bytes.fromhex(  # type: ignore[method-assign]
+            "e5a9a9b96aa96e55596b95559ae55695b9a9a5aea6a9580000"
+        )
+
+        def explode(_raw_payload):
+            raise RuntimeError("decode boom")
+
+        monkeypatch.setattr(yardstick, "diagnose_air_payload", explode)
+
+        with pytest.raises(RuntimeError, match="decode boom"):
+            await backend.receive_sample(timeout=1.0)
+
+        assert backend.last_receive_status is not None
+        assert backend.last_receive_status.outcome == "exception"
+        assert backend.last_receive_status.reason == "RuntimeError"
+        assert backend.last_receive_status.exception_type == "RuntimeError"
+        assert backend.last_receive_status.exception_message == "decode boom"
+
+    asyncio.run(_run())
+
+
+def test_send_uses_transmission_plan_payload_and_software_burst(remote_profile) -> None:
+    """Yard Stick TX should default to five explicit software transmissions."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+        executor_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fake_executor_job(func, *args):
+            executor_calls.append((getattr(func, "__name__", repr(func)), args))
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+        state = FireplaceState(power=True, flame=1, fan=0, light=0)
+        packet = encode_packet(state, remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        result = await backend.send(packet)
+
+        assert result.backend_name == "yardstick"
+        assert fake_radio.last_payload == packet.transmission_plan.air_payload
+        assert fake_radio.last_repeat == 0
+        assert fake_radio.calls.count(("RFxmit", 0)) == packet.transmission_plan.repeat_count
+        assert ("setFreq", PROFLAME2_FREQUENCY_HZ) in fake_radio.calls
+        assert ("setMdmDRate", PROFLAME2_DATA_RATE) in fake_radio.calls
+        assert ("setPktPQT", 0) in fake_radio.calls
+        assert ("setMaxPower", None) in fake_radio.calls
+        assert any(name == "_configure_transmit_radio" for name, _args in executor_calls)
+        assert any(name == "_transmit_air_payload" for name, _args in executor_calls)
+        assert fake_radio.calls.count(("setModeIDLE", None)) >= 2
+        assert fake_radio.calls[-1] == ("setModeIDLE", None)
+
+    asyncio.run(_run())
+
+
+def test_send_software_gap_sleep_occurs_only_when_configured(remote_profile, monkeypatch) -> None:
+    """Inter-frame sleep should be used only for nonzero software burst gaps."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+        sleep_calls: list[float] = []
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        monkeypatch.setattr(yardstick.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+            tx_transmissions=3,
+            tx_inter_frame_gap_ms=10,
+        )
+        state = FireplaceState(power=True, flame=1, fan=0, light=0)
+        packet = encode_packet(state, remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        await backend.send(packet)
+
+        assert fake_radio.calls.count(("RFxmit", 0)) == 3
+        assert sleep_calls == [0.01, 0.01]
+
+    asyncio.run(_run())
+
+
+def test_send_calls_set_mode_idle_after_rfxmit_raises(remote_profile) -> None:
+    """Post-TX idle should still be requested after RFxmit raises."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadioRfXmitFailure()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+        state = FireplaceState(power=True, flame=1, fan=0, light=0)
+        packet = encode_packet(state, remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        with pytest.raises(RuntimeError, match="rfxmit boom"):
+            await backend.send(packet)
+
+        assert fake_radio.calls.count(("setModeIDLE", None)) >= 2
+        assert fake_radio.calls[-1] == ("setModeIDLE", None)
+
+    asyncio.run(_run())
+
+
+def test_send_success_is_not_masked_by_post_tx_idle_failure(remote_profile) -> None:
+    """A post-TX idle cleanup failure should not erase a successful RFxmit result."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadioPostTxIdleFailure()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+        state = FireplaceState(power=True, flame=1, fan=0, light=0)
+        packet = encode_packet(state, remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        result = await backend.send(packet)
+
+        assert result.backend_name == "yardstick"
+        assert fake_radio.last_payload == packet.transmission_plan.air_payload
+        assert fake_radio.last_repeat == 0
+        assert fake_radio.calls.count(("setModeIDLE", None)) >= 2
+        assert fake_radio.calls[-1] == ("setModeIDLE", None)
+
+    asyncio.run(_run())
+
+
+def test_send_honors_transmit_frequency_override(remote_profile) -> None:
+    """CLI/experimental TX should be able to override the transmit frequency."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+            tx_frequency_hz=315_000_000,
+        )
+        state = FireplaceState(power=True, flame=1, fan=0, light=0)
+        packet = encode_packet(state, remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        await backend.send(packet)
+
+        assert ("setFreq", 315_000_000) in fake_radio.calls
+
+    asyncio.run(_run())
+
+
+def test_send_times_out_when_connect_hangs(remote_profile) -> None:
+    """A stalled lazy connect should fail visibly instead of hanging forever."""
+
+    async def _run() -> None:
+        async def fake_executor_job(func, *args):
+            if getattr(func, "__name__", "") == "_open_radio":
+                await asyncio.sleep(1)
+            return func(*args)
+
+        backend = YardStickBackend(
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+            connect_timeout_seconds=0.01,
+        )
+        packet = encode_packet(FireplaceState(power=True, flame=1), remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        with pytest.raises(RuntimeError, match="Timed out while rflib_open_radio."):
+            await backend.send(packet)
+
+    asyncio.run(_run())
+
+
+def test_send_lock_contention_times_out_cleanly(remote_profile) -> None:
+    """A busy backend lock should fail instead of hanging silently."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+            operation_lock_timeout_seconds=0.01,
+        )
+        await backend._operation_lock.acquire()
+        try:
+            packet = encode_packet(
+                FireplaceState(power=True, flame=1), remote_profile, source="test"
+            )
+            packet.transmission_plan = build_transmission_plan(packet.frame)
+            with pytest.raises(
+                RuntimeError,
+                match="Timed out while waiting for Yard Stick backend lock during send.",
+            ):
+                await backend.send(packet)
+        finally:
+            backend._operation_lock.release()
+
+    asyncio.run(_run())
+
+
+def test_send_emits_breadcrumbs_through_connect_and_tx(remote_profile) -> None:
+    """Send breadcrumbs should cover connect, configure, executor submit, and success."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+        fake_logger = _FakeLogger()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+        backend._packet_logger = fake_logger
+        packet = encode_packet(FireplaceState(power=True, flame=1), remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        await backend.send(packet)
+
+        assert any("Entered YardStickBackend.send" in message for message in fake_logger.messages)
+        assert any("send: lock acquired" in message for message in fake_logger.messages)
+        assert any("send: TX configure start" in message for message in fake_logger.messages)
+        assert any("send: TX configure complete" in message for message in fake_logger.messages)
+        assert any("send: blocking TX executor submit" in message for message in fake_logger.messages)
+        assert any("Entered blocking TX executor" in message for message in fake_logger.messages)
+        assert any("TX success" in message for message in fake_logger.messages)
+        assert any("send: returning success" in message for message in fake_logger.messages)
+
+    asyncio.run(_run())
+
+
+def test_send_rejects_missing_transmission_plan(remote_profile) -> None:
+    """Real Yard Stick TX requires the already-built transmission plan."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+        packet = encode_packet(FireplaceState(power=True, flame=1), remote_profile, source="test")
+
+        with pytest.raises(RuntimeError, match="transmission_plan"):
+            await backend.send(packet)
+
+    asyncio.run(_run())
+
+
+def test_close_skips_nonexistent_radio_close_method() -> None:
+    """Yard Stick teardown should not assume rflib exposes a close method."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+        )
+
+        await backend.close()
+
+        assert ("setModeIDLE", None) in fake_radio.calls
+
+    asyncio.run(_run())
+
+
+def test_noise_like_idle_payload_suppresses_verbose_decode_output() -> None:
+    """Overwhelmingly idle/noise-like payloads should not dump giant symbol logs."""
+
+    raw_payload = bytes.fromhex(
+        "f800000000000000000000000000000000000000000000000000000000000000"
+    )
+    diagnostics = diagnose_air_payload(raw_payload)
+
+    assert diagnostics.candidates == ()
+    assert _should_suppress_verbose_failure(raw_payload, diagnostics) is True
+
+
+def test_structured_near_miss_payload_keeps_verbose_decode_output() -> None:
+    """Plausible structured payloads should keep detailed diagnostics."""
+
+    raw_payload = bytes.fromhex(
+        "f8000000000000014dcb554b72aacb5caaacd72ab4adcd4d2d"
+    )
+    diagnostics = diagnose_air_payload(raw_payload)
+
+    assert diagnostics.candidates == ()
+    assert _should_suppress_verbose_failure(raw_payload, diagnostics) is False
+
+
+@pytest.mark.parametrize(
+    ("exc", "reason", "message"),
+    [
+        (
+            ImportError("No module named rflib"),
+            REASON_RFLIB_MISSING,
+            "rflib Python package is not installed",
+        ),
+        (
+            RuntimeError("No backend available"),
+            REASON_LIBUSB_UNAVAILABLE,
+            "libusb backend could not be loaded",
+        ),
+        (
+            RuntimeError("Device not found"),
+            REASON_DEVICE_NOT_FOUND,
+            "No YARD Stick One device was found",
+        ),
+        (
+            PermissionError("Operation not permitted"),
+            REASON_PERMISSION_DENIED,
+            "access was denied",
+        ),
+    ],
+)
+def test_yardstick_error_mapping_is_user_facing(exc, reason, message) -> None:
+    """Low-level USB/import errors should map to stable UI-friendly messages."""
+
+    normalized = normalize_yardstick_backend_error(exc)
+
+    assert normalized.reason == reason
+    assert message in str(normalized)

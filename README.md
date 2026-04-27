@@ -50,7 +50,7 @@ After setup, the integration can operate independently without requiring the ori
 
 The project is not tied to a single RF device. YARD Stick One is the primary supported backend and the reference platform for validation. It provides TX/RX capability for learning remote identity, validating packets, and operating the fireplace directly.
 
-Future support is planned for lower-cost hardware, especially CC1101-based devices and ESP32 + CC1101 nodes. The architecture is intentionally backend-neutral so the Home Assistant integration does not need to care whether RF is handled by YARD Stick One, a future ESP32 node, or another supported transport.
+Future support is planned for lower-cost hardware, especially an ESPHome-based CC1101 backend. The architecture is intentionally backend-neutral so the Home Assistant integration does not need to care whether RF is handled by YARD Stick One, a future ESPHome node, or another supported transport.
 
 ### HACS-Native Setup Experience
 
@@ -84,7 +84,7 @@ SmartFire has already proven much of the protocol behavior, and this project sho
 
 Home Assistant entities normally encourage immediate per-entity changes. That does not line up cleanly with the Proflame2 protocol, because the fireplace receives complete state packets.
 
-The integration should therefore prefer atomic service-based control. A service call should compose the entire desired fireplace state and send it as one packet. This avoids unnecessary intermediate fireplace state changes and better reflects how the protocol actually works.
+The integration therefore preserves atomic packet sends even when the UI exposes individual controls. A service call or debounced UI edit composes the entire desired fireplace state and sends it as one logical Proflame2 command. This avoids unnecessary intermediate fireplace state changes and better reflects how the protocol actually works.
 
 Profiles and direct set_state calls are equally valid ways to reach that atomic model. Profiles improve reuse and day-to-day ergonomics. Direct service calls improve precision when the desired state is calculated dynamically.
 
@@ -121,9 +121,17 @@ The remote is not expected to be needed after learning, except as a fallback con
 
 YARD Stick One is the first supported RF backend. It is more expensive than the eventual low-cost target hardware, but it provides a capable TX/RX platform and is suitable for production use, development, validation, and diagnostics.
 
+Developer note:
+
+* Yard Stick TX packets are decodable by `rtl_433`.
+* Fireplace acceptance still requires physical RF validation against the real receiver.
+* `rflib` / Yard Stick lifecycle instability is still under investigation.
+* For bench TX work, prefer the long-lived `scripts/yardstick_tx_console.py` tool over repeated one-shot invocations.
+* The stock remote sends a command burst as multiple repeated identical frames. The fireplace appears to require multiple matching frames before accepting the command, so the Yard Stick backend uses explicit software repetition: five separate `RFxmit(payload)` calls mirroring the observed remote burst.
+
 **Future Hardware Targets**
 
-Lower-cost support is planned for CC1101-based devices, specifically an ESPHome/ESP32 + CC1101 designs. This is likely the best long-term deployment model for many users because it avoids direct USB attachment to the Home Assistant host and allows a small dedicated RF node to live near the fireplace.
+Lower-cost support is planned for an ESPHome-based CC1101 backend. This is likely the best long-term deployment model for many users because it avoids direct USB attachment to the Home Assistant host and allows a small dedicated RF node to live near the fireplace.
 
 Until CC1101 support is implemented and validated, it should be treated as future support rather than a current capability.
 
@@ -177,6 +185,7 @@ sequence:
 * proflame2.apply_profile as the primary user-facing control service
 * proflame2.set_state for advanced/direct control
 * single primary read-only fireplace entity that doubles as the compact Lovelace-facing summary
+* debounced Home Assistant control entities for power, flame, and enabled optional features
 * separate last issue sensor for alerting and automation
 * diagnostic entities hidden by default
 * fake RF backend for deterministic testing
@@ -235,11 +244,36 @@ This project builds on that idea with a different product goal: a production-qua
 
 ## Diagnostic Visibility
 
-The default entity surface is intentionally simple. Users see one primary fireplace entity whose state is a compact human-readable fireplace summary suitable for Lovelace display. Its attributes expose operational status, selected human-readable fireplace fields such as power, flame level, optional enabled features, active profile, last issue, and last update source. A separate last-issue sensor remains available for alerting and automation.
+The default entity surface is intentionally simple. Users see one primary fireplace entity whose state is a compact human-readable fireplace summary suitable for Lovelace display. Its attributes expose operational status, state confidence, pending desired state, selected human-readable fireplace fields such as power, flame level, optional enabled features, active profile, last issue, and last update source. A separate last-issue sensor remains available for alerting and automation.
+
+Supported Home Assistant control entities are also created for the enabled features of each fireplace. Those controls do not transmit immediately. They stage a desired state, debounce for a short window, and then send one full-state Proflame2 command through the same internal execution path used by `proflame2.set_state`.
 
 Protocol internals remain available as diagnostic sensors, but those entities stay disabled by default so the normal UI is not cluttered with command bytes, ECC details, waveform summaries, or backend internals.
 
 Protocol internals such as raw packet data, Cmd1/Cmd2, Err1/Err2, C/D values, waveform summaries, and backend details exist as Home Assistant diagnostic entities but are disabled by default.
+
+## Developer Note
+
+To separate RF acquisition problems from Proflame2 decode and guided learning problems, use:
+
+```bash
+python scripts/yardstick_probe.py
+```
+
+This standalone probe listens for raw RF payloads using the same YARD Stick One `rflib` path as the integration, but does not attempt Proflame2 decode. It is intended to answer the first debugging question quickly: can the YARD Stick hear anything at all?
+
+For longer fixed-frequency diagnostic capture, for example:
+
+```bash
+python scripts/yardstick_probe.py --fixed-frequency 314973000 --payload-length 255 --no-sweep --verbose
+```
+
+When packet debug logging is enabled from the integration UI, verbose RF logs are split into two files:
+
+- `/config/proflame2_debug.log`
+  Plausible receive flow, radio configuration, and successfully decoded packets.
+- `/config/proflame2_decode_failures.log`
+  Undecodable raw payloads and detailed decode-failure diagnostics.
 
 ## License
 

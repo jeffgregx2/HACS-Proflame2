@@ -59,6 +59,39 @@ def test_packet_can_hold_transmission_plan_without_import_cycles(remote_profile)
     assert packet.transmission_plan.frame == packet.frame
 
 
+def test_packet_from_frame_accepts_observed_power_off_flame_bits() -> None:
+    """Receive-side packet decode should preserve observed off-frame flame bits."""
+
+    frame = ProflameFrame(
+        serial_id=0x3B3F02,
+        cmd1=0x00,
+        err1=0x00,
+        cmd2=0x06,
+        err2=0x00,
+    )
+
+    packet = ProflamePacket.from_frame(frame, source="yardstick")
+
+    assert packet.state == FireplaceState(power=False, flame=6, fan=0, light=0)
+    assert packet.warnings == ()
+
+
+def test_packet_from_frame_accepts_observed_power_off_flame_one() -> None:
+    """Observed off-frame packets may carry low nonzero flame bits."""
+
+    frame = ProflameFrame(
+        serial_id=0x3B3F02,
+        cmd1=0x00,
+        err1=0x57,
+        cmd2=0x01,
+        err2=0x39,
+    )
+
+    packet = ProflamePacket.from_frame(frame, source="yardstick")
+
+    assert packet.state == FireplaceState(power=False, flame=1, fan=0, light=0)
+
+
 def test_ecc_derivation_can_use_packet_frame_values(rtl433_samples, remote_profile) -> None:
     """Learning code should be able to consume packet.frame values directly."""
 

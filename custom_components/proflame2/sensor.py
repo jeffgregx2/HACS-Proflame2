@@ -19,6 +19,7 @@ from .runtime import (
     Proflame2RuntimeEntry,
     async_get_runtime_entries,
     async_runtime_signal,
+    runtime_current_state,
 )
 
 
@@ -235,6 +236,12 @@ class Proflame2PrimaryFireplaceSensor(_Proflame2BaseSensor):
 
         return _primary_attributes(self._runtime_entry)
 
+    @property
+    def icon(self) -> str:
+        """Return a state-aware fireplace icon."""
+
+        return _primary_icon(self._runtime_entry)
+
 
 class Proflame2RuntimeSensor(_Proflame2BaseSensor):
     """Secondary or diagnostic sensor backed by runtime-derived values."""
@@ -265,59 +272,36 @@ class Proflame2RuntimeSensor(_Proflame2BaseSensor):
 def _status_value(runtime: Proflame2RuntimeEntry) -> str:
     if runtime.learning_in_progress:
         return "learning"
-    if runtime.sending_in_progress:
-        return "sending"
     if not _backend_available(runtime):
         return "unavailable"
-    if runtime.last_error:
-        return "last_command_failed"
-    if runtime.last_send_result:
-        return "last_command_succeeded"
-    return "ready"
+    return runtime.operational_status
 
 
 def _summary_value(runtime: Proflame2RuntimeEntry) -> str:
-    if runtime.learning_in_progress:
-        return "Learning"
-    if runtime.sending_in_progress:
-        return "Sending"
-
-    issue = _last_issue_summary(runtime)
-    if issue != "No recent errors.":
-        return f"Error · {_strip_terminal_punctuation(issue)}"
-
-    packet = runtime.last_packet
-    if packet is None:
+    state = runtime_current_state(runtime)
+    if state is None:
+        issue = _last_issue_summary(runtime)
+        if issue != "No recent errors.":
+            return f"Error · {_strip_terminal_punctuation(issue)}"
         return "Unknown"
-
-    state = packet.state
-    if not state.power:
-        return "Off"
-
-    parts = ["On", f"Flame {state.flame}"]
-    if runtime.features.fan and state.fan > 0:
-        parts.append(f"Fan {state.fan}")
-    if runtime.features.light and state.light > 0:
-        parts.append(f"Light {state.light}")
-    if runtime.features.front and state.front:
-        parts.append("Front On")
-    if runtime.features.aux and state.aux:
-        parts.append("Aux On")
-    if runtime.features.cpi and state.cpi:
-        parts.append("CPI On")
-    if runtime.last_applied_profile_name:
-        parts.append(runtime.last_applied_profile_name)
-    return " · ".join(parts)
+    return _summary_for_state(runtime, state)
 
 
 def _primary_attributes(runtime: Proflame2RuntimeEntry) -> dict[str, str]:
     attributes: dict[str, str] = {
         "operational_status": _status_value(runtime),
+        "state_confidence": runtime.state_confidence,
+        "pending_state": (
+            _summary_for_state(runtime, runtime.desired_state)
+            if runtime.desired_state is not None
+            else None
+        ),
         "last_issue": _none_if_clear(_last_issue_summary(runtime)),
     }
 
+    state = runtime_current_state(runtime)
     packet = runtime.last_packet
-    if packet is None:
+    if state is None or packet is None:
         attributes["power"] = "Unknown"
         attributes["flame"] = "Unavailable"
         if runtime.features.fan:
@@ -333,9 +317,8 @@ def _primary_attributes(runtime: Proflame2RuntimeEntry) -> dict[str, str]:
         attributes["last_update_source"] = "Unknown"
         return attributes
 
-    state = packet.state
     attributes["power"] = "On" if state.power else "Off"
-    attributes["flame"] = "Off" if not state.power else f"Level {state.flame}"
+    attributes["flame"] = "Off" if not state.power and state.flame == 0 else f"Level {state.flame}"
 
     if runtime.features.fan:
         attributes["fan"] = f"Level {state.fan}"
@@ -355,6 +338,35 @@ def _primary_attributes(runtime: Proflame2RuntimeEntry) -> dict[str, str]:
     return attributes
 
 
+def _primary_icon(runtime: Proflame2RuntimeEntry) -> str:
+    state = runtime_current_state(runtime)
+    if state is not None and state.power:
+        return "mdi:fireplace"
+    return "mdi:fireplace-off"
+
+
+def _summary_for_state(runtime: Proflame2RuntimeEntry, state) -> str:
+    """Return the compact Lovelace-facing summary for one semantic state."""
+
+    if not state.power:
+        return "Off"
+
+    parts = ["On", f"Flame {state.flame}"]
+    if runtime.features.fan and state.fan > 0:
+        parts.append(f"Fan {state.fan}")
+    if runtime.features.light and state.light > 0:
+        parts.append(f"Light {state.light}")
+    if runtime.features.front and state.front:
+        parts.append("Front On")
+    if runtime.features.aux and state.aux:
+        parts.append("Aux On")
+    if runtime.features.cpi and state.cpi:
+        parts.append("CPI On")
+    if runtime.last_applied_profile_name and runtime.active_profile_state == state:
+        parts.append(runtime.last_applied_profile_name)
+    return " · ".join(parts)
+
+
 def _none_if_clear(value: str) -> str:
     return "None" if value == "No recent errors." else value
 
@@ -364,12 +376,18 @@ def _humanize_update_source(source: str | None) -> str:
         return "Profile"
     if source == "homeassistant_service":
         return "Direct Control"
+    if source == "debounced_control":
+        return "Debounced Control"
     if source == "fake_learn":
         return "Learned Packet"
     if source == "fake_default":
         return "Simulated Packet"
     if source == "fake":
         return "Simulated Packet"
+    if source == "restored_state":
+        return "Restored State"
+    if source == "observed_packet":
+        return "Observed Packet"
     if source is None:
         return "Unknown"
     return source.replace("_", " ").title()

@@ -8,6 +8,7 @@ from a Yard Stick One, a fake test backend, or a future networked RF node.
 from __future__ import annotations
 
 import inspect
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Awaitable, Callable
@@ -19,26 +20,42 @@ from .protocol.ecc import derive_ecc_profile
 from .protocol.packet import ProflameFrame, ProflamePacket
 from .rf.base import RFBackend
 from .rf.fake import FakeRFBackend
-from .rf.yardstick import YardStickBackend
+from .rf.yardstick import (
+    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+    YARDSTICK_RX_LEARNING_PACKET_BYTES,
+    YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+    YardStickBackend,
+)
 
 from .const import (
     BACKEND_FAKE,
     BACKEND_YARDSTICK,
     CONF_C1,
     CONF_C2,
+    CONF_DEBUG_LOGGING,
     CONF_D1,
     CONF_D2,
     CONF_REMOTE_ID,
     DATA_FAKE_LEARNING_DELAY,
     DATA_LEARNING_BACKEND_FACTORY,
+    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    DATA_YARDSTICK_LEARNING_PACKET_LENGTH_BYTES,
+    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
 )
+from .packet_debug import (
+    async_disable_packet_debug_logging,
+    async_enable_packet_debug_logging,
+    get_packet_debug_logger,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 MIN_UNIQUE_CMD1_SAMPLES = 2
 MIN_UNIQUE_CMD2_SAMPLES = 2
 MIN_VALID_PACKETS = 3
 DEFAULT_LEARN_TIMEOUT_SECONDS = 120.0
-DEFAULT_RECEIVE_TIMEOUT_SECONDS = 0.5
+DEFAULT_RECEIVE_TIMEOUT_SECONDS = 1.0
 DEFAULT_FAKE_LEARN_DELAY_SECONDS = 2.0
 
 ERROR_TIMEOUT = "timeout"
@@ -46,6 +63,7 @@ ERROR_INCONSISTENT_REMOTE_ID = "inconsistent_remote_id"
 ERROR_CONTRADICTORY_PROFILE = "contradictory_profile"
 ERROR_AMBIGUOUS_PROFILE = "ambiguous_profile"
 ERROR_BACKEND_UNAVAILABLE = "backend_unavailable"
+RESTORE_PROMPT_LABELS = {"restore_power_on"}
 
 LearningBackendFactory = Callable[[str], RFBackend | Awaitable[RFBackend]]
 
@@ -65,6 +83,7 @@ class LearnResult:
     warnings: list[str] = field(default_factory=list)
     error_code: str | None = None
     error: str | None = None
+    final_packet: ProflamePacket | None = None
 
     @property
     def data(self) -> dict[str, int]:
@@ -104,6 +123,10 @@ class LearnSession:
     warnings: list[str] = field(default_factory=list)
     remote_id: int | None = None
     packets: list[ProflamePacket] = field(default_factory=list)
+    debug_logging_enabled: bool = False
+    hass: HomeAssistant | None = None
+    prompt_index: int = 0
+    prompt_label: str = "unknown"
     _seen_frames: set[tuple[int, int, int, int, int]] = field(default_factory=set)
 
 
@@ -124,7 +147,27 @@ async def async_create_learning_backend(
         backend = FakeRFBackend()
         _seed_fake_learning_packets(backend)
     elif backend_type == BACKEND_YARDSTICK:
-        backend = YardStickBackend()
+        backend = YardStickBackend(
+            hass=hass,
+            frequency_hz=int(
+                domain_data.get(
+                    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
+                    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+                )
+            ),
+            packet_length_bytes=int(
+                domain_data.get(
+                    DATA_YARDSTICK_LEARNING_PACKET_LENGTH_BYTES,
+                    YARDSTICK_RX_LEARNING_PACKET_BYTES,
+                )
+            ),
+            sweep_enabled=bool(
+                domain_data.get(
+                    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
+                    YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+                )
+            ),
+        )
     else:
         raise ValueError(f"Unsupported backend type: {backend_type}")
 
@@ -141,16 +184,43 @@ async def async_start_learning_session(
     hass: "HomeAssistant",
     backend_type: str,
     *,
+    debug_logging: bool = False,
     timeout: float = DEFAULT_LEARN_TIMEOUT_SECONDS,
     receive_timeout: float = DEFAULT_RECEIVE_TIMEOUT_SECONDS,
 ) -> LearnSession:
     """Create a backend and wrap it in a guided-learning session."""
 
-    backend = await async_create_learning_backend(hass, backend_type)
+    _LOGGER.warning(
+        "Proflame2 learning debug logging is %s for backend=%s",
+        "ENABLED" if debug_logging else "DISABLED",
+        backend_type,
+    )
+    if debug_logging:
+        log_paths = await async_enable_packet_debug_logging(hass)
+        _LOGGER.warning(
+            "Proflame2 packet debug files enabled primary=%s decode_failures=%s for backend=%s",
+            log_paths.primary_log_path,
+            log_paths.decode_failure_log_path,
+            backend_type,
+        )
+        get_packet_debug_logger().info(
+            "Enabled packet debug logging for learning session backend=%s primary_file=%s decode_failure_file=%s",
+            backend_type,
+            log_paths.primary_log_path,
+            log_paths.decode_failure_log_path,
+        )
+    try:
+        backend = await async_create_learning_backend(hass, backend_type)
+    except Exception:
+        if debug_logging:
+            await async_disable_packet_debug_logging(hass)
+        raise
     return LearnSession(
         backend=backend,
         step_timeout=timeout,
         receive_timeout=receive_timeout,
+        debug_logging_enabled=debug_logging,
+        hass=hass,
     )
 
 
@@ -158,7 +228,21 @@ async def async_close_learning_session(session: LearnSession | None) -> None:
     """Close a guided-learning session backend if it exists."""
 
     if session is not None:
-        await session.backend.close()
+        _LOGGER.warning(
+            "Proflame2 closing learning session for backend=%s debug_logging=%s",
+            getattr(session.backend, "name", session.backend.__class__.__name__),
+            session.debug_logging_enabled,
+        )
+        try:
+            await session.backend.close()
+        finally:
+            if session.debug_logging_enabled and session.hass is not None:
+                get_packet_debug_logger().info("Closed packet debug learning session")
+                await async_disable_packet_debug_logging(session.hass)
+            _LOGGER.warning(
+                "Proflame2 learning session closed for backend=%s",
+                getattr(session.backend, "name", session.backend.__class__.__name__),
+            )
 
 
 def _seed_fake_learning_packets(backend: FakeRFBackend) -> None:
@@ -170,28 +254,38 @@ def _seed_fake_learning_packets(backend: FakeRFBackend) -> None:
                 serial_id=0x3B3F02,
                 cmd1=0x01,
                 err1=0x76,
-                cmd2=0x16,
-                err2=0xEF,
+                cmd2=0x06,
+                err2=0xDE,
             ),
             source="fake_learn",
         ),
         ProflamePacket.from_frame(
             ProflameFrame(
                 serial_id=0x3B3F02,
-                cmd1=0x31,
-                err1=0x25,
-                cmd2=0x26,
-                err2=0xBC,
+                cmd1=0x00,
+                err1=0x57,
+                cmd2=0x06,
+                err2=0xDE,
             ),
             source="fake_learn",
         ),
         ProflamePacket.from_frame(
             ProflameFrame(
                 serial_id=0x3B3F02,
-                cmd1=0x51,
-                err1=0x83,
-                cmd2=0x36,
-                err2=0x8D,
+                cmd1=0x01,
+                err1=0x76,
+                cmd2=0x06,
+                err2=0xDE,
+            ),
+            source="fake_learn",
+        ),
+        ProflamePacket.from_frame(
+            ProflameFrame(
+                serial_id=0x3B3F02,
+                cmd1=0x01,
+                err1=0x76,
+                cmd2=0x05,
+                err2=0xBD,
             ),
             source="fake_learn",
         ),
@@ -207,23 +301,98 @@ async def async_capture_next_learning_packet(session: LearnSession) -> ProflameP
     """
 
     step_deadline = time.monotonic() + session.step_timeout
+    _session_debug(
+        session,
+        "prompt wait started backend=%s step_timeout=%.3fs receive_timeout=%.3fs "
+        "packets_seen=%s valid_packets=%s distinct_packets=%s",
+        getattr(session.backend, "name", session.backend.__class__.__name__),
+        session.step_timeout,
+        session.receive_timeout,
+        session.packets_seen,
+        session.valid_packets,
+        len(session.packets),
+    )
 
     while time.monotonic() < step_deadline:
-        packet = await session.backend.receive(
-            timeout=min(
-                session.receive_timeout,
-                max(0.0, step_deadline - time.monotonic()),
-            )
+        receive_timeout = min(
+            session.receive_timeout,
+            max(0.0, step_deadline - time.monotonic()),
         )
+        try:
+            packet = await session.backend.receive(timeout=receive_timeout)
+        except Exception as exc:
+            _LOGGER.exception(
+                "Proflame2 guided learning receive failed prompt_index=%s prompt_label=%s packets_seen=%s valid_packets=%s distinct_packets=%s",
+                session.prompt_index,
+                session.prompt_label,
+                session.packets_seen,
+                session.valid_packets,
+                len(session.packets),
+            )
+            if session.debug_logging_enabled:
+                get_packet_debug_logger().exception(
+                    "learning: receive exception prompt_index=%s prompt_label=%s packets_seen=%s valid_packets=%s distinct_packets=%s exception_type=%s error=%s",
+                    session.prompt_index,
+                    session.prompt_label,
+                    session.packets_seen,
+                    session.valid_packets,
+                    len(session.packets),
+                    type(exc).__name__,
+                    exc,
+                )
+            _log_learning_receive_heartbeat(
+                session,
+                outcome="exception",
+                receive_timeout=receive_timeout,
+                error=str(exc),
+                exception_type=type(exc).__name__,
+            )
+            raise
         if packet is None:
+            _log_learning_receive_heartbeat(
+                session,
+                outcome="no_packet",
+                receive_timeout=receive_timeout,
+            )
             continue
 
         session.packets_seen += 1
         session.valid_packets += 1
+        _log_learning_receive_heartbeat(
+            session,
+            outcome="decoded_packet",
+            receive_timeout=receive_timeout,
+            packet=packet,
+        )
+        _session_debug(
+            session,
+            "packet observed packets_seen=%s valid_packets=%s remote_id=%06x "
+            "cmd1=0x%02X err1=0x%02X cmd2=0x%02X err2=0x%02X",
+            session.packets_seen,
+            session.valid_packets,
+            packet.remote_id,
+            packet.frame.cmd1,
+            packet.frame.err1,
+            packet.frame.cmd2,
+            packet.frame.err2,
+        )
 
         if session.remote_id is None:
             session.remote_id = packet.remote_id
+            _session_debug(session, "locked learning session to remote_id=%06x", packet.remote_id)
         elif packet.remote_id != session.remote_id:
+            _log_learning_receive_heartbeat(
+                session,
+                outcome="wrong_remote_id",
+                receive_timeout=receive_timeout,
+                packet=packet,
+            )
+            _session_debug(
+                session,
+                "remote_id mismatch expected=%06x observed=%06x",
+                session.remote_id,
+                packet.remote_id,
+            )
             return LearnResult(
                 success=False,
                 remote_id=session.remote_id,
@@ -245,12 +414,64 @@ async def async_capture_next_learning_packet(session: LearnSession) -> ProflameP
             packet.frame.err2,
         )
         if frame_key in session._seen_frames:
+            if session.prompt_label in RESTORE_PROMPT_LABELS:
+                _log_learning_receive_heartbeat(
+                    session,
+                    outcome="restore_packet_observed",
+                    receive_timeout=receive_timeout,
+                    packet=packet,
+                )
+                _session_debug(
+                    session,
+                    "restore-step packet observed remote_id=%06x cmd1=0x%02X err1=0x%02X cmd2=0x%02X err2=0x%02X",
+                    packet.remote_id,
+                    packet.frame.cmd1,
+                    packet.frame.err1,
+                    packet.frame.cmd2,
+                    packet.frame.err2,
+                )
+                return packet
+            _log_learning_receive_heartbeat(
+                session,
+                outcome="duplicate_ignored",
+                receive_timeout=receive_timeout,
+                packet=packet,
+            )
+            _session_debug(
+                session,
+                "duplicate packet ignored remote_id=%06x cmd1=0x%02X err1=0x%02X cmd2=0x%02X err2=0x%02X",
+                packet.remote_id,
+                packet.frame.cmd1,
+                packet.frame.err1,
+                packet.frame.cmd2,
+                packet.frame.err2,
+            )
             continue
 
         session._seen_frames.add(frame_key)
         session.packets.append(packet)
+        _log_learning_receive_heartbeat(
+            session,
+            outcome="accepted_distinct_packet",
+            receive_timeout=receive_timeout,
+            packet=packet,
+        )
+        _session_debug(
+            session,
+            "accepted distinct packet count=%s remote_id=%06x",
+            len(session.packets),
+            packet.remote_id,
+        )
         return packet
 
+    _session_debug(
+        session,
+        "prompt timed out after %.3fs packets_seen=%s valid_packets=%s distinct_packets=%s",
+        session.step_timeout,
+        session.packets_seen,
+        session.valid_packets,
+        len(session.packets),
+    )
     return LearnResult(
         success=False,
         remote_id=session.remote_id,
@@ -273,6 +494,13 @@ def derive_learn_result_from_session(session: LearnSession) -> LearnResult | Non
         or len(cmd1_samples) < MIN_UNIQUE_CMD1_SAMPLES
         or len(cmd2_samples) < MIN_UNIQUE_CMD2_SAMPLES
     ):
+        _session_debug(
+            session,
+            "insufficient distinct samples valid_packets=%s unique_cmd1=%s unique_cmd2=%s",
+            session.valid_packets,
+            len(cmd1_samples),
+            len(cmd2_samples),
+        )
         return None
 
     try:
@@ -280,6 +508,7 @@ def derive_learn_result_from_session(session: LearnSession) -> LearnResult | Non
     except ValueError as exc:
         message = str(exc)
         if "No stable" in message:
+            _session_debug(session, "contradictory profile derivation: %s", message)
             return LearnResult(
                 success=False,
                 remote_id=session.remote_id,
@@ -293,7 +522,9 @@ def derive_learn_result_from_session(session: LearnSession) -> LearnResult | Non
                 ),
             )
         if "Ambiguous stable" in message:
+            _session_debug(session, "ambiguous profile derivation: %s", message)
             return None
+        _session_debug(session, "unexpected profile derivation failure: %s", message)
         return LearnResult(
             success=False,
             remote_id=session.remote_id,
@@ -304,6 +535,15 @@ def derive_learn_result_from_session(session: LearnSession) -> LearnResult | Non
             error=message,
         )
 
+    _session_debug(
+        session,
+        "learned stable profile remote_id=%06x c1=%s d1=%s c2=%s d2=%s",
+        session.remote_id,
+        ecc.c1,
+        ecc.d1,
+        ecc.c2,
+        ecc.d2,
+    )
     return LearnResult(
         success=True,
         remote_id=session.remote_id,
@@ -314,6 +554,7 @@ def derive_learn_result_from_session(session: LearnSession) -> LearnResult | Non
         packets_seen=session.packets_seen,
         valid_packets=session.valid_packets,
         warnings=session.warnings,
+        final_packet=session.packets[-1] if session.packets else None,
     )
 
 
@@ -470,8 +711,75 @@ async def async_run_learning_with_backend(
             packets_seen=0,
             valid_packets=0,
             error_code=ERROR_BACKEND_UNAVAILABLE,
-            error=str(exc),
+            error=f"{type(exc).__name__}: {exc}",
         )
     finally:
         if backend is not None:
             await backend.close()
+
+
+def _session_debug(session: LearnSession, message: str, *args: object) -> None:
+    """Write one learning-session debug line when packet logging is enabled."""
+
+    if not session.debug_logging_enabled:
+        return
+    get_packet_debug_logger().info("learning: " + message, *args)
+
+
+def _log_learning_receive_heartbeat(
+    session: LearnSession,
+    *,
+    outcome: str,
+    receive_timeout: float,
+    packet: ProflamePacket | None = None,
+    error: str | None = None,
+    exception_type: str | None = None,
+) -> None:
+    """Log one compact heartbeat for each guided-learning receive window."""
+
+    if not session.debug_logging_enabled:
+        return
+
+    status = getattr(session.backend, "last_receive_status", None)
+    active_frequency_hz = getattr(status, "active_frequency_hz", None)
+    payload_length_bytes = getattr(status, "payload_length_bytes", None)
+    candidate_count = getattr(status, "candidate_count", None)
+    reason = getattr(status, "reason", None)
+    status_exception_type = getattr(status, "exception_type", None)
+    status_exception_message = getattr(status, "exception_message", None)
+    if outcome == "wrong_remote_id":
+        reason = "wrong_remote_id"
+    elif outcome == "duplicate_ignored":
+        reason = "duplicate_packet"
+    elif outcome == "restore_packet_observed":
+        reason = "restore_step_duplicate"
+    elif outcome == "accepted_distinct_packet":
+        reason = "useful_for_derivation"
+    elif outcome == "exception":
+        reason = reason or exception_type or status_exception_type or "exception"
+
+    resolved_error = error or status_exception_message
+
+    get_packet_debug_logger().info(
+        "learning: heartbeat prompt_index=%s prompt_label=%s outcome=%s receive_timeout=%.3fs "
+        "packets_seen=%s valid_packets=%s distinct_packets=%s active_freq_hz=%s payload_length_bytes=%s "
+        "candidate_count=%s reason=%s error=%s remote_id=%s cmd1=%s err1=%s cmd2=%s err2=%s repeat_count=%s",
+        session.prompt_index,
+        session.prompt_label,
+        outcome,
+        receive_timeout,
+        session.packets_seen,
+        session.valid_packets,
+        len(session.packets),
+        active_frequency_hz,
+        payload_length_bytes,
+        candidate_count,
+        reason,
+        resolved_error,
+        None if packet is None else f"{packet.remote_id:06x}",
+        None if packet is None else f"0x{packet.frame.cmd1:02X}",
+        None if packet is None else f"0x{packet.frame.err1:02X}",
+        None if packet is None else f"0x{packet.frame.cmd2:02X}",
+        None if packet is None else f"0x{packet.frame.err2:02X}",
+        getattr(status, "repeat_count", None),
+    )

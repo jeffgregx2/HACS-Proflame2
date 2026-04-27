@@ -36,6 +36,8 @@ from custom_components.proflame2.const import (
     DOMAIN,
 )
 from custom_components.proflame2.diagnostics import async_get_config_entry_diagnostics
+from custom_components.proflame2.rf.base import SendResult
+from custom_components.proflame2.rf.yardstick import YardStickBackend
 from custom_components.proflame2.runtime import async_get_runtime_entries
 
 
@@ -117,6 +119,43 @@ async def test_set_state_with_one_fireplace_sends_exactly_one_frame(hass) -> Non
     assert runtime_entry.last_send_result is not None
     assert runtime_entry.last_packet is not None
     assert runtime_entry.last_packet.transmission_plan is not None
+
+
+async def test_set_state_uses_yardstick_backend_when_available(hass, monkeypatch) -> None:
+    """Service-layer TX should dispatch through Yard Stick instead of blocking early."""
+
+    async def fake_send(self, packet):
+        return SendResult(
+            packet=packet,
+            backend_name="yardstick",
+            warnings=packet.warnings,
+        )
+
+    monkeypatch.setattr(YardStickBackend, "send", fake_send)
+
+    entry = _add_entry(
+        hass,
+        title="Living Room",
+        remote_id=0x3B3F02,
+        backend_type=BACKEND_YARDSTICK,
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "set_state",
+        {
+            CONF_POWER: True,
+            CONF_FLAME: 1,
+            CONF_CONFIG_ENTRY_ID: entry.entry_id,
+        },
+        blocking=True,
+    )
+
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    assert runtime_entry.last_send_result is not None
+    assert runtime_entry.last_send_result.backend_name == "yardstick"
+    assert runtime_entry.last_error is None
 
 
 async def test_diagnostics_include_last_send_result(hass) -> None:
@@ -403,8 +442,11 @@ async def test_config_entry_id_target_works(hass) -> None:
     assert len(second_backend.sent_packets) == 0
 
 
-async def test_yardstick_backend_returns_clear_not_implemented_error(hass) -> None:
-    """Configured yardstick entries should fail clearly until TX is implemented."""
+async def test_yardstick_backend_runtime_error_surfaces_cleanly(hass, monkeypatch) -> None:
+    """Configured yardstick entries should surface backend TX failures cleanly."""
+
+    async def fake_send(self, packet):
+        raise RuntimeError("USB transmit failed")
 
     entry = _add_entry(
         hass,
@@ -412,9 +454,10 @@ async def test_yardstick_backend_returns_clear_not_implemented_error(hass) -> No
         remote_id=0x3B3F02,
         backend_type=BACKEND_YARDSTICK,
     )
+    monkeypatch.setattr(YardStickBackend, "send", fake_send)
     assert await hass.config_entries.async_setup(entry.entry_id)
 
-    with pytest.raises(HomeAssistantError, match="YARD Stick One transmit is not implemented yet"):
+    with pytest.raises(HomeAssistantError, match="USB transmit failed"):
         await hass.services.async_call(
             DOMAIN,
             "set_state",

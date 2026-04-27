@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict, dataclass
+import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.storage import Store
 
 from .protocol.encoder import encode_packet
 from .protocol.models import FireplaceState
 from .protocol.models import ECCProfile, FireplaceFeatures, RemoteProfile
-from .protocol.packet import ProflamePacket
+from .protocol.packet import ProflameFrame, ProflamePacket
 from .rf.base import RFBackend, SendResult
 from .rf.fake import FakeRFBackend
 from .rf.waveform import ProflameTransmissionPlan
+from .rf.yardstick import (
+    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+    YARDSTICK_RX_LEARNING_PACKET_BYTES,
+    YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+    YardStickBackend,
+)
 
 from .const import (
     BACKEND_FAKE,
@@ -28,16 +37,34 @@ from .const import (
     CONF_CPI,
     CONF_D1,
     CONF_D2,
+    CONF_DEBUG_LOGGING,
     CONF_FAN,
     CONF_FRONT,
+    CONF_INITIAL_FRAME,
+    CONF_INITIAL_PACKET_SOURCE,
     CONF_LIGHT,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    DATA_ACTIVE_LISTENING,
     DATA_RUNTIME_ENTRIES,
     DOMAIN,
     MANUFACTURER,
+    OPERATIONAL_STATUS_READY,
+    STATE_CONFIDENCE_OBSERVED,
+    STATE_CONFIDENCE_REQUESTED,
+    STATE_CONFIDENCE_RESTORED,
+    STATE_CONFIDENCE_UNKNOWN,
 )
 from .profile import normalize_profiles, remote_id_as_hex
+from .packet_debug import (
+    async_disable_packet_debug_logging,
+    async_enable_packet_debug_logging,
+)
+
+STORAGE_VERSION = 1
+STORAGE_KEY = f"{DOMAIN}.runtime_state"
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -59,6 +86,230 @@ class Proflame2RuntimeEntry:
     last_applied_profile_id: str | None = None
     last_applied_profile_name: str | None = None
     saved_profiles: dict[str, dict[str, Any]] | None = None
+    desired_state: FireplaceState | None = None
+    operational_status: str = OPERATIONAL_STATUS_READY
+    state_confidence: str = STATE_CONFIDENCE_UNKNOWN
+    active_profile_state: FireplaceState | None = None
+    active_listening_enabled: bool = False
+    debug_logging_enabled: bool = False
+    debounce_task: asyncio.Task[None] | None = None
+    debounce_cancel_reason: str | None = None
+    active_send_task: asyncio.Task[None] | None = None
+    confirmation_task: asyncio.Task[None] | None = None
+    active_listener_task: asyncio.Task[None] | None = None
+
+
+def _runtime_store(hass: HomeAssistant) -> Store[dict[str, Any]]:
+    """Return the persistent store used for restored runtime state."""
+
+    return Store(hass, STORAGE_VERSION, STORAGE_KEY)
+
+
+async def _async_load_persisted_runtime_state(hass: HomeAssistant) -> dict[str, Any]:
+    """Load the persisted runtime-state map once per Home Assistant instance."""
+
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    cache = domain_data.get("runtime_state_cache")
+    if cache is not None:
+        return cache
+    loaded = await _runtime_store(hass).async_load()
+    cache = loaded if isinstance(loaded, dict) else {}
+    domain_data["runtime_state_cache"] = cache
+    return cache
+
+
+async def _async_save_persisted_runtime_state(hass: HomeAssistant) -> None:
+    """Persist the current runtime-state cache to Home Assistant storage."""
+
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    cache = domain_data.setdefault("runtime_state_cache", {})
+    await _runtime_store(hass).async_save(cache)
+
+
+def runtime_current_state(runtime_entry: Proflame2RuntimeEntry) -> FireplaceState | None:
+    """Return the current integration-known fireplace state."""
+
+    return None if runtime_entry.last_packet is None else runtime_entry.last_packet.state
+
+
+async def async_persist_runtime_entry_state(
+    hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry
+) -> None:
+    """Persist the current fireplace state used for restart restoration."""
+
+    cache = await _async_load_persisted_runtime_state(hass)
+    current_state = runtime_current_state(runtime_entry)
+    if current_state is None:
+        cache.pop(runtime_entry.config_entry_id, None)
+    else:
+        frame = runtime_entry.last_packet.frame if runtime_entry.last_packet is not None else None
+        cache[runtime_entry.config_entry_id] = {
+            "state": asdict(current_state),
+            "state_confidence": runtime_entry.state_confidence,
+            "last_applied_profile_id": runtime_entry.last_applied_profile_id,
+            "last_applied_profile_name": runtime_entry.last_applied_profile_name,
+            "frame": asdict(frame) if frame is not None else None,
+            "source": None if runtime_entry.last_packet is None else runtime_entry.last_packet.source,
+        }
+    await _async_save_persisted_runtime_state(hass)
+
+
+async def async_set_runtime_current_state(
+    hass: HomeAssistant,
+    runtime_entry: Proflame2RuntimeEntry,
+    state: FireplaceState,
+    *,
+    source: str,
+    confidence: str,
+    packet: ProflamePacket | None = None,
+    notify: bool = True,
+) -> None:
+    """Update the current known fireplace state and persist it."""
+
+    runtime_entry.last_packet = packet or encode_packet(
+        state,
+        runtime_entry.remote_profile,
+        source=source,
+    )
+    if runtime_entry.last_packet.source is None:
+        runtime_entry.last_packet.source = source
+    runtime_entry.state_confidence = confidence
+    await async_persist_runtime_entry_state(hass, runtime_entry)
+    if notify:
+        async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
+
+
+def clear_active_profile_if_state_differs(
+    runtime_entry: Proflame2RuntimeEntry, state: FireplaceState
+) -> None:
+    """Clear the active profile marker when the current state no longer matches it."""
+
+    if runtime_entry.active_profile_state is None:
+        return
+    if runtime_entry.active_profile_state != state:
+        runtime_entry.last_applied_profile_id = None
+        runtime_entry.last_applied_profile_name = None
+        runtime_entry.active_profile_state = None
+
+
+async def async_restore_runtime_state(
+    hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry
+) -> None:
+    """Restore the last known state from persistent storage if one exists."""
+
+    cache = await _async_load_persisted_runtime_state(hass)
+    restored = cache.get(runtime_entry.config_entry_id)
+    if not isinstance(restored, dict):
+        return
+
+    raw_state = restored.get("state")
+    if not isinstance(raw_state, dict):
+        return
+
+    restored_state = FireplaceState(
+        power=bool(raw_state.get("power", False)),
+        flame=int(raw_state.get("flame", 0)),
+        fan=int(raw_state.get("fan", 0)),
+        light=int(raw_state.get("light", 0)),
+        front=bool(raw_state.get("front", False)),
+        aux=bool(raw_state.get("aux", False)),
+        thermostat=bool(raw_state.get("thermostat", False)),
+        cpi=bool(raw_state.get("cpi", False)),
+    )
+    raw_frame = restored.get("frame")
+    if isinstance(raw_frame, dict):
+        runtime_entry.last_packet = ProflamePacket.from_frame(
+            ProflameFrame(
+                serial_id=int(raw_frame["serial_id"]),
+                cmd1=int(raw_frame["cmd1"]),
+                err1=int(raw_frame["err1"]),
+                cmd2=int(raw_frame["cmd2"]),
+                err2=int(raw_frame["err2"]),
+            ),
+            source=str(restored.get("source", "restored_state")),
+        )
+    else:
+        runtime_entry.last_packet = encode_packet(
+            restored_state,
+            runtime_entry.remote_profile,
+            source="restored_state",
+        )
+    runtime_entry.state_confidence = str(
+        restored.get("state_confidence", STATE_CONFIDENCE_RESTORED)
+    )
+    runtime_entry.last_applied_profile_id = restored.get("last_applied_profile_id")
+    runtime_entry.last_applied_profile_name = restored.get("last_applied_profile_name")
+    runtime_entry.operational_status = OPERATIONAL_STATUS_READY
+    if runtime_entry.last_applied_profile_id and runtime_entry.last_applied_profile_name:
+        runtime_entry.active_profile_state = restored_state
+
+
+async def async_bootstrap_runtime_state_from_entry_data(
+    hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry, entry: ConfigEntry
+) -> None:
+    """Seed current state from the learned packet stored in entry data, if present."""
+
+    if runtime_entry.last_packet is not None:
+        return
+
+    raw_frame = entry.data.get(CONF_INITIAL_FRAME)
+    if not isinstance(raw_frame, dict):
+        return
+
+    runtime_entry.last_packet = ProflamePacket.from_frame(
+        ProflameFrame(
+            serial_id=int(raw_frame["serial_id"]),
+            cmd1=int(raw_frame["cmd1"]),
+            err1=int(raw_frame["err1"]),
+            cmd2=int(raw_frame["cmd2"]),
+            err2=int(raw_frame["err2"]),
+        ),
+        source=str(entry.data.get(CONF_INITIAL_PACKET_SOURCE, "observed_packet")),
+    )
+    runtime_entry.state_confidence = STATE_CONFIDENCE_OBSERVED
+    runtime_entry.operational_status = OPERATIONAL_STATUS_READY
+    await async_persist_runtime_entry_state(hass, runtime_entry)
+    _LOGGER.warning(
+        "Proflame2 bootstrapped runtime state from learned packet config_entry_id=%s source=%s state=%s",
+        runtime_entry.config_entry_id,
+        runtime_entry.last_packet.source,
+        runtime_entry.last_packet.state,
+    )
+
+
+async def async_initialize_safe_default_runtime_state(
+    hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry
+) -> None:
+    """Seed a safe OFF/default state when no observed or restored state exists."""
+
+    if runtime_entry.last_packet is not None:
+        return
+
+    safe_state = FireplaceState(
+        power=False,
+        flame=0,
+        fan=0,
+        light=0,
+        front=False,
+        aux=False,
+        cpi=False,
+    )
+    runtime_entry.last_packet = encode_packet(
+        safe_state,
+        runtime_entry.remote_profile,
+        source="restored_state",
+    )
+    runtime_entry.state_confidence = STATE_CONFIDENCE_RESTORED
+    runtime_entry.operational_status = OPERATIONAL_STATUS_READY
+    runtime_entry.last_error = (
+        "State initialized from safe defaults; no observed fireplace state was available."
+    )
+    await async_persist_runtime_entry_state(hass, runtime_entry)
+    _LOGGER.warning(
+        "Proflame2 initialized safe default runtime state config_entry_id=%s state=%s",
+        runtime_entry.config_entry_id,
+        runtime_entry.last_packet.state,
+    )
 
 
 def async_get_runtime_entries(hass: HomeAssistant) -> dict[str, Proflame2RuntimeEntry]:
@@ -115,11 +366,19 @@ async def async_setup_runtime_entry(
 
     backend_type = str(entry.data[CONF_BACKEND_TYPE])
     backend: RFBackend | None
+    active_listening_enabled = bool(hass.data.setdefault(DOMAIN, {}).get(DATA_ACTIVE_LISTENING, False))
+    debug_logging_enabled = bool(entry.options.get(CONF_DEBUG_LOGGING, False))
+
     if backend_type == BACKEND_FAKE:
         backend = FakeRFBackend()
         await backend.connect()
     elif backend_type == BACKEND_YARDSTICK:
-        backend = None
+        backend = YardStickBackend(
+            hass=hass,
+            frequency_hz=YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+            packet_length_bytes=YARDSTICK_RX_LEARNING_PACKET_BYTES,
+            sweep_enabled=YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+        )
     else:
         raise ValueError(f"Unsupported backend type: {backend_type}")
 
@@ -135,7 +394,17 @@ async def async_setup_runtime_entry(
             entry.options.get(CONF_PROFILES, {}),
             features=features,
         ),
+        active_listening_enabled=active_listening_enabled,
+        debug_logging_enabled=debug_logging_enabled,
     )
+    if debug_logging_enabled:
+        log_paths = await async_enable_packet_debug_logging(hass)
+        _LOGGER.warning(
+            "Proflame2 packet debug logging is ENABLED for config_entry_id=%s primary_log=%s decode_failures_log=%s",
+            entry.entry_id,
+            log_paths.primary_log_path,
+            log_paths.decode_failure_log_path,
+        )
     if backend_type == BACKEND_FAKE:
         runtime_entry.last_packet = encode_packet(
             FireplaceState(
@@ -150,6 +419,12 @@ async def async_setup_runtime_entry(
             remote_profile,
             source="fake_default",
         )
+        runtime_entry.state_confidence = STATE_CONFIDENCE_REQUESTED
+    await async_restore_runtime_state(hass, runtime_entry)
+    if runtime_entry.last_packet is None:
+        await async_bootstrap_runtime_state_from_entry_data(hass, runtime_entry, entry)
+    if runtime_entry.last_packet is None:
+        await async_initialize_safe_default_runtime_state(hass, runtime_entry)
     async_get_runtime_entries(hass)[entry.entry_id] = runtime_entry
     return runtime_entry
 
@@ -158,8 +433,19 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
     """Unload and discard runtime state for one config entry."""
 
     runtime_entry = async_get_runtime_entries(hass).pop(entry.entry_id, None)
-    if runtime_entry and runtime_entry.backend is not None:
-        await runtime_entry.backend.close()
+    if runtime_entry:
+        for task in (
+            runtime_entry.debounce_task,
+            runtime_entry.active_send_task,
+            runtime_entry.confirmation_task,
+            runtime_entry.active_listener_task,
+        ):
+            if task is not None:
+                task.cancel()
+        if runtime_entry.backend is not None:
+            await runtime_entry.backend.close()
+        if runtime_entry.debug_logging_enabled:
+            await async_disable_packet_debug_logging(hass)
 
 
 def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, Any]:
@@ -174,6 +460,11 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "device_id": runtime_entry.device_id,
         "learning_in_progress": runtime_entry.learning_in_progress,
         "sending_in_progress": runtime_entry.sending_in_progress,
+        "operational_status": runtime_entry.operational_status,
+        "state_confidence": runtime_entry.state_confidence,
+        "desired_state": (
+            asdict(runtime_entry.desired_state) if runtime_entry.desired_state is not None else None
+        ),
         "remote_profile": {
             "serial_id": runtime_entry.remote_profile.serial_id,
             "ecc": asdict(runtime_entry.remote_profile.ecc),

@@ -61,6 +61,23 @@ class SendResult:
         return self.packet.frame
 
 
+@dataclass(frozen=True)
+class ReceiveStatus:
+    """Compact outcome of one backend receive attempt."""
+
+    outcome: str
+    reason: str | None = None
+    active_frequency_hz: int | None = None
+    payload_length_bytes: int | None = None
+    sweep_enabled: bool | None = None
+    candidate_count: int | None = None
+    selected_bit_offset: int | None = None
+    selected_symbol_offset: int | None = None
+    repeat_count: int | None = None
+    exception_type: str | None = None
+    exception_message: str | None = None
+
+
 class RFBackend(ABC):
     """Transport abstraction used by the Home Assistant coordinator layer."""
 

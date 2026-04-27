@@ -18,6 +18,7 @@ from .const import (
     CONF_CPI,
     CONF_D1,
     CONF_D2,
+    CONF_DEBUG_LOGGING,
     CONF_FAN,
     CONF_FRONT,
     CONF_LIGHT,
@@ -28,6 +29,7 @@ from .const import (
     CONF_PROFILES,
     CONF_REMOTE_ID,
     DEFAULT_FEATURE_OPTIONS,
+    DEFAULT_DEBUG_LOGGING,
     FEATURE_OPTION_KEYS,
 )
 
@@ -113,6 +115,7 @@ def default_entry_options() -> dict[str, Any]:
 
     return {
         **default_feature_options(),
+        CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
         CONF_PROFILES: {},
     }
 
@@ -139,6 +142,7 @@ def normalize_entry_options(
         return normalized
 
     normalized.update(normalize_feature_options(raw_options))
+    normalized[CONF_DEBUG_LOGGING] = bool(raw_options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
     normalized[CONF_PROFILES] = normalize_profiles(
         raw_options.get(CONF_PROFILES, {}),
         features=features or fireplace_features_from_options(normalized),

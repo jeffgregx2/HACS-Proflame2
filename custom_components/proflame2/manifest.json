@@ -11,8 +11,10 @@
   "loggers": [
     "custom_components.proflame2",
     "custom_components.proflame2.protocol",
-    "custom_components.proflame2.rf"
+    "custom_components.proflame2.rf",
+    "custom_components.proflame2.packet_debug",
+    "custom_components.proflame2.packet_debug.decode_failures"
   ],
-  "requirements": [],
+  "requirements": [ "rfcat" ],
   "version": "0.1.0-dev"
 }

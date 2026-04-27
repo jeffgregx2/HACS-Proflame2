@@ -25,6 +25,9 @@ CONF_LIGHT = "light"
 CONF_FRONT = "front"
 CONF_AUX = "aux"
 CONF_CPI = "cpi"
+CONF_DEBUG_LOGGING = "debug_logging"
+CONF_INITIAL_FRAME = "initial_frame"
+CONF_INITIAL_PACKET_SOURCE = "initial_packet_source"
 
 BACKEND_FAKE = "fake"
 BACKEND_YARDSTICK = "yardstick"
@@ -64,6 +67,8 @@ DEFAULT_FEATURE_OPTIONS: dict[str, bool] = {
     CONF_CPI: False,
 }
 
+DEFAULT_DEBUG_LOGGING = False
+
 SERVICE_SET_STATE = "set_state"
 SERVICE_APPLY_PROFILE = "apply_profile"
 
@@ -73,3 +78,27 @@ DATA_LEARNING_BACKEND_FACTORY = "learning_backend_factory"
 DATA_LEARNING_TIMEOUT = "learning_timeout"
 DATA_LEARNING_RECEIVE_TIMEOUT = "learning_receive_timeout"
 DATA_FAKE_LEARNING_DELAY = "fake_learning_delay"
+DATA_YARDSTICK_LEARNING_FREQUENCY_HZ = "yardstick_learning_frequency_hz"
+DATA_YARDSTICK_LEARNING_PACKET_LENGTH_BYTES = "yardstick_learning_packet_length_bytes"
+DATA_YARDSTICK_LEARNING_SWEEP_ENABLED = "yardstick_learning_sweep_enabled"
+DATA_ACTIVE_LISTENING = "active_listening"
+DATA_CONTROL_DEBOUNCE_SECONDS = "control_debounce_seconds"
+DATA_CONFIRMATION_WINDOW_SECONDS = "confirmation_window_seconds"
+DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS = "confirmation_receive_timeout_seconds"
+
+STATE_CONFIDENCE_OBSERVED = "observed"
+STATE_CONFIDENCE_REQUESTED = "requested"
+STATE_CONFIDENCE_RESTORED = "restored"
+STATE_CONFIDENCE_UNKNOWN = "unknown"
+
+OPERATIONAL_STATUS_READY = "ready"
+OPERATIONAL_STATUS_PENDING = "pending"
+OPERATIONAL_STATUS_SENDING = "sending"
+OPERATIONAL_STATUS_CONFIRMING = "confirming"
+OPERATIONAL_STATUS_FAILED = "failed"
+OPERATIONAL_STATUS_LEARNING = "learning"
+OPERATIONAL_STATUS_UNAVAILABLE = "unavailable"
+
+DEFAULT_CONTROL_DEBOUNCE_SECONDS = 1.5
+DEFAULT_CONFIRMATION_WINDOW_SECONDS = 20.0
+DEFAULT_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS = 2.5

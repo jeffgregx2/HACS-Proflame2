@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 from typing import Any
 
 import voluptuous as vol
@@ -22,9 +23,12 @@ from .const import (
     CONF_CPI,
     CONF_D1,
     CONF_D2,
+    CONF_DEBUG_LOGGING,
     CONF_FAN,
     CONF_FLAME,
     CONF_FRONT,
+    CONF_INITIAL_FRAME,
+    CONF_INITIAL_PACKET_SOURCE,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
@@ -33,13 +37,16 @@ from .const import (
     CONF_REMOTE_ID,
     DATA_LEARNING_RECEIVE_TIMEOUT,
     DATA_LEARNING_TIMEOUT,
+    DEFAULT_DEBUG_LOGGING,
     DEFAULT_FEATURE_OPTIONS,
     DOMAIN,
 )
 from .protocol.packet import ProflamePacket
+from .packet_debug import get_packet_debug_logger
 from .learning import (
     DEFAULT_LEARN_TIMEOUT_SECONDS,
     DEFAULT_RECEIVE_TIMEOUT_SECONDS,
+    ERROR_BACKEND_UNAVAILABLE,
     LearnResult,
     LearnSession,
     async_capture_next_learning_packet,
@@ -61,6 +68,7 @@ from .profile import (
     normalize_saved_profile_input,
     remote_id_as_hex,
 )
+from .rf.yardstick import YardStickBackendUnavailableError
 
 def _backend_selector() -> SelectSelector:
     """Return the backend selector for the active build."""
@@ -93,6 +101,7 @@ def _manual_profile_schema() -> vol.Schema:
             vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
             vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
             vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
+            vol.Required(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): bool,
         }
     )
 
@@ -104,6 +113,7 @@ def _learn_setup_schema() -> vol.Schema:
         {
             vol.Required(CONF_NAME): str,
             vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _backend_selector(),
+            vol.Required(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): bool,
         }
     )
 
@@ -115,20 +125,23 @@ FEATURE_SELECTION_SCHEMA = vol.Schema(
         vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
         vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
         vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
+        vol.Required(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): bool,
     }
 )
 
 LEARN_PROMPTS: tuple[tuple[str, str], ...] = (
-    ("power_on", "Press the Power button to turn the fireplace on."),
-    ("power_off", "Press the Power button again to turn the fireplace off."),
-    ("power_on_again", "Press the Power button again to turn the fireplace back on."),
+    (
+        "power_on",
+        "Press the Power button once. The fireplace does not need to start in any specific state.",
+    ),
+    ("power_off", "Press the Power button again."),
+    ("restore_power_on", "Press the Power button once more."),
     ("flame_down", "Press the Flame Down button once."),
-    ("flame_up", "Press the Flame Up button once."),
 )
 
 EXTRA_LEARN_PROMPT = (
-    "additional_input",
-    "Press Flame Down or Flame Up once more so the integration can collect additional distinct packets if needed.",
+    "cmd2_change",
+    "Press Flame Down or Flame Up once more so the integration can collect an additional Cmd2-changing packet if needed.",
 )
 
 class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -214,6 +227,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             suggested_values = self._learn_input or {
                 CONF_NAME: "",
                 CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+                CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
             }
             return self.async_show_form(
                 step_id="learn",
@@ -225,18 +239,14 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._learn_input = {
             CONF_NAME: str(user_input[CONF_NAME]).strip(),
             CONF_BACKEND_TYPE: str(user_input[CONF_BACKEND_TYPE]).strip().lower(),
+            CONF_DEBUG_LOGGING: bool(user_input.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)),
         }
         self._learn_result = None
         await self._async_dispose_learning_session()
-        domain_data = self.hass.data.setdefault(DOMAIN, {})
-        self._learn_session = await async_start_learning_session(
-            self.hass,
-            self._learn_input[CONF_BACKEND_TYPE],
-            timeout=float(domain_data.get(DATA_LEARNING_TIMEOUT, DEFAULT_LEARN_TIMEOUT_SECONDS)),
-            receive_timeout=float(
-                domain_data.get(DATA_LEARNING_RECEIVE_TIMEOUT, DEFAULT_RECEIVE_TIMEOUT_SECONDS)
-            ),
-        )
+        learn_session = await self._async_start_learning_session_or_fail()
+        if learn_session is None:
+            return await self.async_step_learn_failed()
+        self._learn_session = learn_session
         self._learn_prompt_index = 0
         return await self.async_step_learn_prompt()
 
@@ -246,6 +256,14 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._learn_input is None or self._learn_session is None:
             return await self.async_step_learn()
 
+        self._learn_session.prompt_index = self._learn_prompt_index
+        self._learn_session.prompt_label = self._current_learn_prompt_label()
+        if self._learn_session.debug_logging_enabled:
+            get_packet_debug_logger().info(
+                "config_flow: prompt_index=%s instruction=%s",
+                self._learn_prompt_index,
+                self._current_learn_instruction(),
+            )
         self._learn_task = self.hass.async_create_task(
             async_capture_next_learning_packet(self._learn_session)
         )
@@ -309,6 +327,11 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_BACKEND_TYPE: self._learn_input[CONF_BACKEND_TYPE],
                 **self._learn_result.data,
             }
+            if self._learn_result.final_packet is not None:
+                data[CONF_INITIAL_FRAME] = asdict(self._learn_result.final_packet.frame)
+                data[CONF_INITIAL_PACKET_SOURCE] = (
+                    self._learn_result.final_packet.source or "observed_packet"
+                )
             return await self._async_create_profile_entry(
                 title=data[CONF_NAME],
                 data=data,
@@ -347,15 +370,10 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         self._learn_result = None
         await self._async_dispose_learning_session()
-        domain_data = self.hass.data.setdefault(DOMAIN, {})
-        self._learn_session = await async_start_learning_session(
-            self.hass,
-            self._learn_input[CONF_BACKEND_TYPE],
-            timeout=float(domain_data.get(DATA_LEARNING_TIMEOUT, DEFAULT_LEARN_TIMEOUT_SECONDS)),
-            receive_timeout=float(
-                domain_data.get(DATA_LEARNING_RECEIVE_TIMEOUT, DEFAULT_RECEIVE_TIMEOUT_SECONDS)
-            ),
-        )
+        learn_session = await self._async_start_learning_session_or_fail()
+        if learn_session is None:
+            return await self.async_step_learn_failed()
+        self._learn_session = learn_session
         self._learn_prompt_index = 0
         return await self.async_step_learn_prompt()
 
@@ -387,12 +405,17 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_D1: "",
             CONF_C2: "",
             CONF_D2: "",
+            CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
             **default_feature_options(),
         }
 
         if self._learn_input is not None:
             suggested[CONF_NAME] = self._learn_input[CONF_NAME]
             suggested[CONF_BACKEND_TYPE] = self._learn_input[CONF_BACKEND_TYPE]
+            suggested[CONF_DEBUG_LOGGING] = self._learn_input.get(
+                CONF_DEBUG_LOGGING,
+                DEFAULT_DEBUG_LOGGING,
+            )
 
         if self._learn_result is not None and self._learn_result.remote_id is not None:
             suggested[CONF_REMOTE_ID] = remote_id_as_hex(self._learn_result.remote_id)
@@ -406,12 +429,48 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return LEARN_PROMPTS[self._learn_prompt_index][1]
         return EXTRA_LEARN_PROMPT[1]
 
+    def _current_learn_prompt_label(self) -> str:
+        """Return the short label for the current guided-learning prompt."""
+
+        if self._learn_prompt_index < len(LEARN_PROMPTS):
+            return LEARN_PROMPTS[self._learn_prompt_index][0]
+        return EXTRA_LEARN_PROMPT[0]
+
     async def _async_dispose_learning_session(self) -> None:
         """Close the current guided-learning backend session, if any."""
 
         if self._learn_session is not None:
             await async_close_learning_session(self._learn_session)
             self._learn_session = None
+
+    async def _async_start_learning_session_or_fail(self) -> LearnSession | None:
+        """Start guided learning or convert backend errors into flow-safe failures."""
+
+        assert self._learn_input is not None
+        domain_data = self.hass.data.setdefault(DOMAIN, {})
+        try:
+            return await async_start_learning_session(
+                self.hass,
+                self._learn_input[CONF_BACKEND_TYPE],
+                debug_logging=bool(self._learn_input.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)),
+                timeout=float(
+                    domain_data.get(DATA_LEARNING_TIMEOUT, DEFAULT_LEARN_TIMEOUT_SECONDS)
+                ),
+                receive_timeout=float(
+                    domain_data.get(
+                        DATA_LEARNING_RECEIVE_TIMEOUT,
+                        DEFAULT_RECEIVE_TIMEOUT_SECONDS,
+                    )
+                ),
+            )
+        except YardStickBackendUnavailableError as exc:
+            self._learn_result = LearnResult(
+                success=False,
+                warnings=[],
+                error_code=ERROR_BACKEND_UNAVAILABLE,
+                error=str(exc),
+            )
+            return None
 
 
 class Proflame2OptionsFlow(OptionsFlowWithReload):
@@ -433,6 +492,12 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
         if user_input is not None:
             updated = normalize_entry_options(self.config_entry.options)
             updated.update(normalize_feature_options(user_input))
+            updated[CONF_DEBUG_LOGGING] = bool(
+                user_input.get(
+                    CONF_DEBUG_LOGGING,
+                    updated.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING),
+                )
+            )
             return self.async_create_entry(data=updated)
 
         suggested_values = default_feature_options()

@@ -48,11 +48,18 @@ class FireplaceState:
     thermostat: bool = False
     cpi: bool = False
 
-    def validate(self, *, allow_thermostat: bool = False) -> None:
-        """Validate a state against the current v1 policy."""
+    def validate_transmit(
+        self,
+        *,
+        allow_thermostat: bool = False,
+        allow_power_off_flame: bool = False,
+    ) -> None:
+        """Validate a user-requested state for transmit/service use."""
         if not self.power:
-            if self.flame != 0:
+            if self.flame != 0 and not allow_power_off_flame:
                 raise ValueError("Flame must be 0 when power is off.")
+            if allow_power_off_flame and not 0 <= self.flame <= 6:
+                raise ValueError("Observed flame must be between 0 and 6 when power is off.")
         elif self.thermostat and allow_thermostat:
             if not 0 <= self.flame <= 6:
                 raise ValueError("Thermostat flame must be between 0 and 6.")
@@ -67,3 +74,37 @@ class FireplaceState:
 
         if self.thermostat and not allow_thermostat:
             raise ValueError("Native thermostat mode is disabled for v1.")
+
+    def validate_observed(self, *, allow_thermostat: bool = False) -> None:
+        """Validate a received/observed state decoded from protocol bytes."""
+
+        if not self.power:
+            if not 0 <= self.flame <= 6:
+                raise ValueError("Observed flame must be between 0 and 6 when power is off.")
+        elif self.thermostat and allow_thermostat:
+            if not 0 <= self.flame <= 6:
+                raise ValueError("Thermostat flame must be between 0 and 6.")
+        elif not 1 <= self.flame <= 6:
+            raise ValueError("Flame must be between 1 and 6 when power is on.")
+
+        if not 0 <= self.fan <= 6:
+            raise ValueError("Fan must be between 0 and 6.")
+
+        if not 0 <= self.light <= 7:
+            raise ValueError("Light must be between 0 and 7.")
+
+        if self.thermostat and not allow_thermostat:
+            raise ValueError("Native thermostat mode is disabled for v1.")
+
+    def validate(
+        self,
+        *,
+        allow_thermostat: bool = False,
+        allow_power_off_flame: bool = False,
+    ) -> None:
+        """Backward-compatible transmit validation entry point."""
+
+        self.validate_transmit(
+            allow_thermostat=allow_thermostat,
+            allow_power_off_flame=allow_power_off_flame,
+        )

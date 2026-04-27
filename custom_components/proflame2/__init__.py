@@ -14,7 +14,7 @@ from .version import INTEGRATION_VERSION
 
 __version__ = INTEGRATION_VERSION
 
-PLATFORMS: list["Platform"] = ["sensor"]
+PLATFORMS: list["Platform"] = ["sensor", "switch", "number"]
 
 
 async def async_setup(hass: "HomeAssistant", config: dict) -> bool:
@@ -28,10 +28,11 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
     """Set up Proflame 2 from a config entry."""
 
     from .runtime import async_setup_runtime_entry
-    from .services import async_register_services
+    from .services import async_register_services, async_start_active_listener
 
-    await async_setup_runtime_entry(hass, entry)
+    runtime_entry = await async_setup_runtime_entry(hass, entry)
     await async_register_services(hass)
+    await async_start_active_listener(hass, runtime_entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

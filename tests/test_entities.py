@@ -34,6 +34,7 @@ from custom_components.proflame2.const import (
     CONF_REMOTE_ID,
     DOMAIN,
 )
+from custom_components.proflame2.rf.yardstick import YardStickBackend
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +97,7 @@ async def test_primary_entity_and_last_issue_sensor_are_created(hass) -> None:
 
     assert primary is not None
     assert primary.state == "On · Flame 1"
+    assert primary.attributes["icon"] == "mdi:fireplace"
     assert primary.attributes["operational_status"] == "ready"
     assert primary.attributes["power"] == "On"
     assert primary.attributes["flame"] == "Level 1"
@@ -107,6 +109,35 @@ async def test_primary_entity_and_last_issue_sensor_are_created(hass) -> None:
 
     assert last_issue is not None
     assert last_issue.state == "No recent errors."
+
+
+async def test_primary_entity_icon_switches_with_power_state(hass) -> None:
+    """The primary fireplace icon should reflect on/off semantic state."""
+
+    entry = _add_entry(hass, title="Living Room Fireplace", remote_id=0x3B3F02)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    primary = hass.states.get(_primary_entity_id(entry.title))
+    assert primary is not None
+    assert primary.state == "On · Flame 1"
+    assert primary.attributes["icon"] == "mdi:fireplace"
+
+    await hass.services.async_call(
+        DOMAIN,
+        "set_state",
+        {
+            CONF_POWER: False,
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    primary = hass.states.get(_primary_entity_id(entry.title))
+    assert primary is not None
+    assert primary.state == "Off"
+    assert primary.attributes["icon"] == "mdi:fireplace-off"
+    assert primary.attributes["operational_status"] == "ready"
 
 
 async def test_enabled_optional_attributes_are_present_even_before_known_state(hass) -> None:
@@ -174,7 +205,7 @@ async def test_primary_entity_renders_human_readable_attributes(hass) -> None:
     primary = hass.states.get(_primary_entity_id(entry.title))
     assert primary is not None
     assert primary.state == "On · Flame 2 · Fan 1 · Light 3 · CPI On"
-    assert primary.attributes["operational_status"] == "last_command_succeeded"
+    assert primary.attributes["operational_status"] == "ready"
     assert primary.attributes["power"] == "On"
     assert primary.attributes["flame"] == "Level 2"
     assert primary.attributes["fan"] == "Level 1"
@@ -221,8 +252,8 @@ async def test_disabled_optional_attributes_are_hidden(hass) -> None:
 
     primary = hass.states.get(_primary_entity_id(entry.title))
     assert primary is not None
-    assert primary.state == "Error · Fan was ignored because it is disabled for this fireplace"
-    assert primary.attributes["operational_status"] == "last_command_succeeded"
+    assert primary.state == "On · Flame 1"
+    assert primary.attributes["operational_status"] == "ready"
     assert primary.attributes["power"] == "On"
     assert primary.attributes["flame"] == "Level 1"
     assert "fan" not in primary.attributes
@@ -254,8 +285,11 @@ async def test_diagnostic_entities_are_disabled_by_default(hass) -> None:
     assert hass.states.get(cmd1_entry.entity_id) is None
 
 
-async def test_last_issue_updates_after_failed_service_call(hass) -> None:
+async def test_last_issue_updates_after_failed_service_call(hass, monkeypatch) -> None:
     """The primary entity and last-issue sensor should reflect backend failures."""
+
+    async def fake_send(self, packet):
+        raise RuntimeError("RF backend is unavailable.")
 
     entry = _add_entry(
         hass,
@@ -263,6 +297,7 @@ async def test_last_issue_updates_after_failed_service_call(hass) -> None:
         remote_id=0x3B3F02,
         backend_type=BACKEND_YARDSTICK,
     )
+    monkeypatch.setattr(YardStickBackend, "send", fake_send)
     assert await hass.config_entries.async_setup(entry.entry_id)
 
     with pytest.raises(HomeAssistantError):
@@ -281,11 +316,11 @@ async def test_last_issue_updates_after_failed_service_call(hass) -> None:
     issue = hass.states.get(_secondary_entity_id(entry.title, "Last Issue"))
 
     assert primary is not None
-    assert primary.state == "Error · RF backend is unavailable"
-    assert primary.attributes["operational_status"] == "unavailable"
-    assert primary.attributes["last_issue"] == "RF backend is unavailable."
+    assert primary.state == "Off"
+    assert primary.attributes["operational_status"] == "failed"
+    assert primary.attributes["last_issue"] == "Transmit failed; controls reverted to last known state."
     assert issue is not None
-    assert issue.state == "RF backend is unavailable."
+    assert issue.state == "Transmit failed; controls reverted to last known state."
 
 
 async def test_primary_entity_shows_active_profile_only_after_apply_profile(hass) -> None:
@@ -339,7 +374,7 @@ async def test_primary_entity_shows_active_profile_only_after_apply_profile(hass
     assert primary is not None
     assert primary.state == "On · Flame 2 · Fan 1 · Evening Relax"
     assert primary.attributes["active_profile"] == "Evening Relax"
-    assert primary.attributes["operational_status"] == "last_command_succeeded"
+    assert primary.attributes["operational_status"] == "ready"
 
     await hass.services.async_call(
         DOMAIN,

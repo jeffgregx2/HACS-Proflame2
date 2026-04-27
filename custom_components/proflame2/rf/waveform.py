@@ -28,9 +28,9 @@ That source defines three things we can model confidently:
 
 SmartFire also delegates repetition to ``RfCat.RFxmit(..., repeat=repeat)`` and
 uses ``repeat = 4`` by default, with an inline comment of ``Default 5
-transmissions``. We preserve that behavior as transport metadata, but we do
-not invent a numeric inter-repeat spacing because the SmartFire Python source
-does not define one. That timing is currently a backend-firmware concern.
+transmissions``. We preserve that history as transport metadata, but the active
+Yard Stick transmit path now emits the observed five-frame burst explicitly in
+software instead of relying on the firmware repeat argument.
 """
 
 from __future__ import annotations
@@ -68,10 +68,10 @@ class ProflameTransmissionPlan:
     ``air_payload`` is the exact Manchester-encoded byte stream handed to the
     RF backend.
 
-    Repeat handling is modeled as SmartFire does it: the packet bytes are sent
-    once and repeated in the RF backend with ``RFxmit(..., repeat=4)``. The
-    Python source does not expose a numeric inter-repeat gap, so that remains
-    intentionally unspecified here.
+    Repeat handling metadata stays SmartFire-compatible: the packet bytes map to
+    a five-frame logical burst. Backends may use that metadata for reporting,
+    but the active Yard Stick transmit path sends five explicit payload
+    transmissions in software.
     """
 
     frame: ProflameFrame
@@ -87,7 +87,7 @@ class ProflameTransmissionPlan:
     notes: tuple[str, ...] = field(
         default_factory=lambda: (
             "SmartFire uses in-band sync symbols and disables modem sync rather than sending an external preamble.",
-            "Inter-repeat spacing is not defined in SmartFire Python; repetition is delegated to RfCat.RFxmit firmware.",
+            "Inter-repeat spacing is not defined in SmartFire Python; the active Yard Stick backend uses explicit software burst transmission instead of the firmware repeat argument.",
             "TODO: validate hardware-observed burst spacing with Yard Stick TX/RX capture before finalizing non-RfCat backends.",
         )
     )

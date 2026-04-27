@@ -28,15 +28,17 @@
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported"
+          "cpi": "CPI supported",
+          "debug_logging": "Enable packet debug log"
         }
       },
       "learn": {
         "title": "Learn fireplace profile",
-        "description": "Choose the RF backend to use for guided learning. After this step, listening starts automatically. Press Power first, then press one or two different remote buttons so the integration can confirm one stable remote profile while leaving the fireplace in a known state.",
+        "description": "Choose the RF backend to use for guided learning. After this step, listening starts automatically. The fireplace does not need to start in any specific state. The integration will guide you through a small sequence of button presses so it can confirm one stable remote profile.",
         "data": {
           "name": "Fireplace name",
-          "backend_type": "RF backend"
+          "backend_type": "RF backend",
+          "debug_logging": "Enable packet debug log"
         }
       },
       "learn_features": {
@@ -47,7 +49,8 @@
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported"
+          "cpi": "CPI supported",
+          "debug_logging": "Enable packet debug log"
         }
       },
       "learn_failed": {
@@ -100,7 +103,8 @@
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported"
+          "cpi": "CPI supported",
+          "debug_logging": "Enable packet debug log"
         }
       },
       "profiles": {

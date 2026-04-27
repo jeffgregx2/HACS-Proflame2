@@ -14,6 +14,7 @@ from custom_components.proflame2.const import (
     CONF_CPI,
     CONF_D1,
     CONF_D2,
+    CONF_DEBUG_LOGGING,
     CONF_FAN,
     CONF_FLAME,
     CONF_FRONT,
@@ -118,6 +119,7 @@ def test_normalize_manual_profile_input_splits_data_and_options() -> None:
         CONF_FRONT: False,
         CONF_AUX: False,
         CONF_CPI: True,
+        CONF_DEBUG_LOGGING: False,
         CONF_PROFILES: {},
     }
 
@@ -139,6 +141,7 @@ def test_feature_options_default_as_expected() -> None:
         CONF_FRONT: False,
         CONF_AUX: False,
         CONF_CPI: False,
+        CONF_DEBUG_LOGGING: False,
         CONF_PROFILES: {},
     }
 

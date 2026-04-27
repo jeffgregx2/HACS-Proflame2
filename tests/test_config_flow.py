@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +24,7 @@ from custom_components.proflame2.const import (
     CONF_CPI,
     CONF_D1,
     CONF_D2,
+    CONF_DEBUG_LOGGING,
     CONF_FAN,
     CONF_FLAME,
     CONF_FRONT,
@@ -38,8 +40,10 @@ from custom_components.proflame2.const import (
     DATA_LEARNING_TIMEOUT,
     DOMAIN,
 )
+from custom_components.proflame2.packet_debug import PacketDebugLogPaths
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.fake import FakeRFBackend
+from custom_components.proflame2.rf.yardstick import YardStickBackendUnavailableError
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +137,7 @@ async def test_config_flow_creates_entry_with_normalized_profile_data(hass) -> N
             CONF_FRONT: False,
             CONF_AUX: False,
             CONF_CPI: False,
+            CONF_DEBUG_LOGGING: False,
         },
     )
 
@@ -149,6 +154,7 @@ async def test_config_flow_creates_entry_with_normalized_profile_data(hass) -> N
         CONF_FRONT: False,
         CONF_AUX: False,
         CONF_CPI: False,
+        CONF_DEBUG_LOGGING: False,
         CONF_PROFILES: {},
     }
 
@@ -250,6 +256,7 @@ async def test_options_flow_updates_feature_flags(hass) -> None:
             CONF_FRONT: True,
             CONF_AUX: True,
             CONF_CPI: False,
+            CONF_DEBUG_LOGGING: False,
         },
     )
 
@@ -260,8 +267,147 @@ async def test_options_flow_updates_feature_flags(hass) -> None:
         CONF_FRONT: True,
         CONF_AUX: True,
         CONF_CPI: False,
+        CONF_DEBUG_LOGGING: False,
         CONF_PROFILES: {},
     }
+
+
+async def test_options_flow_persists_and_reopens_debug_logging(hass, monkeypatch) -> None:
+    """Feature options should save debug_logging and show it again when reopened."""
+
+    async def fake_enable_packet_debug_logging(_hass):
+        return PacketDebugLogPaths(
+            primary_log_path=Path("/config/proflame2_debug.log"),
+            decode_failure_log_path=Path("/config/proflame2_decode_failures.log"),
+        )
+
+    monkeypatch.setattr(
+        "custom_components.proflame2.runtime.async_enable_packet_debug_logging",
+        fake_enable_packet_debug_logging,
+    )
+
+    create_result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_USER},
+        data={
+            "name": "Living Room Fireplace",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_REMOTE_ID: "3b3f02",
+            CONF_C1: "5",
+            CONF_D1: "7",
+            CONF_C2: "1",
+            CONF_D2: "8",
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+        },
+    )
+    config_entry = create_result["result"]
+
+    options_result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    options_result = await hass.config_entries.options.async_configure(
+        options_result["flow_id"],
+        user_input={"next_step_id": "features"},
+    )
+    options_result = await hass.config_entries.options.async_configure(
+        options_result["flow_id"],
+        user_input={
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+            CONF_DEBUG_LOGGING: True,
+        },
+    )
+    assert options_result["type"] is FlowResultType.CREATE_ENTRY
+    assert options_result["data"][CONF_DEBUG_LOGGING] is True
+
+    hass.config_entries.async_update_entry(config_entry, options=options_result["data"])
+
+    reopened = await hass.config_entries.options.async_init(config_entry.entry_id)
+    reopened = await hass.config_entries.options.async_configure(
+        reopened["flow_id"],
+        user_input={"next_step_id": "features"},
+    )
+    assert reopened["type"] is FlowResultType.FORM
+    debug_marker = next(
+        key
+        for key in reopened["data_schema"].schema
+        if getattr(key, "schema", None) == CONF_DEBUG_LOGGING
+    )
+    assert debug_marker.description["suggested_value"] is True
+
+
+async def test_options_profile_edits_preserve_debug_logging(hass, monkeypatch) -> None:
+    """Editing unrelated profile options should not reset debug_logging."""
+
+    async def fake_enable_packet_debug_logging(_hass):
+        return PacketDebugLogPaths(
+            primary_log_path=Path("/config/proflame2_debug.log"),
+            decode_failure_log_path=Path("/config/proflame2_decode_failures.log"),
+        )
+
+    monkeypatch.setattr(
+        "custom_components.proflame2.runtime.async_enable_packet_debug_logging",
+        fake_enable_packet_debug_logging,
+    )
+
+    create_result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_USER},
+        data={
+            "name": "Living Room Fireplace",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_REMOTE_ID: "3b3f02",
+            CONF_C1: "5",
+            CONF_D1: "7",
+            CONF_C2: "1",
+            CONF_D2: "8",
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+        },
+    )
+    config_entry = create_result["result"]
+    hass.config_entries.async_update_entry(
+        config_entry,
+        options={
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+            CONF_DEBUG_LOGGING: True,
+            CONF_PROFILES: {},
+        },
+    )
+
+    options_result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    options_result = await hass.config_entries.options.async_configure(
+        options_result["flow_id"],
+        user_input={"next_step_id": "profiles"},
+    )
+    options_result = await hass.config_entries.options.async_configure(
+        options_result["flow_id"],
+        user_input={"next_step_id": "add_profile"},
+    )
+    options_result = await hass.config_entries.options.async_configure(
+        options_result["flow_id"],
+        user_input={
+            CONF_NAME: "Movie Night",
+            CONF_POWER: True,
+            CONF_FLAME: 1,
+            CONF_FAN: 0,
+            CONF_LIGHT: 2,
+        },
+    )
+    assert options_result["type"] is FlowResultType.CREATE_ENTRY
+    assert options_result["data"][CONF_DEBUG_LOGGING] is True
 
 
 async def test_multiple_config_entries_are_allowed(hass) -> None:
@@ -313,9 +459,10 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass) -> None:
 
     backend = FakeRFBackend()
     backend.queue_packets(
-        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x16, err2=0xEF),
-        _packet(remote_id=0x3B3F02, cmd1=0x31, err1=0x25, cmd2=0x26, err2=0xBC),
-        _packet(remote_id=0x3B3F02, cmd1=0x51, err1=0x83, cmd2=0x36, err2=0x8D),
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x00, err1=0x57, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x05, err2=0xBD),
     )
     hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
     hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
@@ -337,10 +484,14 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass) -> None:
         user_input={
             "name": "Living Room Fireplace",
             CONF_BACKEND_TYPE: "fake",
+            CONF_DEBUG_LOGGING: False,
         },
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     assert result["step_id"] == "learn_progress"
+    assert result["description_placeholders"]["instruction"] == (
+        "Press the Power button once. The fireplace does not need to start in any specific state."
+    )
 
     result = await _advance_guided_learning(hass, result["flow_id"], result)
     assert result["type"] is FlowResultType.FORM
@@ -354,6 +505,7 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass) -> None:
             CONF_FRONT: False,
             CONF_AUX: False,
             CONF_CPI: False,
+            CONF_DEBUG_LOGGING: False,
         },
     )
 
@@ -370,11 +522,12 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass) -> None:
 async def test_guided_learning_timeout_is_per_prompt_not_overall(hass) -> None:
     """Each guided prompt should get its own timeout window."""
 
-    backend = DelayedFakeRFBackend([0.03, 0.03, 0.03])
+    backend = DelayedFakeRFBackend([0.03, 0.03, 0.03, 0.03])
     backend.queue_packets(
-        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x16, err2=0xEF),
-        _packet(remote_id=0x3B3F02, cmd1=0x31, err1=0x25, cmd2=0x26, err2=0xBC),
-        _packet(remote_id=0x3B3F02, cmd1=0x51, err1=0x83, cmd2=0x36, err2=0x8D),
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x00, err1=0x57, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x05, err2=0xBD),
     )
     hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
     hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.04
@@ -391,6 +544,7 @@ async def test_guided_learning_timeout_is_per_prompt_not_overall(hass) -> None:
         user_input={
             "name": "Living Room Fireplace",
             CONF_BACKEND_TYPE: "fake",
+            CONF_DEBUG_LOGGING: False,
         },
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
@@ -418,6 +572,7 @@ async def test_builtin_fake_backend_auto_completes_learning(hass) -> None:
         user_input={
             "name": "Living Room Fireplace",
             CONF_BACKEND_TYPE: "fake",
+            CONF_DEBUG_LOGGING: False,
         },
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
@@ -483,6 +638,34 @@ async def test_config_flow_can_fallback_to_manual_after_learn_failure(hass) -> N
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_BACKEND_TYPE] == "fake"
+
+
+async def test_config_flow_surfaces_clean_yardstick_backend_unavailable_error(hass) -> None:
+    """Learning should fail cleanly when the Yard Stick backend cannot start."""
+
+    def failing_factory(backend_type: str):
+        assert backend_type == "yardstick"
+        raise YardStickBackendUnavailableError("No YARD Stick One device was found.")
+
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = failing_factory
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"next_step_id": "learn"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            "name": "Living Room Fireplace",
+            CONF_BACKEND_TYPE: "yardstick",
+            CONF_DEBUG_LOGGING: False,
+        },
+    )
+
+    assert result["type"] is FlowResultType.MENU
+    assert result["step_id"] == "learn_failed"
+    assert "No YARD Stick One device was found." in result["description_placeholders"]["error"]
 
 
 async def test_config_flow_retry_can_succeed_after_initial_failure(hass) -> None:

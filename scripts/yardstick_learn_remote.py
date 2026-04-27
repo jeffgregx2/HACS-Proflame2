@@ -13,7 +13,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.proflame2.protocol.ecc import derive_ecc_profile
-from custom_components.proflame2.rf.yardstick import YardStickBackend, YardStickDependencyError
+from custom_components.proflame2.rf.yardstick import (
+    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+    YARDSTICK_RX_LEARNING_PACKET_BYTES,
+    YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+    YardStickBackend,
+    YardStickDependencyError,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -24,14 +30,32 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--frequency-hz",
         type=int,
-        default=315_000_000,
-        help="Receive frequency in Hz. Defaults to 315000000.",
+        default=YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+        help=f"Receive frequency in Hz. Defaults to {YARDSTICK_RX_LEARNING_FREQUENCY_HZ}.",
+    )
+    parser.add_argument(
+        "--payload-length",
+        type=int,
+        default=YARDSTICK_RX_LEARNING_PACKET_BYTES,
+        help=f"RFrecv payload length in bytes. Defaults to {YARDSTICK_RX_LEARNING_PACKET_BYTES}.",
     )
     parser.add_argument(
         "--sample-timeout",
         type=float,
         default=1.0,
         help="Seconds to wait per RF receive attempt before polling again.",
+    )
+    parser.add_argument(
+        "--no-sweep",
+        action="store_true",
+        default=not YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+        help="Disable frequency sweeping and stay on the configured receive frequency.",
+    )
+    parser.add_argument(
+        "--sweep",
+        dest="no_sweep",
+        action="store_false",
+        help="Enable receive-frequency sweeping.",
     )
     return parser
 
@@ -40,6 +64,8 @@ async def _run(args: argparse.Namespace) -> int:
     backend = YardStickBackend(
         device_index=args.device_index,
         frequency_hz=args.frequency_hz,
+        packet_length_bytes=args.payload_length,
+        sweep_enabled=not args.no_sweep,
     )
     samples_by_remote: dict[int, list] = defaultdict(list)
 
