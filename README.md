@@ -270,9 +270,11 @@ Unsupported features should be feature-gated. Unknown protocol behavior should b
 
 ## Relationship to SmartFire
 
-SmartFire demonstrated that Proflame2 fireplaces can be controlled programmatically and provides valuable reference behavior for packet construction, ECC handling, and transmit timing.
+[SmartFire](https://github.com/johnellinwood/smartfire) demonstrated that Proflame2 fireplaces can be controlled programmatically and provides valuable reference behavior for packet construction, ECC handling, and transmit timing.
 
 This project builds on that idea with a different product goal: a production-quality Home Assistant integration with guided learning, pluggable RF backends, multi-fireplace support, feature-gated configuration, diagnostics, and atomic full-state control.
+
+I'd like the thank all of those that worked on SmartFire for the incredibly valuable information that made this project possible.
 
 ## Diagnostic Visibility
 
