@@ -530,7 +530,10 @@ async def test_tx_failure_rolls_back_pending_controls(hass, monkeypatch) -> None
     assert primary.state == "On · Flame 1"
     assert primary.attributes["operational_status"] == "failed"
     assert primary.attributes["pending_state"] is None
-    assert primary.attributes["last_issue"] == "Transmit failed; controls reverted to last known state."
+    assert (
+        primary.attributes["last_issue"]
+        == "Transmit failed because boom; controls reverted to last known state."
+    )
     assert runtime_entry.desired_state is None
 
 
@@ -931,7 +934,38 @@ async def test_debounced_send_timeout_fails_visibly(hass, monkeypatch) -> None:
     primary = hass.states.get(_sensor_entity_id(entry.title))
     assert primary is not None
     assert primary.attributes["operational_status"] == "failed"
-    assert primary.attributes["last_issue"] == "Transmit timed out; controls reverted to last known state."
+    assert (
+        primary.attributes["last_issue"]
+        == "Transmit timed out after 0 seconds; controls reverted to last known state."
+    )
+
+
+async def test_send_failure_logs_backend_cause_without_packet_debug(hass, monkeypatch, caplog) -> None:
+    """Normal HA logs should show the backend/controller failure cause without packet debug."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0.0
+
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+
+    async def fake_send(self, packet):
+        raise RuntimeError("controller unavailable")
+
+    monkeypatch.setattr(FakeRFBackend, "send", fake_send)
+    caplog.set_level(logging.ERROR, logger="custom_components.proflame2.services")
+
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 4},
+        blocking=True,
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+
+    assert "send execution failed" in caplog.text
+    assert "RuntimeError: controller unavailable" in caplog.text
 
 
 async def test_debug_logging_enables_packet_debug_for_control_send_path(

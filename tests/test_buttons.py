@@ -363,4 +363,7 @@ async def test_profile_button_press_failure_does_not_set_active_profile(hass, mo
 
     assert runtime_entry.last_applied_profile_id is None
     assert runtime_entry.last_applied_profile_name is None
-    assert runtime_entry.last_error == "Transmit failed; controls reverted to last known state."
+    assert (
+        runtime_entry.last_error
+        == "Transmit failed because boom; controls reverted to last known state."
+    )

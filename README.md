@@ -8,6 +8,8 @@ Instead of relying on repeated +/- button presses, this integration is designed 
 
 The integration supports three complementary control models: saved Profiles, direct Service Layer control, and debounced Home Assistant UI controls. Saved profiles can be applied through the `proflame2.apply_profile` service or through per-fireplace profile button entities for simple one-click operation, while `proflame2.set_state` provides direct atomic control when finer precision is needed.
 
+This integration is under active development. HACS custom-repository installation is supported for testing, but formal release packaging and default HACS repository inclusion are not complete yet.
+
 Profiles are intended for one-click activation of complete desired fireplace states such as Minimum Flame, Evening Relax, or Warmup. They make common day-to-day use simple and predictable.
 
 Direct service calls remain equally valid when finer control is needed for advanced automations, scripts, or custom logic. The goal is not to force one model, but to provide the right level of control for the use case while hiding unnecessary protocol details like Cmd1, Cmd2, and ECC values from normal operation.
@@ -126,6 +128,7 @@ Developer note:
 * Yard Stick TX packets are decodable by `rtl_433`.
 * Fireplace acceptance still requires physical RF validation against the real receiver.
 * `rflib` / Yard Stick lifecycle instability is still under investigation.
+* The Yard Stick / `rflib` stack may occasionally go offline and require a Home Assistant restart, container restart, or USB reattach to recover.
 * For bench TX work, prefer the long-lived `scripts/yardstick_tx_console.py` tool over repeated one-shot invocations.
 * The stock remote sends a command burst as multiple repeated identical frames. The fireplace appears to require multiple matching frames before accepting the command, so the Yard Stick backend uses explicit software repetition: five separate `RFxmit(payload)` calls mirroring the observed remote burst.
 
@@ -134,6 +137,19 @@ Developer note:
 Lower-cost support is planned for an ESPHome-based CC1101 backend. This is likely the best long-term deployment model for many users because it avoids direct USB attachment to the Home Assistant host and allows a small dedicated RF node to live near the fireplace.
 
 Until CC1101 support is implemented and validated, it should be treated as future support rather than a current capability.
+
+## Installation
+
+For early testing, install this integration as a HACS custom repository:
+
+1. Open `HACS`.
+2. Go to `Custom repositories`.
+3. Add repository URL:
+   `https://github.com/jeffgregx2/HACS-Proflame2`
+4. Choose category: `Integration`.
+5. Install the integration from HACS.
+
+There is no formal release yet. HACS should currently install from the repository default branch, which is intended to be `dev` for now.
 
 ## Example Home Assistant Usage
 
@@ -145,6 +161,7 @@ Direct proflame2.set_state remains available for advanced users, scripts, and cu
 
 **Apply a Saved Profile**
 
+```yaml
 alias: Fireplace - Evening Relax
 sequence:
   - service: proflame2.apply_profile
@@ -152,9 +169,11 @@ sequence:
       device_id: YOUR_FIREPLACE_DEVICE_ID
     data:
       profile_id: evening_relax
+```
 
 **Advanced Direct Control (set_state)**
 
+```yaml
 alias: Fireplace - Minimum Flame Ambience
 sequence:
   - service: proflame2.set_state
@@ -167,6 +186,7 @@ sequence:
       light: 2
       front: false
       aux: false
+```
 
 ## Current Development Status
 
@@ -187,6 +207,7 @@ sequence:
 * proflame2.set_state for advanced/direct control
 * single primary read-only fireplace entity that doubles as the compact Lovelace-facing summary
 * debounced Home Assistant control entities for power, flame, and enabled optional features
+* per-fireplace saved profile button entities
 * post-TX confirmation listening with requested vs observed state confidence tracking
 * restored-state bootstrapping so fireplaces come back with the last known state after restart
 * separate last issue sensor for alerting and automation
@@ -199,7 +220,7 @@ sequence:
 **Still in progress:**
 
 * protocol-faithful hardware timing validation
-* production backend setup and operational validation
+* production backend setup and long-run operational validation
 * expanded diagnostics polish
 * long-session Yard Stick / `rflib` lifecycle hardening
 * HACS release hardening
@@ -231,11 +252,14 @@ sequence:
 * native thermostat semantics
 * low-flame cold-start validation
 * Home Assistant thermostat policy
+* continuous active listening / passive observed-state synchronization as a production-ready feature
 * receiver echo based confirmation and sequencing
 
 ## Safety Notes
 
 This project controls a gas appliance. The implementation should be conservative by default and avoid unsupported assumptions.
+
+Users must validate behavior against their own fireplace hardware. Keep the original handheld remote available as a fallback control path. Do not treat this integration as a safety system or as a replacement for the fireplace's own safety controls.
 
 Startup behavior is especially important. A fireplace may need a high initial flame setting for reliable ignition before stepping down to a lower target level. The integration should support validated ignition behavior, including a startup settle period or receiver-echo-based sequencing if required.
 
@@ -258,6 +282,19 @@ Profile buttons do not debounce. Pressing a profile button applies that fireplac
 Protocol internals remain available as diagnostic sensors, but those entities stay disabled by default so the normal UI is not cluttered with command bytes, ECC details, waveform summaries, or backend internals.
 
 Protocol internals such as raw packet data, Cmd1/Cmd2, Err1/Err2, C/D values, waveform summaries, and backend details exist as Home Assistant diagnostic entities but are disabled by default.
+
+## Current Testing Notes
+
+Current code-level status is stronger than the packaging/release status:
+
+* guided learning works
+* Yard Stick RX works
+* Yard Stick TX works using the explicit five-frame software burst path
+* debounced Home Assistant controls exist and send through the same atomic state pipeline as `proflame2.set_state`
+* per-fireplace profile button entities exist
+* active listening and passive observed-state synchronization exist in the codebase, but should not yet be treated as production-ready features
+* ESPHome-based CC1101 support remains future work
+* Yard Stick lifecycle stability is still being improved
 
 ## Developer Note
 

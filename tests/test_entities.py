@@ -318,9 +318,15 @@ async def test_last_issue_updates_after_failed_service_call(hass, monkeypatch) -
     assert primary is not None
     assert primary.state == "Off"
     assert primary.attributes["operational_status"] == "failed"
-    assert primary.attributes["last_issue"] == "Transmit failed; controls reverted to last known state."
+    assert (
+        primary.attributes["last_issue"]
+        == "Transmit failed because RF backend is unavailable; controls reverted to last known state."
+    )
     assert issue is not None
-    assert issue.state == "Transmit failed; controls reverted to last known state."
+    assert (
+        issue.state
+        == "Transmit failed because RF backend is unavailable; controls reverted to last known state."
+    )
 
 
 async def test_primary_entity_shows_active_profile_only_after_apply_profile(hass) -> None:

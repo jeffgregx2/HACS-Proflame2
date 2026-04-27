@@ -196,6 +196,20 @@ def _log_control_event(
         get_packet_debug_logger().log(level, "control: " + prefixed_message, *args)
 
 
+def _transmit_failure_message(
+    reason: str,
+    *,
+    rollback: bool = True,
+) -> str:
+    """Return a user-facing transmit failure message with the underlying cause."""
+
+    normalized_reason = str(reason).strip().rstrip(".")
+    suffix = "; controls reverted to last known state." if rollback else "."
+    if not normalized_reason:
+        return f"Transmit failed{suffix}"
+    return f"Transmit failed because {normalized_reason}{suffix}"
+
+
 def _should_start_confirmation(
     hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry
 ) -> bool:
@@ -802,7 +816,10 @@ async def _async_execute_requested_state(
     except asyncio.TimeoutError as exc:
         runtime_entry.sending_in_progress = False
         runtime_entry.operational_status = OPERATIONAL_STATUS_FAILED
-        runtime_entry.last_error = "Transmit timed out; controls reverted to last known state."
+        runtime_entry.last_error = (
+            f"Transmit timed out after {BACKEND_SEND_TIMEOUT_SECONDS:.0f} seconds; "
+            "controls reverted to last known state."
+        )
         runtime_entry.last_send_result = None
         runtime_entry.desired_state = None
         _log_control_event(
@@ -834,7 +851,7 @@ async def _async_execute_requested_state(
     except (NotImplementedError, RuntimeError) as exc:
         runtime_entry.sending_in_progress = False
         runtime_entry.operational_status = OPERATIONAL_STATUS_FAILED
-        runtime_entry.last_error = "Transmit failed; controls reverted to last known state."
+        runtime_entry.last_error = _transmit_failure_message(str(exc))
         runtime_entry.last_send_result = None
         runtime_entry.desired_state = None
         _log_control_event(
@@ -846,11 +863,13 @@ async def _async_execute_requested_state(
             level=logging.ERROR,
         )
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
-        raise HomeAssistantError(str(exc)) from exc
+        raise HomeAssistantError(runtime_entry.last_error) from exc
     except Exception as exc:
         runtime_entry.sending_in_progress = False
         runtime_entry.operational_status = OPERATIONAL_STATUS_FAILED
-        runtime_entry.last_error = f"{type(exc).__name__}: {exc}"
+        runtime_entry.last_error = _transmit_failure_message(
+            f"{type(exc).__name__}: {exc}"
+        )
         runtime_entry.last_send_result = None
         runtime_entry.desired_state = None
         _LOGGER.exception(
@@ -879,7 +898,7 @@ async def _async_execute_requested_state(
             level=logging.ERROR,
         )
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
-        raise HomeAssistantError(str(exc)) from exc
+        raise HomeAssistantError(runtime_entry.last_error) from exc
 
     runtime_entry.sending_in_progress = False
     runtime_entry.last_send_result = send_result

@@ -2,12 +2,13 @@
   "domain": "proflame2",
   "name": "Proflame 2 Fireplace",
   "codeowners": [
-    "@jeffa"
+    "@jeffgregx2"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/jeffa/HACS-proflame2",
+  "documentation": "https://github.com/jeffgregx2/HACS-Proflame2",
+  "homeassistant": "2025.1.0",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/jeffa/HACS-proflame2/issues",
+  "issue_tracker": "https://github.com/jeffgregx2/HACS-Proflame2/issues",
   "loggers": [
     "custom_components.proflame2",
     "custom_components.proflame2.protocol",
@@ -15,6 +16,6 @@
     "custom_components.proflame2.packet_debug",
     "custom_components.proflame2.packet_debug.decode_failures"
   ],
-  "requirements": [ "rfcat" ],
+  "requirements": ["rfcat>=2.0.1"],
   "version": "0.1.0-dev"
 }
