@@ -1,0 +1,66 @@
+set_state:
+  name: Set fireplace state
+  description: Atomically apply a full Proflame 2 fireplace command.
+  target:
+    device:
+      integration: proflame2
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text: {}
+    power:
+      required: true
+      selector:
+        boolean: {}
+    flame:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 6
+          step: 1
+          mode: box
+    fan:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 6
+          step: 1
+          mode: box
+    light:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 6
+          step: 1
+          mode: box
+    front:
+      required: false
+      selector:
+        boolean: {}
+    aux:
+      required: false
+      selector:
+        boolean: {}
+    cpi:
+      required: false
+      selector:
+        boolean: {}
+apply_profile:
+  name: Apply saved profile
+  description: Apply one named saved fireplace profile for the targeted Proflame 2 fireplace.
+  target:
+    device:
+      integration: proflame2
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text: {}
+    profile_id:
+      required: true
+      selector:
+        text: {}

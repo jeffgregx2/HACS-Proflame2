@@ -1,0 +1,82 @@
+name: Stamp Release Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to stamp, for example 0.1.0
+        required: true
+      ref:
+        description: Branch or ref to update before creating the release tag
+        required: true
+        default: dev
+
+jobs:
+  stamp-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Resolve release version
+        id: resolve
+        shell: bash
+        run: |
+          version="${{ github.event.inputs.version }}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "Invalid version: $version" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp manifest.json and version.py
+        env:
+          RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          release_version = os.environ["RELEASE_VERSION"]
+          manifest_path = Path("custom_components/proflame2/manifest.json")
+          version_path = Path("custom_components/proflame2/version.py")
+
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["version"] = release_version
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          lines = version_path.read_text(encoding="utf-8").splitlines()
+          for index, line in enumerate(lines):
+              if line.startswith('DEFAULT_INTEGRATION_VERSION = '):
+                  lines[index] = f'DEFAULT_INTEGRATION_VERSION = "{release_version}"'
+                  break
+          else:
+              raise RuntimeError("DEFAULT_INTEGRATION_VERSION not found in version.py")
+
+          version_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Commit stamped version
+        env:
+          RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/proflame2/manifest.json custom_components/proflame2/version.py
+          if git diff --cached --quiet; then
+            echo "No version changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: stamp release version ${RELEASE_VERSION}"
+          git push origin HEAD:${{ github.event.inputs.ref }}
