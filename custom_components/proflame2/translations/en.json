@@ -29,7 +29,15 @@
           "front": "Front burner supported",
           "aux": "Aux supported",
           "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log"
+          "debug_logging": "Enable packet debug log",
+          "active_listening": "Enable active listening"
+        }
+      },
+      "manual_esphome": {
+        "title": "Choose LilyGO ESPHome device",
+        "description": "{setup_text}",
+        "data": {
+          "esphome_entry_id": "LilyGO ESPHome device"
         }
       },
       "learn": {
@@ -41,6 +49,13 @@
           "debug_logging": "Enable packet debug log"
         }
       },
+      "learn_esphome": {
+        "title": "Choose LilyGO ESPHome device",
+        "description": "{setup_text}",
+        "data": {
+          "esphome_entry_id": "LilyGO ESPHome device"
+        }
+      },
       "learn_features": {
         "title": "Select supported features",
         "description": "Learning found the permanent remote profile. Select the fireplace features that should be enabled.",
@@ -50,7 +65,8 @@
           "front": "Front burner supported",
           "aux": "Aux supported",
           "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log"
+          "debug_logging": "Enable packet debug log",
+          "active_listening": "Enable active listening"
         }
       },
       "learn_failed": {
@@ -75,10 +91,12 @@
       "invalid_profile": "The saved profile contains an invalid fireplace state.",
       "invalid_profile_name": "Profile name is required.",
       "duplicate_profile_id": "A saved profile with that name already exists.",
-      "unknown_profile": "Choose an existing saved profile."
+      "unknown_profile": "Choose an existing saved profile.",
+      "required": "This field is required.",
+      "invalid_esphome_entry": "Select a valid ESPHome device."
     },
     "abort": {
-      "already_configured": "A fireplace with this remote ID is already configured."
+      "already_configured": "A fireplace with this remote ID is already configured for this controller."
     }
   },
   "options": {
@@ -104,7 +122,8 @@
           "front": "Front burner supported",
           "aux": "Aux supported",
           "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log"
+          "debug_logging": "Enable packet debug log",
+          "active_listening": "Enable active listening"
         }
       },
       "profiles": {

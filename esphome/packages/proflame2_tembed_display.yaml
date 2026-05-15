@@ -1,0 +1,209 @@
+# Read-only LVGL display package for the LilyGO T-Embed CC1101.
+#
+# Uses the ESPHome built-in LilyGO T-Embed ST7789 preset model. That preset
+# carries the panel-specific geometry and offset values from ESPHome's mipi_spi
+# model table, avoiding custom dimensions/offset/transform tuning here.
+
+substitutions:
+  proflame2_display_name: "${friendly_name}"
+  proflame2_display_short_name: "---"
+
+packages:
+  proflame2_tembed_display_lvgl: !include ../packages/proflame2_tembed_display_lvgl.yaml
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+image:
+  - file: mdi:battery-outline
+    id: proflame2_header_battery_icon
+    type: grayscale
+    transparency: alpha_channel
+    resize: 12x12
+  - file: mdi:wifi
+    id: proflame2_header_wifi_icon
+    type: grayscale
+    transparency: alpha_channel
+    resize: 12x12
+  - file: mdi:home-assistant
+    id: proflame2_header_api_icon
+    type: grayscale
+    transparency: alpha_channel
+    resize: 12x12
+
+output:
+  - platform: ledc
+    id: proflame2_display_backlight_pwm
+    pin: GPIO21
+    frequency: 1000Hz
+
+binary_sensor:
+  # LilyGO T-Embed CC1101 vendor source maps the encoder center/BOOT key to GPIO0.
+  - platform: gpio
+    id: proflame2_center_button
+    internal: true
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+      ignore_strapping_warning: true
+    filters:
+      - delayed_on: 20ms
+      - delayed_off: 20ms
+    on_press:
+      then:
+        - lambda: |-
+            id(proflame2_radio).handle_center_button_press();
+
+display:
+  - platform: mipi_spi
+    id: proflame2_display_tft
+    model: T-EMBED
+    spi_id: proflame2_spi_bus
+    cs_pin: GPIO41
+    dc_pin: GPIO16
+    reset_pin: GPIO40
+    data_rate: 40MHz
+    invert_colors: true
+    auto_clear_enabled: false
+    update_interval: never
+
+interval:
+  - interval: 250ms
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(proflame2_radio).is_display_update_allowed() &&
+                     id(proflame2_radio).display_backlight_refresh_pending();
+          then:
+            - output.set_level:
+                id: proflame2_display_backlight_pwm
+                level: !lambda |-
+                  return id(proflame2_radio).get_display_backlight_level();
+            - lambda: |-
+                id(proflame2_radio).mark_display_backlight_refresh_applied();
+      - if:
+          condition:
+            lambda: |-
+              return id(proflame2_radio).is_display_update_allowed() &&
+                     id(proflame2_radio).display_refresh_pending();
+          then:
+            - lambda: |-
+                if (id(proflame2_radio).get_display_debug_mode()) {
+                  ESP_LOGD("proflame2_display", "refresh apply mode=%s header_name=%s", id(proflame2_radio).get_display_body_mode_text(), id(proflame2_radio).get_display_header_name_text().c_str());
+                }
+            - lvgl.label.update:
+                id: proflame2_header_battery_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_battery_text();
+            - lvgl.label.update:
+                id: proflame2_header_wifi_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_wifi_text();
+            - lvgl.label.update:
+                id: proflame2_header_api_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_api_text();
+            - lvgl.label.update:
+                id: proflame2_header_name
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_header_name_text();
+            - lvgl.label.update:
+                id: proflame2_header_mode
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_mode_badge_text();
+            - lvgl.widget.update:
+                id: proflame2_header_mode_badge
+                bg_color: !lambda |-
+                  const auto mode = id(proflame2_radio).get_display_mode_badge_text();
+                  if (mode == std::string("ERR")) return lv_color_hex(0x6D1F1F);
+                  if (mode == std::string("TX")) return lv_color_hex(0x124E66);
+                  if (mode == std::string("RX")) return lv_color_hex(0x1F5F3A);
+                  if (mode == std::string("LEARN")) return lv_color_hex(0x214860);
+                  return lv_color_hex(0x5B4512);
+                border_color: !lambda |-
+                  const auto mode = id(proflame2_radio).get_display_mode_badge_text();
+                  if (mode == std::string("ERR")) return lv_color_hex(0xFF6B6B);
+                  if (mode == std::string("TX")) return lv_color_hex(0x5AD1FF);
+                  if (mode == std::string("RX")) return lv_color_hex(0x6BE28C);
+                  if (mode == std::string("LEARN")) return lv_color_hex(0x79C7FF);
+                  return lv_color_hex(0xF2C94C);
+            - lvgl.label.update:
+                id: proflame2_power_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_power_value_text();
+            - lvgl.label.update:
+                id: proflame2_flame_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_flame_value_text();
+            - lvgl.label.update:
+                id: proflame2_fan_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_fan_value_text();
+            - lvgl.label.update:
+                id: proflame2_light_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_light_value_text();
+            - lvgl.label.update:
+                id: proflame2_pilot_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_pilot_value_text();
+            - lvgl.label.update:
+                id: proflame2_therm_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_therm_value_text();
+            - lvgl.label.update:
+                id: proflame2_front_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_front_value_text();
+            - lvgl.label.update:
+                id: proflame2_aux_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_aux_value_text();
+            - lvgl.label.update:
+                id: proflame2_right_panel_title
+                text: !lambda |-
+                  return std::string(id(proflame2_radio).get_display_right_panel_title_text());
+            - lvgl.label.update:
+                id: proflame2_right_panel_row1_label
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_right_panel_row1_label_text();
+            - lvgl.label.update:
+                id: proflame2_activity_action_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_right_panel_row1_value_text();
+            - lvgl.label.update:
+                id: proflame2_right_panel_row2_label
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_right_panel_row2_label_text();
+            - lvgl.label.update:
+                id: proflame2_activity_result_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_right_panel_row2_value_text();
+            - lvgl.label.update:
+                id: proflame2_right_panel_row3_label
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_right_panel_row3_label_text();
+            - lvgl.label.update:
+                id: proflame2_activity_age_value
+                text: !lambda |-
+                  return id(proflame2_radio).get_display_right_panel_row3_value_text();
+            - lambda: |-
+                id(proflame2_radio).mark_display_refresh_applied();
+      - if:
+          condition:
+            lambda: |-
+              return !id(proflame2_radio).is_display_update_allowed() &&
+                     id(proflame2_radio).display_refresh_pending();
+          then:
+            - lambda: |-
+                static uint32_t last_skip_log_ms = 0;
+                const uint32_t now = millis();
+                if ((now - last_skip_log_ms) >= 2000U) {
+                  last_skip_log_ms = now;
+                  ESP_LOGD("proflame2_display", "refresh skip busy");
+                }

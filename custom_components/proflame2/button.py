@@ -8,8 +8,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import CONF_NAME, CONF_PROFILE_ID, DOMAIN, MANUFACTURER
-from .profile import remote_id_as_hex
+from .const import CONF_NAME, CONF_PROFILE_ID, MANUFACTURER
+from .identity import fireplace_device_identifiers, runtime_entity_unique_id
 from .runtime import Proflame2RuntimeEntry, async_get_runtime_entries
 from .services import async_execute_apply_profile
 
@@ -52,9 +52,7 @@ class Proflame2ProfileButtonEntity(ButtonEntity):
         self._runtime_entry = runtime_entry
         self._profile_id = profile_id
         self._attr_name = profile_name
-        self._attr_unique_id = (
-            f"{runtime_entry.config_entry_id}_{profile_id}_profile_button"
-        )
+        self._attr_unique_id = runtime_entity_unique_id(runtime_entry.config_entry_id, f"{profile_id}_profile_button")
 
     @property
     def available(self) -> bool:
@@ -63,10 +61,11 @@ class Proflame2ProfileButtonEntity(ButtonEntity):
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
-            identifiers={(DOMAIN, remote_id_as_hex(self._runtime_entry.remote_profile.serial_id))},
+            identifiers=fireplace_device_identifiers(self._runtime_entry.fireplace_id),
             manufacturer=MANUFACTURER,
             name=self._runtime_entry.title,
             model=f"Backend: {self._runtime_entry.backend_type}",
+            via_device=self._runtime_entry.controller_device_identifier,
         )
 
     async def async_press(self) -> None:

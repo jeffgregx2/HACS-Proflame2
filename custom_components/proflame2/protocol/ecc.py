@@ -69,12 +69,7 @@ def build_err_byte(command: int, c_value: int, d_value: int) -> int:
     d_value &= 0x0F
     high_nibble = (command >> 4) & 0x0F
     low_nibble = command & 0x0F
-    err_high = (
-        c_value
-        ^ high_nibble
-        ^ ((high_nibble << 1) & 0x0F)
-        ^ ((low_nibble << 1) & 0x0F)
-    ) & 0x0F
+    err_high = (c_value ^ high_nibble ^ ((high_nibble << 1) & 0x0F) ^ ((low_nibble << 1) & 0x0F)) & 0x0F
     err_low = (d_value ^ high_nibble ^ low_nibble) & 0x0F
     return (err_high << 4) | err_low
 
@@ -118,9 +113,7 @@ def derive_cd_candidates(command: int, observed_err: int) -> tuple[int, ...]:
     """
 
     return tuple(
-        cd_value
-        for cd_value in range(0x100)
-        if build_err_byte(command, *split_cd(cd_value)) == (observed_err & 0xFF)
+        cd_value for cd_value in range(0x100) if build_err_byte(command, *split_cd(cd_value)) == (observed_err & 0xFF)
     )
 
 
@@ -137,9 +130,7 @@ def derive_unique_cd(command: int, observed_err: int) -> int:
     if not candidates:
         raise ValueError("No matching C/D candidate found for the observed Err byte.")
     if len(candidates) > 1:
-        raise ValueError(
-            f"Ambiguous C/D derivation for command 0x{command:02X}: {len(candidates)} candidates."
-        )
+        raise ValueError(f"Ambiguous C/D derivation for command 0x{command:02X}: {len(candidates)} candidates.")
     return candidates[0]
 
 
@@ -156,10 +147,7 @@ def derive_stable_cd(samples: Iterable[tuple[int, int]]) -> int:
     not yet collected enough distinguishing captures.
     """
 
-    candidate_sets = [
-        set(derive_cd_candidates(command, observed_err))
-        for command, observed_err in samples
-    ]
+    candidate_sets = [set(derive_cd_candidates(command, observed_err)) for command, observed_err in samples]
     if not candidate_sets:
         raise ValueError("At least one command/Err sample is required.")
 
@@ -167,15 +155,11 @@ def derive_stable_cd(samples: Iterable[tuple[int, int]]) -> int:
     if not stable_candidates:
         raise ValueError("No stable C/D value matches all provided samples.")
     if len(stable_candidates) > 1:
-        raise ValueError(
-            f"Ambiguous stable C/D derivation: {len(stable_candidates)} candidates remain."
-        )
+        raise ValueError(f"Ambiguous stable C/D derivation: {len(stable_candidates)} candidates remain.")
     return next(iter(stable_candidates))
 
 
-def derive_ecc_profile(
-    cmd1_samples: Iterable[tuple[int, int]], cmd2_samples: Iterable[tuple[int, int]]
-) -> ECCProfile:
+def derive_ecc_profile(cmd1_samples: Iterable[tuple[int, int]], cmd2_samples: Iterable[tuple[int, int]]) -> ECCProfile:
     """Derive the stable ECC profile from Cmd1 and Cmd2 capture sets.
 
     This is the bridge between raw capture analysis and the protocol model used

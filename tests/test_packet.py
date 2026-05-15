@@ -30,7 +30,7 @@ def test_packet_from_frame_decodes_state_and_preserves_metadata() -> None:
     packet = ProflamePacket.from_frame(
         frame,
         source="yardstick",
-        raw=b"\xAA\xBB",
+        raw=b"\xaa\xbb",
         received_at=received_at,
         rssi=-42.5,
     )
@@ -38,7 +38,7 @@ def test_packet_from_frame_decodes_state_and_preserves_metadata() -> None:
     assert packet.remote_id == 0x3B3F02
     assert packet.frame == frame
     assert packet.state == FireplaceState(power=True, flame=6, fan=2, light=3)
-    assert packet.raw == b"\xAA\xBB"
+    assert packet.raw == b"\xaa\xbb"
     assert packet.source == "yardstick"
     assert packet.received_at == received_at
     assert packet.rssi == -42.5

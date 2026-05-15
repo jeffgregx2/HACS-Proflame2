@@ -9,8 +9,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN, MANUFACTURER, CONF_AUX, CONF_CPI, CONF_FRONT, CONF_POWER
-from .profile import remote_id_as_hex
+from .const import CONF_AUX, CONF_CPI, CONF_FRONT, CONF_POWER, MANUFACTURER
+from .identity import fireplace_device_identifiers, runtime_entity_unique_id
 from .runtime import (
     Proflame2RuntimeEntry,
     async_get_runtime_entries,
@@ -30,9 +30,7 @@ async def async_setup_entry(
     runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
     entities: list[SwitchEntity] = [Proflame2SwitchEntity(runtime_entry, CONF_POWER, "Power", "mdi:power")]
     if runtime_entry.features.front:
-        entities.append(
-            Proflame2SwitchEntity(runtime_entry, CONF_FRONT, "Front Burner", "mdi:fire")
-        )
+        entities.append(Proflame2SwitchEntity(runtime_entry, CONF_FRONT, "Front Burner", "mdi:fire"))
     if runtime_entry.features.aux:
         entities.append(Proflame2SwitchEntity(runtime_entry, CONF_AUX, "Aux", "mdi:toggle-switch"))
     if runtime_entry.features.cpi:
@@ -57,17 +55,16 @@ class Proflame2SwitchEntity(SwitchEntity):
         self._key = key
         self._attr_name = name
         self._attr_icon = icon
-        self._attr_unique_id = (
-            f"{remote_id_as_hex(runtime_entry.remote_profile.serial_id)}_{key}_control"
-        )
+        self._attr_unique_id = runtime_entity_unique_id(runtime_entry.config_entry_id, f"{key}_control")
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
-            identifiers={(DOMAIN, remote_id_as_hex(self._runtime_entry.remote_profile.serial_id))},
+            identifiers=fireplace_device_identifiers(self._runtime_entry.fireplace_id),
             manufacturer=MANUFACTURER,
             name=self._runtime_entry.title,
             model=f"Backend: {self._runtime_entry.backend_type}",
+            via_device=self._runtime_entry.controller_device_identifier,
         )
 
     async def async_added_to_hass(self) -> None:

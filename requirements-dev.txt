@@ -7,11 +7,17 @@
 # Python 3.13+ path: modern Home Assistant custom-component test stack.
 pytest>=8.4.2; python_version >= "3.13"
 pytest-asyncio>=0.23.1; python_version >= "3.13"
+pytest-cov>=6.0.0; python_version >= "3.13"
 pytest-homeassistant-custom-component>=0.13.211,<0.14; python_version >= "3.13"
+black>=25.1.0; python_version >= "3.13"
+ruff>=0.8.0; python_version >= "3.13"
 
 # Python 3.9 fallback: older Home Assistant test stack that matches the system
 # interpreter, though some native dependencies may still fail to build on newer
 # macOS toolchains.
 pytest==7.2.0; python_version < "3.13"
 pytest-asyncio==0.20.2; python_version < "3.13"
+pytest-cov>=4.0.0; python_version < "3.13"
 pytest-homeassistant-custom-component>=0.12.31,<0.13; python_version < "3.13"
+black>=24.8.0; python_version < "3.13"
+ruff>=0.6.0; python_version < "3.13"

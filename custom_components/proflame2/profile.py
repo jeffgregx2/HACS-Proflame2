@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any
 
-from .protocol.models import FireplaceFeatures
-
-from .control import StateValidationError, build_requested_state
 from .const import (
-    available_backend_types,
+    CONF_ACTIVE_LISTENING,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -19,19 +16,27 @@ from .const import (
     CONF_D1,
     CONF_D2,
     CONF_DEBUG_LOGGING,
+    CONF_ESPHOME_ENTRY_ID,
     CONF_FAN,
+    CONF_FIREPLACE_SHORT_NAME,
+    CONF_FLAME,
     CONF_FRONT,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
-    CONF_FLAME,
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
-    DEFAULT_FEATURE_OPTIONS,
     DEFAULT_DEBUG_LOGGING,
+    DEFAULT_FEATURE_OPTIONS,
+    DEFAULT_FIREPLACE_SHORT_NAME,
     FEATURE_OPTION_KEYS,
+    MAX_FIREPLACE_SHORT_NAME_LENGTH,
+    available_backend_types,
 )
+from .control import StateValidationError, build_requested_state
+from .protocol.models import FireplaceFeatures
+from .rf.registry import normalize_controller_id
 
 
 class InvalidRemoteIdError(ValueError):
@@ -104,6 +109,15 @@ def parse_nibble(value: str | int) -> int:
     return nibble
 
 
+def sanitize_fireplace_short_name(value: Any) -> str:
+    """Normalize the short name shown on the LilyGO display."""
+
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return DEFAULT_FIREPLACE_SHORT_NAME
+    return text[:MAX_FIREPLACE_SHORT_NAME_LENGTH].upper()
+
+
 def default_feature_options() -> dict[str, bool]:
     """Return the default feature flag options."""
 
@@ -116,6 +130,8 @@ def default_entry_options() -> dict[str, Any]:
     return {
         **default_feature_options(),
         CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
+        CONF_ACTIVE_LISTENING: False,
+        CONF_FIREPLACE_SHORT_NAME: DEFAULT_FIREPLACE_SHORT_NAME,
         CONF_PROFILES: {},
     }
 
@@ -143,6 +159,10 @@ def normalize_entry_options(
 
     normalized.update(normalize_feature_options(raw_options))
     normalized[CONF_DEBUG_LOGGING] = bool(raw_options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
+    normalized[CONF_ACTIVE_LISTENING] = bool(raw_options.get(CONF_ACTIVE_LISTENING, False))
+    normalized[CONF_FIREPLACE_SHORT_NAME] = sanitize_fireplace_short_name(
+        raw_options.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
+    )
     normalized[CONF_PROFILES] = normalize_profiles(
         raw_options.get(CONF_PROFILES, {}),
         features=features or fireplace_features_from_options(normalized),
@@ -153,7 +173,7 @@ def normalize_entry_options(
 def normalize_manual_profile_input(user_input: dict[str, Any]) -> ManualProfileInput:
     """Normalize config-flow input into config entry data and options."""
 
-    backend_type = str(user_input[CONF_BACKEND_TYPE]).strip().lower()
+    backend_type = normalize_controller_id(user_input[CONF_BACKEND_TYPE])
     if backend_type not in available_backend_types():
         raise InvalidBackendError(f"Unsupported backend type: {backend_type}")
 
@@ -166,6 +186,9 @@ def normalize_manual_profile_input(user_input: dict[str, Any]) -> ManualProfileI
         CONF_C2: parse_nibble(user_input[CONF_C2]),
         CONF_D2: parse_nibble(user_input[CONF_D2]),
     }
+    linked_esphome_entry_id = user_input.get(CONF_ESPHOME_ENTRY_ID)
+    if isinstance(linked_esphome_entry_id, str) and linked_esphome_entry_id:
+        data[CONF_ESPHOME_ENTRY_ID] = linked_esphome_entry_id
     return ManualProfileInput(
         data=data,
         options=normalize_entry_options(user_input),
@@ -216,9 +239,7 @@ def normalize_profiles(
             profile_id=str(profile_id),
         )
         if normalized_profile[CONF_PROFILE_ID] in normalized:
-            raise DuplicateProfileIdError(
-                f"Duplicate profile id: {normalized_profile[CONF_PROFILE_ID]}"
-            )
+            raise DuplicateProfileIdError(f"Duplicate profile id: {normalized_profile[CONF_PROFILE_ID]}")
         normalized[normalized_profile[CONF_PROFILE_ID]] = normalized_profile
     return normalized
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 homeassistant = pytest.importorskip("homeassistant")
@@ -15,6 +17,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.proflame2.const import (
     BACKEND_FAKE,
     BACKEND_YARDSTICK,
+    CONF_ACTION_LABEL,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -32,8 +35,9 @@ from custom_components.proflame2.const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
-    DATA_RUNTIME_ENTRIES,
+    CONF_THERMOSTAT,
     DOMAIN,
+    SERVICE_DISPLAY_STATE_UPDATE,
 )
 from custom_components.proflame2.diagnostics import async_get_config_entry_diagnostics
 from custom_components.proflame2.rf.base import SendResult
@@ -121,6 +125,37 @@ async def test_set_state_with_one_fireplace_sends_exactly_one_frame(hass) -> Non
     assert runtime_entry.last_packet.transmission_plan is not None
 
 
+async def test_set_state_emits_presend_diagnostic(hass, caplog) -> None:
+    """Explicit service sends should log the encoded frame and active profile."""
+
+    entry = _add_entry(hass, title="Living Room", remote_id=0x3B3F02)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+
+    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+
+    await hass.services.async_call(
+        DOMAIN,
+        "set_state",
+        {
+            CONF_POWER: True,
+            CONF_FLAME: 6,
+            CONF_FAN: 0,
+            CONF_LIGHT: 0,
+        },
+        blocking=True,
+    )
+
+    assert "PROFLAME_TX_PRESEND" in caplog.text
+    assert f"config_entry_id={entry.entry_id}" in caplog.text
+    assert "source=homeassistant_service" in caplog.text
+    assert "controller_id=fake" in caplog.text
+    assert "serial_id=3b3f02" in caplog.text
+    assert "c1=5 d1=7 c2=1 d2=8" in caplog.text
+    assert "cmd1=0x01 err1=0x76 cmd2=0x06 err2=0xDE" in caplog.text
+    assert "payload_bit_length=182" in caplog.text
+    assert "repeat_count=5" in caplog.text
+
+
 async def test_set_state_uses_yardstick_backend_when_available(hass, monkeypatch) -> None:
     """Service-layer TX should dispatch through Yard Stick instead of blocking early."""
 
@@ -190,15 +225,120 @@ async def test_diagnostics_include_last_send_result(hass) -> None:
         "cpi": False,
         "thermostat": False,
     }
-    assert runtime["last_encoded_frame"] == {
-        "serial_id": 0x3B3F02,
-        "cmd1": 0x01,
-        "err1": 0x76,
-        "cmd2": 0x01,
-        "err2": 0x39,
-    }
-    assert runtime["last_send_result"]["backend_name"] == "fake"
-    assert runtime["last_send_result"]["warnings"] == ()
+
+
+async def test_display_state_update_service_calls_backend_without_tx(hass) -> None:
+    entry = _add_entry(
+        hass,
+        title="Living Room",
+        remote_id=0x3B3F02,
+        backend_type=BACKEND_FAKE,
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    received = {}
+
+    class _BackendStub:
+        async def update_display_state(self, display_state):
+            received["display_state"] = display_state
+
+        async def close(self, *, reason: str | None = None):
+            return None
+
+    runtime_entry.backend = _BackendStub()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DISPLAY_STATE_UPDATE,
+        {
+            CONF_CONFIG_ENTRY_ID: entry.entry_id,
+            CONF_POWER: True,
+            CONF_FLAME: 4,
+            CONF_FAN: 2,
+            CONF_LIGHT: 1,
+            CONF_THERMOSTAT: True,
+            CONF_AUX: False,
+            CONF_ACTION_LABEL: "Startup sync",
+        },
+        blocking=True,
+    )
+
+    display_state = received["display_state"]
+    assert display_state.power is True
+    assert display_state.flame == 4
+    assert display_state.fan == 2
+    assert display_state.light == 1
+    assert display_state.thermostat is True
+    assert display_state.aux is False
+    assert display_state.action_label == "Startup sync"
+
+
+async def test_runtime_display_state_sync_pushes_current_known_state(hass) -> None:
+    from custom_components.proflame2.services import async_sync_runtime_display_state
+
+    entry = _add_entry(
+        hass,
+        title="Living Room",
+        remote_id=0x3B3F02,
+        backend_type=BACKEND_FAKE,
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    received = {}
+
+    class _BackendStub:
+        async def update_display_state(self, display_state):
+            received["display_state"] = display_state
+
+        async def close(self, *, reason: str | None = None):
+            return None
+
+    runtime_entry.backend = _BackendStub()
+
+    await async_sync_runtime_display_state(hass, runtime_entry, action_label="Startup sync")
+
+    display_state = received["display_state"]
+    assert display_state.power is True
+    assert display_state.flame == 1
+    assert display_state.fan == 0
+    assert display_state.light == 0
+    assert display_state.front is False
+    assert display_state.aux is False
+    assert display_state.action_label == "Startup sync"
+
+
+async def test_setup_entry_defers_display_sync_when_linked_esphome_not_ready(hass, monkeypatch) -> None:
+    entry = _add_entry(
+        hass,
+        title="Living Room",
+        remote_id=0x3B3F02,
+        backend_type=BACKEND_FAKE,
+    )
+
+    from custom_components.proflame2 import services as services_module
+
+    async def _raise_not_ready(*args, **kwargs):
+        raise RuntimeError(
+            "ESPHome backend is unavailable: Linked ESPHome entry is not loaded or has no runtime_data: abc123"
+        )
+
+    created = []
+
+    def _capture_task(coro):
+        created.append(coro)
+        return None
+
+    monkeypatch.setattr(services_module, "async_sync_runtime_display_state", _raise_not_ready)
+    monkeypatch.setattr(hass, "async_create_task", _capture_task)
+
+    try:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        assert created
+    finally:
+        for coro in created:
+            coro.close()
 
 
 @pytest.mark.parametrize(
@@ -252,9 +392,7 @@ async def test_disabled_optional_feature_is_ignored_with_warning(
     assert frame.err1 == 0x76
     assert frame.err2 == 0x39
     assert runtime_entry.last_send_result is not None
-    assert runtime_entry.last_send_result.warnings == (
-        f"Ignored {field} because it is disabled for this fireplace.",
-    )
+    assert runtime_entry.last_send_result.warnings == (f"Ignored {field} because it is disabled for this fireplace.",)
 
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     assert diagnostics["runtime"]["last_send_result"]["warnings"] == (
@@ -413,6 +551,76 @@ async def test_selected_fireplace_target_works(hass) -> None:
     assert len(first_backend.sent_packets) == 0
     assert len(second_backend.sent_packets) == 1
     assert second_backend.sent_packets[0].frame.serial_id == 0x3B3F03
+
+
+async def test_same_serial_different_backends_device_target_routes_to_requested_runtime(hass, monkeypatch) -> None:
+    """Distinct devices for the same serial should still route to the correct backend."""
+
+    async def fake_send(self, packet):
+        return SendResult(
+            packet=packet,
+            backend_name="yardstick",
+            warnings=packet.warnings,
+        )
+
+    monkeypatch.setattr(YardStickBackend, "send", fake_send)
+
+    first = _add_entry(
+        hass,
+        title="LilyGO Fireplace",
+        remote_id=0x3B3F02,
+        backend_type=BACKEND_FAKE,
+    )
+    assert await hass.config_entries.async_setup(first.entry_id)
+    second = _add_entry(
+        hass,
+        title="YardStick Fireplace",
+        remote_id=0x3B3F02,
+        backend_type=BACKEND_YARDSTICK,
+    )
+    assert await hass.config_entries.async_setup(second.entry_id)
+
+    second_runtime = async_get_runtime_entries(hass)[second.entry_id]
+    await hass.services.async_call(
+        DOMAIN,
+        "set_state",
+        {
+            CONF_POWER: True,
+            CONF_FLAME: 1,
+        },
+        blocking=True,
+        target={"device_id": second_runtime.device_id},
+    )
+
+    first_backend = async_get_runtime_entries(hass)[first.entry_id].backend
+    assert first_backend is not None
+    assert len(first_backend.sent_packets) == 0
+    assert second_runtime.last_send_result is not None
+    assert second_runtime.last_send_result.backend_name == "yardstick"
+
+
+async def test_ambiguous_device_target_fails_loudly(hass) -> None:
+    """Service resolution should refuse ambiguous device->runtime mappings."""
+
+    first = _add_entry(hass, title="First", remote_id=0x3B3F02)
+    assert await hass.config_entries.async_setup(first.entry_id)
+    second = _add_entry(hass, title="Second", remote_id=0x3B3F03)
+    assert await hass.config_entries.async_setup(second.entry_id)
+
+    runtime_entries = async_get_runtime_entries(hass)
+    runtime_entries[second.entry_id].device_id = runtime_entries[first.entry_id].device_id
+
+    with pytest.raises(HomeAssistantError, match="Ambiguous Proflame2 device target"):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_state",
+            {
+                CONF_POWER: True,
+                CONF_FLAME: 1,
+            },
+            blocking=True,
+            target={"device_id": runtime_entries[first.entry_id].device_id},
+        )
 
 
 async def test_config_entry_id_target_works(hass) -> None:

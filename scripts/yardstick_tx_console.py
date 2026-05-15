@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import dataclass
-from pathlib import Path
 import shlex
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -16,9 +16,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from custom_components.proflame2.protocol.models import FireplaceState, RemoteProfile
-from custom_components.proflame2.rf.yardstick import YardStickBackend, YardStickBackendUnavailableError
-from yardstick_send_test import _build_packet_for_cli, _build_parser as _build_send_parser, _build_profile, _confirm_send, _print_tx_preview
+from yardstick_send_test import _build_packet_for_cli, _build_profile, _confirm_send, _print_tx_preview
+from yardstick_send_test import _build_parser as _build_send_parser
+
+from custom_components.proflame2.protocol.models import RemoteProfile
+from custom_components.proflame2.rf.yardstick import (
+    YARDSTICK_TX_REPEAT_STRATEGIES,
+    YardStickBackend,
+    YardStickBackendUnavailableError,
+)
 
 
 @dataclass
@@ -30,6 +36,7 @@ class TxConsoleSession:
     tx_frequency_hz: int
     transmissions: int
     inter_frame_gap_ms: float
+    repeat_strategy: str
     yes: bool
     no_close: bool
     last_power: str = "on"
@@ -67,6 +74,7 @@ def _command_namespace(
         tx_frequency=session.tx_frequency_hz,
         transmissions=session.transmissions,
         inter_frame_gap_ms=session.inter_frame_gap_ms,
+        repeat_strategy=session.repeat_strategy,
         preserve_off_flame=preserve_off_flame,
         no_close=session.no_close,
         yes=session.yes,
@@ -78,7 +86,7 @@ def _print_status(session: TxConsoleSession) -> None:
         "Status: "
         f"remote_id=0x{session.profile.serial_id:06X} "
         f"tx_frequency_hz={session.tx_frequency_hz} "
-        "mode=software_repeat "
+        f"mode={session.repeat_strategy} "
         f"transmissions={session.transmissions} "
         f"inter_frame_gap_ms={session.inter_frame_gap_ms} "
         f"yes={session.yes} "
@@ -96,8 +104,9 @@ def _print_help() -> None:
     print("  off <flame>           Send remote-like Power Off preserving the provided flame bits.")
     print("  send                  Re-send the last command.")
     print("  freq <hz>             Set TX frequency override for later sends.")
-    print("  transmissions <n>     Set explicit software burst frame count.")
-    print("  gap <ms>              Set inter-frame software burst gap in milliseconds.")
+    print("  transmissions <n>     Set logical repeats embedded in one RFxmit payload.")
+    print("  strategy <name>       Set Yard Stick repeat strategy for later sends.")
+    print("  gap <ms>              Set repeat gap in milliseconds.")
     print("  status                Show current session settings.")
     print("  help                  Show this help.")
     print("  quit / exit           Leave the console.")
@@ -118,6 +127,7 @@ async def _send_current_state(session: TxConsoleSession) -> None:
         tx_frequency_hz=session.tx_frequency_hz,
         transmissions=session.transmissions,
         inter_frame_gap_ms=session.inter_frame_gap_ms,
+        repeat_strategy=session.repeat_strategy,
         preserve_off_flame=session.last_preserve_off_flame,
         no_close=session.no_close,
     )
@@ -125,11 +135,7 @@ async def _send_current_state(session: TxConsoleSession) -> None:
         print("Transmit cancelled.")
         return
     result = await session.backend.send(packet)
-    print(
-        "Transmit complete: "
-        f"backend={result.backend_name} "
-        f"remote=0x{result.packet.remote_id:06X}"
-    )
+    print("Transmit complete: " f"backend={result.backend_name} " f"remote=0x{result.packet.remote_id:06X}")
 
 
 async def _handle_command(session: TxConsoleSession, line: str) -> bool:
@@ -162,7 +168,18 @@ async def _handle_command(session: TxConsoleSession, line: str) -> bool:
             return True
         session.transmissions = int(tokens[1])
         session.backend._tx_transmissions = session.transmissions
-        print(f"Software transmissions set to {session.transmissions}")
+        print(f"Embedded logical repeats set to {session.transmissions}")
+        return True
+    if command == "strategy":
+        if len(tokens) != 2:
+            print("Usage: strategy <embedded_repeat_payload|software_repeat>")
+            return True
+        if tokens[1] not in YARDSTICK_TX_REPEAT_STRATEGIES:
+            print(f"Unknown strategy: {tokens[1]}")
+            return True
+        session.repeat_strategy = tokens[1]
+        session.backend._tx_repeat_strategy = session.repeat_strategy
+        print(f"Repeat strategy set to {session.repeat_strategy}")
         return True
     if command == "gap":
         if len(tokens) != 2:
@@ -170,7 +187,7 @@ async def _handle_command(session: TxConsoleSession, line: str) -> bool:
             return True
         session.inter_frame_gap_ms = float(tokens[1])
         session.backend._tx_inter_frame_gap_ms = session.inter_frame_gap_ms
-        print(f"Inter-frame gap set to {session.inter_frame_gap_ms} ms")
+        print(f"Embedded repeat gap set to {session.inter_frame_gap_ms} ms")
         return True
     if command == "on":
         session.last_power = "on"
@@ -204,6 +221,7 @@ async def _run(args: argparse.Namespace) -> int:
         tx_frequency_hz=args.tx_frequency,
         tx_transmissions=args.transmissions,
         tx_inter_frame_gap_ms=args.inter_frame_gap_ms,
+        tx_repeat_strategy=args.repeat_strategy,
     )
     session = TxConsoleSession(
         profile=profile,
@@ -211,6 +229,7 @@ async def _run(args: argparse.Namespace) -> int:
         tx_frequency_hz=args.tx_frequency,
         transmissions=args.transmissions,
         inter_frame_gap_ms=args.inter_frame_gap_ms,
+        repeat_strategy=args.repeat_strategy,
         yes=args.yes,
         no_close=args.no_close,
         last_power=args.power,

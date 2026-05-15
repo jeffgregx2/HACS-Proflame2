@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.number import NumberEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN, MANUFACTURER, CONF_FAN, CONF_FLAME, CONF_LIGHT
-from .profile import remote_id_as_hex
+from .const import CONF_FAN, CONF_FLAME, CONF_LIGHT, MANUFACTURER
+from .identity import fireplace_device_identifiers, runtime_entity_unique_id
 from .runtime import (
     Proflame2RuntimeEntry,
     async_get_runtime_entries,
@@ -33,13 +33,9 @@ async def async_setup_entry(
         Proflame2NumberEntity(runtime_entry, CONF_FLAME, "Flame", 1, 6, "mdi:fire"),
     ]
     if runtime_entry.features.fan:
-        entities.append(
-            Proflame2NumberEntity(runtime_entry, CONF_FAN, "Fan", 0, 6, "mdi:fan")
-        )
+        entities.append(Proflame2NumberEntity(runtime_entry, CONF_FAN, "Fan", 0, 6, "mdi:fan"))
     if runtime_entry.features.light:
-        entities.append(
-            Proflame2NumberEntity(runtime_entry, CONF_LIGHT, "Light", 0, 6, "mdi:lightbulb")
-        )
+        entities.append(Proflame2NumberEntity(runtime_entry, CONF_LIGHT, "Light", 0, 6, "mdi:lightbulb"))
     async_add_entities(entities)
 
 
@@ -66,17 +62,16 @@ class Proflame2NumberEntity(NumberEntity):
         self._attr_native_max_value = maximum
         self._attr_native_step = 1
         self._attr_icon = icon
-        self._attr_unique_id = (
-            f"{remote_id_as_hex(runtime_entry.remote_profile.serial_id)}_{key}_control"
-        )
+        self._attr_unique_id = runtime_entity_unique_id(runtime_entry.config_entry_id, f"{key}_control")
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
-            identifiers={(DOMAIN, remote_id_as_hex(self._runtime_entry.remote_profile.serial_id))},
+            identifiers=fireplace_device_identifiers(self._runtime_entry.fireplace_id),
             manufacturer=MANUFACTURER,
             name=self._runtime_entry.title,
             model=f"Backend: {self._runtime_entry.backend_type}",
+            via_device=self._runtime_entry.controller_device_identifier,
         )
 
     async def async_added_to_hass(self) -> None:
@@ -105,9 +100,7 @@ class Proflame2NumberEntity(NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         if not float(value).is_integer():
-            raise HomeAssistantError(
-                f"{self._attr_name} must be set to a whole-number level."
-            )
+            raise HomeAssistantError(f"{self._attr_name} must be set to a whole-number level.")
         await async_stage_control_change(
             self.hass,
             self._runtime_entry,

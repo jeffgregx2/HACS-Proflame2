@@ -8,17 +8,15 @@ gives us a safer lifecycle boundary for open / TX / timeout / restart testing.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import multiprocessing as mp
-from multiprocessing.connection import Connection
 import os
 import signal
-import sys
 import time
 import traceback
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from multiprocessing.connection import Connection
 from typing import Any
-
 
 PROFLAME2_FREQUENCY_HZ = 314_973_000
 PROFLAME2_DATA_RATE = 2400
@@ -409,13 +407,13 @@ class YardStickWorkerSupervisor:
         finally:
             self._terminate("explicit_stop")
 
-    def request(self, command: str, payload: dict[str, Any] | None = None, *, timeout: float | None = None) -> dict[str, Any]:
+    def request(
+        self, command: str, payload: dict[str, Any] | None = None, *, timeout: float | None = None
+    ) -> dict[str, Any]:
         if self._process is None or self._conn is None:
             raise RuntimeError("Worker has not been started.")
         if not self._process.is_alive():
-            raise RuntimeError(
-                f"Worker exited unexpectedly exitcode={self._process.exitcode} before {command}."
-            )
+            raise RuntimeError(f"Worker exited unexpectedly exitcode={self._process.exitcode} before {command}.")
 
         self._request_id += 1
         request = {
@@ -423,8 +421,10 @@ class YardStickWorkerSupervisor:
             "command": command,
             "payload": payload or {},
         }
-        request_timeout = self._worker_startup_timeout_seconds if command == COMMAND_OPEN else (
-            timeout if timeout is not None else self._operation_timeout_seconds
+        request_timeout = (
+            self._worker_startup_timeout_seconds
+            if command == COMMAND_OPEN
+            else (timeout if timeout is not None else self._operation_timeout_seconds)
         )
         _log(
             "PARENT",
@@ -537,8 +537,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_WORKER_STARTUP_TIMEOUT_SECONDS,
         help=(
-            "Timeout in seconds for the worker OPEN command. "
-            f"Defaults to {DEFAULT_WORKER_STARTUP_TIMEOUT_SECONDS}."
+            "Timeout in seconds for the worker OPEN command. " f"Defaults to {DEFAULT_WORKER_STARTUP_TIMEOUT_SECONDS}."
         ),
     )
     parser.add_argument(

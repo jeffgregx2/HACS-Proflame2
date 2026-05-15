@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .version import BUILD_FLAVOR, INTEGRATION_VERSION, is_dev_build
+from .version import fake_backend_enabled, is_dev_build
 
 DOMAIN = "proflame2"
 MANUFACTURER = "Proflame2"
@@ -17,6 +17,9 @@ CONF_CONFIG_ENTRY_ID = "config_entry_id"
 CONF_NAME = "name"
 CONF_POWER = "power"
 CONF_FLAME = "flame"
+CONF_PILOT = "pilot"
+CONF_THERMOSTAT = "thermostat"
+CONF_ACTION_LABEL = "action_label"
 CONF_PROFILE_ID = "profile_id"
 CONF_PROFILES = "profiles"
 
@@ -26,29 +29,48 @@ CONF_FRONT = "front"
 CONF_AUX = "aux"
 CONF_CPI = "cpi"
 CONF_DEBUG_LOGGING = "debug_logging"
+CONF_ACTIVE_LISTENING = "active_listening"
 CONF_INITIAL_FRAME = "initial_frame"
 CONF_INITIAL_PACKET_SOURCE = "initial_packet_source"
+CONF_ESPHOME_ENTRY_ID = "esphome_entry_id"
+CONF_FIREPLACE_SHORT_NAME = "fireplace_short_name"
 
 BACKEND_FAKE = "fake"
+BACKEND_ESPHOME = "lilygo_cc1101"
 BACKEND_YARDSTICK = "yardstick"
-BACKEND_TYPES: tuple[str, ...] = (BACKEND_YARDSTICK, BACKEND_FAKE)
-PRODUCTION_BACKEND_TYPES: tuple[str, ...] = (BACKEND_YARDSTICK,)
-BACKEND_LABELS: dict[str, str] = {
-    BACKEND_YARDSTICK: "YARD Stick One USB Controller",
-    BACKEND_FAKE: "Fake Controller (Simulated Learn/Test)",
-}
 
 
 def available_backend_types() -> tuple[str, ...]:
     """Return the backend types exposed by the current build."""
+    from .rf.registry import available_backend_ids
 
-    return BACKEND_TYPES if is_dev_build() else PRODUCTION_BACKEND_TYPES
+    return available_backend_ids(dev_build=is_dev_build(), include_fake=fake_backend_enabled())
 
 
 def available_backend_labels() -> dict[str, str]:
     """Return the backend labels exposed by the current build."""
 
-    return {backend_type: BACKEND_LABELS[backend_type] for backend_type in available_backend_types()}
+    from .rf.registry import get_backend_definition
+
+    return {backend_type: get_backend_definition(backend_type).label for backend_type in available_backend_types()}
+
+
+def available_learning_backend_types() -> tuple[str, ...]:
+    """Return the backend types that currently support guided learning."""
+
+    from .rf.registry import learning_backend_ids
+
+    return learning_backend_ids(dev_build=is_dev_build(), include_fake=fake_backend_enabled())
+
+
+def available_learning_backend_labels() -> dict[str, str]:
+    """Return the labels for backends that currently support guided learning."""
+
+    from .rf.registry import get_backend_definition
+
+    return {
+        backend_type: get_backend_definition(backend_type).label for backend_type in available_learning_backend_types()
+    }
 
 
 FEATURE_OPTION_KEYS: tuple[str, ...] = (
@@ -67,10 +89,14 @@ DEFAULT_FEATURE_OPTIONS: dict[str, bool] = {
     CONF_CPI: False,
 }
 
+DEFAULT_FIREPLACE_SHORT_NAME = "---"
+MAX_FIREPLACE_SHORT_NAME_LENGTH = 6
+
 DEFAULT_DEBUG_LOGGING = False
 
 SERVICE_SET_STATE = "set_state"
 SERVICE_APPLY_PROFILE = "apply_profile"
+SERVICE_DISPLAY_STATE_UPDATE = "display_state_update"
 
 DATA_RUNTIME_ENTRIES = "runtime_entries"
 DATA_SERVICES_REGISTERED = "services_registered"
@@ -85,6 +111,7 @@ DATA_ACTIVE_LISTENING = "active_listening"
 DATA_CONTROL_DEBOUNCE_SECONDS = "control_debounce_seconds"
 DATA_CONFIRMATION_WINDOW_SECONDS = "confirmation_window_seconds"
 DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS = "confirmation_receive_timeout_seconds"
+DATA_ESPHOME_TRANSPORT_FACTORY = "esphome_transport_factory"
 
 STATE_CONFIDENCE_OBSERVED = "observed"
 STATE_CONFIDENCE_REQUESTED = "requested"

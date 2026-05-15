@@ -1,0 +1,28 @@
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+  ".venv",
+  ".venv-esphome",
+  ".venv-esphome-macos",
+  ".venv-macos",
+  "analysis",
+  "rtl_433",
+]
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+ignore = [
+  "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+"tests/*.py" = ["E402"]
+"tools/proflame_capture/lilygo_syslog_monitor.py" = ["E402"]
+"tools/proflame_capture/rtl433_monitor.py" = ["E402"]
+"tools/proflame_capture/run_capture_session.py" = ["E402"]

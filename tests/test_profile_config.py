@@ -7,6 +7,10 @@ import pytest
 pytestmark = pytest.mark.protocol
 
 from custom_components.proflame2.const import (
+    BACKEND_ESPHOME,
+    BACKEND_FAKE,
+    BACKEND_YARDSTICK,
+    CONF_ACTIVE_LISTENING,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -16,6 +20,7 @@ from custom_components.proflame2.const import (
     CONF_D2,
     CONF_DEBUG_LOGGING,
     CONF_FAN,
+    CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
     CONF_FRONT,
     CONF_LIGHT,
@@ -24,15 +29,16 @@ from custom_components.proflame2.const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    available_backend_types,
+    available_learning_backend_types,
 )
-from custom_components.proflame2.protocol.models import FireplaceFeatures
 from custom_components.proflame2.profile import (
-    build_profile_id,
-    default_entry_options,
     InvalidBackendError,
     InvalidNibbleError,
-    InvalidSavedProfileError,
     InvalidRemoteIdError,
+    InvalidSavedProfileError,
+    build_profile_id,
+    default_entry_options,
     default_feature_options,
     normalize_entry_options,
     normalize_feature_options,
@@ -40,9 +46,17 @@ from custom_components.proflame2.profile import (
     normalize_saved_profile_input,
     parse_nibble,
     parse_remote_id,
+    sanitize_fireplace_short_name,
 )
-from custom_components.proflame2.const import available_backend_types
-from custom_components.proflame2.version import build_flavor, integration_version, is_dev_build
+from custom_components.proflame2.protocol.models import FireplaceFeatures
+from custom_components.proflame2.rf.registry import get_backend_definition, normalize_controller_id
+from custom_components.proflame2.version import (
+    ENABLE_FAKE_BACKEND_ENV,
+    build_flavor,
+    fake_backend_enabled,
+    integration_version,
+    is_dev_build,
+)
 
 
 def test_parse_remote_id_accepts_24_bit_hex() -> None:
@@ -101,6 +115,7 @@ def test_normalize_manual_profile_input_splits_data_and_options() -> None:
             CONF_FRONT: False,
             CONF_AUX: False,
             CONF_CPI: True,
+            CONF_FIREPLACE_SHORT_NAME: " living ",
         }
     )
 
@@ -120,8 +135,64 @@ def test_normalize_manual_profile_input_splits_data_and_options() -> None:
         CONF_AUX: False,
         CONF_CPI: True,
         CONF_DEBUG_LOGGING: False,
+        CONF_ACTIVE_LISTENING: False,
+        CONF_FIREPLACE_SHORT_NAME: "LIVING",
         CONF_PROFILES: {},
     }
+
+
+def test_normalize_manual_profile_input_uses_concrete_controller_id() -> None:
+    """Legacy generic ESPHome ids should normalize to the concrete controller id."""
+
+    normalized = normalize_manual_profile_input(
+        {
+            "name": "Bench Fireplace",
+            CONF_BACKEND_TYPE: "esphome",
+            CONF_REMOTE_ID: "3b3f02",
+            CONF_C1: "5",
+            CONF_D1: "7",
+            CONF_C2: "1",
+            CONF_D2: "8",
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+        }
+    )
+
+    assert normalized.data[CONF_BACKEND_TYPE] == BACKEND_ESPHOME
+
+
+def test_controller_id_normalization_rejects_invalid_values() -> None:
+    """Controller ids should sanitize to a strict printable lowercase token."""
+
+    assert normalize_controller_id("  LilyGo_CC1101 ") == BACKEND_ESPHOME
+    assert normalize_controller_id("esphome") == BACKEND_ESPHOME
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        normalize_controller_id("   ")
+    with pytest.raises(ValueError, match="only lowercase letters"):
+        normalize_controller_id("lilygo cc1101")
+    with pytest.raises(ValueError, match="only printable characters"):
+        normalize_controller_id("yardstick\x00")
+
+
+def test_lilygo_controller_registry_id_is_concrete() -> None:
+    """The LilyGO controller should not expose a generic ESPHome identity token."""
+
+    definition = get_backend_definition(BACKEND_ESPHOME)
+
+    assert definition.controller_id == BACKEND_ESPHOME
+    assert definition.controller_id == "lilygo_cc1101"
+    assert definition.requires_esphome_entry is True
+
+
+def test_non_esphome_backends_do_not_require_esphome_link() -> None:
+    """Only ESPHome-backed controllers should request an ESPHome config entry."""
+
+    assert get_backend_definition(BACKEND_YARDSTICK).requires_esphome_entry is False
+    assert get_backend_definition(BACKEND_FAKE).requires_esphome_entry is False
 
 
 def test_feature_options_default_as_expected() -> None:
@@ -142,6 +213,8 @@ def test_feature_options_default_as_expected() -> None:
         CONF_AUX: False,
         CONF_CPI: False,
         CONF_DEBUG_LOGGING: False,
+        CONF_ACTIVE_LISTENING: False,
+        CONF_FIREPLACE_SHORT_NAME: "---",
         CONF_PROFILES: {},
     }
 
@@ -229,27 +302,51 @@ def test_build_profile_id_slugifies_display_name() -> None:
     assert build_profile_id("Evening Relax") == "evening_relax"
 
 
-def test_build_metadata_defaults_to_dev(monkeypatch) -> None:
-    """Dev builds should expose fake for local testing by default."""
+def test_build_metadata_defaults_to_dev_with_fake_disabled(monkeypatch) -> None:
+    """Fake should stay hidden unless explicitly enabled, even in dev builds."""
 
     monkeypatch.delenv("PROFLAME2_VERSION", raising=False)
     monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
+    monkeypatch.delenv(ENABLE_FAKE_BACKEND_ENV, raising=False)
 
     assert integration_version() == "0.1.0-dev"
     assert build_flavor() == "dev"
     assert is_dev_build() is True
-    assert "fake" in available_backend_types()
+    assert fake_backend_enabled() is False
+    assert available_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
+    assert available_learning_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
 
+
+def test_fake_backend_requires_explicit_opt_in(monkeypatch) -> None:
+    """Test fixtures may opt into Fake without exposing it by default."""
+
+    monkeypatch.delenv("PROFLAME2_VERSION", raising=False)
+    monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
+    monkeypatch.setenv(ENABLE_FAKE_BACKEND_ENV, "true")
+
+    assert fake_backend_enabled() is True
+    assert available_backend_types() == (
+        BACKEND_YARDSTICK,
+        BACKEND_ESPHOME,
+        BACKEND_FAKE,
+    )
+    assert available_learning_backend_types() == (
+        BACKEND_YARDSTICK,
+        BACKEND_ESPHOME,
+        BACKEND_FAKE,
+    )
 
 
 def test_prod_build_hides_fake_backend(monkeypatch) -> None:
-    """Production builds should not expose the fake backend in the UI."""
+    """Production builds should expose only vetted backends."""
 
     monkeypatch.setenv("PROFLAME2_BUILD", "prod")
+    monkeypatch.setenv(ENABLE_FAKE_BACKEND_ENV, "true")
 
     assert build_flavor() == "prod"
     assert is_dev_build() is False
-    assert available_backend_types() == ("yardstick",)
+    assert available_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
+    assert available_learning_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
 
     with pytest.raises(InvalidBackendError):
         normalize_manual_profile_input(
@@ -268,3 +365,19 @@ def test_prod_build_hides_fake_backend(monkeypatch) -> None:
                 CONF_CPI: False,
             }
         )
+
+
+def test_fireplace_short_name_sanitization_defaults_and_truncates() -> None:
+    """Display short names should be normalized consistently for the LilyGO header."""
+
+    assert sanitize_fireplace_short_name("") == "---"
+    assert sanitize_fireplace_short_name("  den  ") == "DEN"
+    assert sanitize_fireplace_short_name("living room") == "LIVING"
+
+
+def test_normalize_entry_options_preserves_short_name() -> None:
+    """Config entry options should carry the sanitized short name."""
+
+    normalized = normalize_entry_options({CONF_FIREPLACE_SHORT_NAME: " patio "})
+
+    assert normalized[CONF_FIREPLACE_SHORT_NAME] == "PATIO"

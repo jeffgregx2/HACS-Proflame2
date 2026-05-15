@@ -9,18 +9,17 @@ pytestmark = pytest.mark.protocol
 from custom_components.proflame2.protocol.packet import ProflameFrame
 from custom_components.proflame2.rf.capture import (
     AIR_PACKET_BYTES,
+    REASON_BAD_PARITY,
+    REASON_BAD_START_END_GUARD,
+    REASON_PAYLOAD_TOO_SHORT,
     decode_single_sample,
     diagnose_air_payload,
     extract_samples_from_air_bytes,
     find_proflame_candidates,
     frame_to_capture_sample,
-    REASON_BAD_PARITY,
-    REASON_BAD_START_END_GUARD,
-    REASON_PAYLOAD_TOO_SHORT,
     raw_payload_to_bit_stream,
 )
-from custom_components.proflame2.rf.waveform import frame_to_air_bytes
-from custom_components.proflame2.rf.waveform import frame_to_symbol_string, symbols_to_air_bytes
+from custom_components.proflame2.rf.waveform import frame_to_air_bytes, frame_to_symbol_string, symbols_to_air_bytes
 
 
 def _bits_to_bytes(bit_stream: str) -> bytes:
@@ -28,10 +27,7 @@ def _bits_to_bytes(bit_stream: str) -> bytes:
 
     padding = (-len(bit_stream)) % 8
     padded = bit_stream + ("0" * padding)
-    return bytes(
-        int(padded[index : index + 8], 2)
-        for index in range(0, len(padded), 8)
-    )
+    return bytes(int(padded[index : index + 8], 2) for index in range(0, len(padded), 8))
 
 
 def test_air_packet_round_trip(remote_profile) -> None:
@@ -83,7 +79,7 @@ def test_air_packet_can_be_found_inside_noise(remote_profile) -> None:
         cmd2=0x01,
         err2=0x39,
     )
-    raw_payload = b"\x00\xFF" + frame_to_air_bytes(frame) + b"\xAA\x55"
+    raw_payload = b"\x00\xff" + frame_to_air_bytes(frame) + b"\xaa\x55"
 
     samples = extract_samples_from_air_bytes(raw_payload)
     assert len(samples) == 1
@@ -120,7 +116,7 @@ def test_air_packet_can_be_found_with_trailing_noise_only(remote_profile) -> Non
         err2=0xEF,
     )
 
-    raw_payload = frame_to_air_bytes(frame) + b"\xF0\x0D\xAA"
+    raw_payload = frame_to_air_bytes(frame) + b"\xf0\x0d\xaa"
     sample = decode_single_sample(raw_payload)
 
     assert sample.as_frame() == frame
@@ -222,7 +218,7 @@ def test_long_payload_with_multiple_repeated_frames_detects_repeats(remote_profi
         cmd2=0x26,
         err2=0xBC,
     )
-    raw_payload = (b"\x00" * 16) + frame_to_air_bytes(frame) + frame_to_air_bytes(frame) + (b"\xFF" * 16)
+    raw_payload = (b"\x00" * 16) + frame_to_air_bytes(frame) + frame_to_air_bytes(frame) + (b"\xff" * 16)
 
     candidates = find_proflame_candidates(raw_payload)
 

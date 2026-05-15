@@ -1,0 +1,122 @@
+# Optional diagnostic package for LilyGO Proflame2 firmware builds.
+#
+# Include this package only in a debug ESPHome YAML. It defines
+# PROFLAME2_TEMBED_DEBUG=1 for the C++ external component and restores manual FIFO diagnostics that are
+# intentionally absent from the production base package.
+
+esphome:
+  platformio_options:
+    build_flags:
+      - -DPROFLAME2_TEMBED_DEBUG=1
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(proflame2_radio).set_rx_fifo_profile(id(proflame2_rx_fifo_profile_state));
+
+globals:
+  - id: proflame2_capture_mode_state
+    type: std::string
+    restore_value: no
+    initial_value: '"off"'
+  - id: proflame2_rx_fifo_profile_state
+    type: std::string
+    restore_value: yes
+    initial_value: '"rfcat_fixed_none_rfcat_wide"'
+
+proflame2_tembed:
+  rx_no_rf_capture_count:
+    name: Proflame2 RX No RF Captures
+    accuracy_decimals: 0
+    entity_category: diagnostic
+  rx_incomplete_fifo_count:
+    name: Proflame2 RX Incomplete FIFO Captures
+    accuracy_decimals: 0
+    entity_category: diagnostic
+  rx_decode_failed_count:
+    name: Proflame2 RX Decode Failures
+    accuracy_decimals: 0
+    entity_category: diagnostic
+  rx_profile_mismatch_count:
+    name: Proflame2 RX Profile Mismatches
+    accuracy_decimals: 0
+    entity_category: diagnostic
+  rx_accepted_packet_count:
+    name: Proflame2 RX Accepted Packets
+    accuracy_decimals: 0
+    entity_category: diagnostic
+  rx_tx_suppressed_count:
+    name: Proflame2 RX TX Suppressed
+    accuracy_decimals: 0
+    entity_category: diagnostic
+  rx_transport_unavailable_count:
+    name: Proflame2 RX Transport Unavailable
+    accuracy_decimals: 0
+    entity_category: diagnostic
+  rx_last_rejection_snapshot:
+    name: Proflame2 RX Last Rejection Snapshot
+    entity_category: diagnostic
+
+api:
+  actions:
+    - action: proflame2_rx_end_confirmation
+      then:
+        - lambda: |-
+            id(proflame2_radio).complete_rx_fifo_capture();
+
+select:
+  - platform: template
+    id: proflame2_enable_capture
+    name: Enable Capture
+    entity_category: config
+    options:
+      - "off"
+      - "fifo_trailing_window"
+    lambda: |-
+      return id(proflame2_capture_mode_state);
+    set_action:
+      - lambda: |-
+          if (id(proflame2_capture_mode_state) != x) {
+            id(proflame2_capture_mode_state) = x;
+          }
+          id(proflame2_enable_capture).publish_state(x);
+          id(proflame2_radio).set_capture_mode(x);
+  - platform: template
+    id: proflame2_rx_fifo_profile
+    name: RX FIFO Profile
+    entity_category: config
+    options:
+      - "rfcat_fixed_none_rfcat_wide"
+      - "rfcat_fixed_none_rfcat_defaults"
+      - "rfcat_infinite_none_rfcat_defaults"
+      - "rfcat_infinite_none_rfcat_wide"
+      - "rfcat_infinite_carrier"
+      - "rfcat_fixed_carrier"
+      - "rfcat_infinite_none"
+      - "rfcat_fixed_none"
+    lambda: |-
+      return id(proflame2_rx_fifo_profile_state);
+    set_action:
+      - lambda: |-
+          if (id(proflame2_rx_fifo_profile_state) != x) {
+            id(proflame2_rx_fifo_profile_state) = x;
+          }
+          id(proflame2_rx_fifo_profile).publish_state(x);
+          id(proflame2_radio).set_rx_fifo_profile(x);
+
+button:
+  - platform: template
+    id: proflame2_rx_fifo_probe
+    name: RX FIFO Probe
+    internal: true
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(proflame2_radio).run_rx_fifo_probe();
+  - platform: template
+    id: proflame2_rx_fifo_capture_complete
+    name: RX FIFO Capture Complete
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(proflame2_radio).complete_rx_fifo_capture();

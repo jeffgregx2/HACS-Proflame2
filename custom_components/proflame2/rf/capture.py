@@ -26,9 +26,9 @@ first byte returned by ``rflib`` is already aligned to a valid Proflame2 word.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable
 
 from ..protocol.packet import ProflameFrame, ProflamePacket
 from .waveform import (
@@ -38,7 +38,11 @@ from .waveform import (
     SYMBOLS_PER_WORD,
     TOTAL_SYMBOLS,
     TRAILING_ZERO_SYMBOLS,
+)
+from .waveform import (
     air_bytes_to_symbols as waveform_air_bytes_to_symbols,
+)
+from .waveform import (
     frame_to_air_bytes as waveform_frame_to_air_bytes,
 )
 
@@ -136,7 +140,7 @@ class DecodeDiagnostics:
     bit_stream: str
     symbols: str | None
     samples_found: int
-    candidates: tuple["DecodeCandidate", ...] = ()
+    candidates: tuple[DecodeCandidate, ...] = ()
     reason_counts: dict[str, int] = field(default_factory=dict)
     best_failure: DecodeFailure | None = None
 
@@ -453,9 +457,7 @@ def _sample_from_symbol_window(
         if len(chunk) != SYMBOLS_PER_WORD:
             return None, DecodeFailure(
                 reason=REASON_WORD_COUNT_MISMATCH,
-                detail=(
-                    f"Word {word_index} expected {SYMBOLS_PER_WORD} symbols, got {len(chunk)}."
-                ),
+                detail=(f"Word {word_index} expected {SYMBOLS_PER_WORD} symbols, got {len(chunk)}."),
                 stage_score=1,
                 bit_offset=bit_offset,
                 symbol_offset=symbol_offset,
@@ -499,8 +501,7 @@ def _sample_from_symbol_window(
             return None, DecodeFailure(
                 reason=REASON_BAD_PARITY,
                 detail=(
-                    f"Word {word_index} parity mismatch: expected {word_bits.count('1') % 2}, "
-                    f"got {parity_bit}."
+                    f"Word {word_index} parity mismatch: expected {word_bits.count('1') % 2}, " f"got {parity_bit}."
                 ),
                 stage_score=2,
                 bit_offset=bit_offset,
@@ -527,11 +528,7 @@ def _sample_from_symbol_window(
             )
         trailing_guard_warning = accepted_trailer
 
-    candidate_remote_id = (
-        (int(words[0][:8], 2) << 16)
-        | (int(words[1][:8], 2) << 8)
-        | int(words[2][:8], 2)
-    )
+    candidate_remote_id = (int(words[0][:8], 2) << 16) | (int(words[1][:8], 2) << 8) | int(words[2][:8], 2)
     candidate_cmd1 = int(words[3][:8], 2)
     candidate_cmd2 = int(words[4][:8], 2)
     candidate_err1 = int(words[5][:8], 2)
@@ -569,14 +566,14 @@ def _sample_from_symbol_window(
         )
 
     sample = CaptureSample(
-            remote_id=candidate_remote_id,
-            cmd1=candidate_cmd1,
-            err1=candidate_err1,
-            cmd2=candidate_cmd2,
-            err2=candidate_err2,
-            raw_payload=raw_payload,
-            symbols=symbols,
-        )
+        remote_id=candidate_remote_id,
+        cmd1=candidate_cmd1,
+        err1=candidate_err1,
+        cmd2=candidate_cmd2,
+        err2=candidate_err2,
+        raw_payload=raw_payload,
+        symbols=symbols,
+    )
     return (
         DecodeAcceptance(
             sample=sample,

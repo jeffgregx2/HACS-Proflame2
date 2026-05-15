@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import logging
 import multiprocessing as mp
-from multiprocessing.connection import Connection
 import os
 import signal
 import threading
 import time
 import traceback
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from multiprocessing.connection import Connection
+from typing import Any
 
 from ..packet_debug import (
     get_packet_debug_logger,
 )
+from ..protocol.profiles import DEFAULT_PROTOCOL_PROFILE
 
 _LOGGER = logging.getLogger(__name__)
 
-PROFLAME2_DATA_RATE = 2400
+PROFLAME2_DATA_RATE = DEFAULT_PROTOCOL_PROFILE.data_rate_bps
 PROFLAME2_FREQUENCY_HZ = 314_973_000
 PROBE_RX_BANDWIDTH = 325_000
 REASON_UNKNOWN = "unknown"
@@ -40,6 +42,74 @@ KIND_STATUS = "STATUS"
 
 DEFAULT_WORKER_COOLDOWN_SECONDS = 5.0
 DEFAULT_STOP_TIMEOUT_SECONDS = 2.0
+
+_YARDSTICK_RX_REGISTER_ADDRESSES: dict[str, int] = {
+    "IOCFG2": 0x00,
+    "IOCFG1": 0x01,
+    "IOCFG0": 0x02,
+    "FIFOTHR": 0x03,
+    "SYNC1": 0x04,
+    "SYNC0": 0x05,
+    "PKTLEN": 0x06,
+    "PKTCTRL1": 0x07,
+    "PKTCTRL0": 0x08,
+    "ADDR": 0x09,
+    "CHANNR": 0x0A,
+    "FSCTRL1": 0x0B,
+    "FSCTRL0": 0x0C,
+    "FREQ2": 0x0D,
+    "FREQ1": 0x0E,
+    "FREQ0": 0x0F,
+    "MDMCFG4": 0x10,
+    "MDMCFG3": 0x11,
+    "MDMCFG2": 0x12,
+    "MDMCFG1": 0x13,
+    "MDMCFG0": 0x14,
+    "DEVIATN": 0x15,
+    "MCSM2": 0x16,
+    "MCSM1": 0x17,
+    "MCSM0": 0x18,
+    "FOCCFG": 0x19,
+    "BSCFG": 0x1A,
+    "AGCCTRL2": 0x1B,
+    "AGCCTRL1": 0x1C,
+    "AGCCTRL0": 0x1D,
+    "FREND1": 0x21,
+    "FREND0": 0x22,
+    "FSCAL3": 0x23,
+    "FSCAL2": 0x24,
+    "FSCAL1": 0x25,
+    "FSCAL0": 0x26,
+    "TEST2": 0x2C,
+    "TEST1": 0x2D,
+    "TEST0": 0x2E,
+    "PARTNUM": 0x30,
+    "VERSION": 0x31,
+    "FREQEST": 0x32,
+    "LQI": 0x33,
+    "RSSI": 0x34,
+    "MARCSTATE": 0x35,
+    "PKTSTATUS": 0x38,
+    "RXBYTES": 0x3B,
+}
+
+
+def _read_yardstick_register(radio: Any, address: int) -> str:
+    for method_name in ("peek", "getRFRegister", "readRFRegister"):
+        method = getattr(radio, method_name, None)
+        if method is None:
+            continue
+        try:
+            return f"0x{int(method(address)) & 0xFF:02X}"
+        except Exception as exc:  # pragma: no cover - depends on rflib backend quirks
+            return f"unavailable:{method_name}:{type(exc).__name__}"
+    return "unavailable:no_register_reader"
+
+
+def _yardstick_register_snapshot(radio: Any) -> dict[str, str]:
+    return {
+        name: _read_yardstick_register(radio, address) for name, address in _YARDSTICK_RX_REGISTER_ADDRESSES.items()
+    }
 
 
 class MockRfCat:
@@ -114,6 +184,19 @@ class WorkerDiagnostics:
     outstanding_command: str | None = None
 
 
+@dataclass(slots=True)
+class _YardStickWorkerState:
+    """Mutable state owned by one YardStick worker subprocess."""
+
+    generation: int
+    device_index: int
+    mock_mode: bool
+    radio: Any | None = None
+    timeout_exception: type[Exception] | None = None
+    modulation: int | None = None
+    last_error: str | None = None
+
+
 class YardStickBackendUnavailableError(RuntimeError):
     """Raised when the Yard Stick backend cannot be used."""
 
@@ -130,9 +213,7 @@ def normalize_yardstick_backend_error(exc: BaseException) -> YardStickBackendUna
             "YARD Stick One support is unavailable because the rflib Python package is not installed."
         )
     if isinstance(exc, PermissionError):
-        return YardStickBackendUnavailableError(
-            "The YARD Stick One could not be opened because access was denied."
-        )
+        return YardStickBackendUnavailableError("The YARD Stick One could not be opened because access was denied.")
 
     message = str(exc).strip()
     lowered = message.lower()
@@ -155,9 +236,7 @@ def normalize_yardstick_backend_error(exc: BaseException) -> YardStickBackendUna
         or "insufficient permissions" in lowered
         or "resource busy" in lowered
     ):
-        return YardStickBackendUnavailableError(
-            "The YARD Stick One could not be opened because access was denied."
-        )
+        return YardStickBackendUnavailableError("The YARD Stick One could not be opened because access was denied.")
 
     return YardStickBackendUnavailableError("YARD Stick One support is unavailable.")
 
@@ -275,8 +354,7 @@ def _cleanup_radio_for_exit(radio: Any) -> None:
 def _open_radio(device_index: int, *, mock_mode: bool = False) -> tuple[Any, type[Exception], int]:
     if mock_mode:
         return MockRfCat(idx=device_index), TimeoutError, MockRfCat.MOD_ASK_OOK
-    from rflib import MOD_ASK_OOK, RfCat
-    from rflib import ChipconUsbTimeoutException
+    from rflib import MOD_ASK_OOK, ChipconUsbTimeoutException, RfCat
 
     return RfCat(idx=device_index), ChipconUsbTimeoutException, MOD_ASK_OOK
 
@@ -366,6 +444,7 @@ def _configure_rx_radio(
         "packet_length_bytes": packet_length_bytes,
         "probe_mode": probe_mode,
         "packet_length_mode": packet_length_mode,
+        "raw_registers": _yardstick_register_snapshot(radio),
         "rx_mode_explicitly_set": entered_rx_mode,
     }
 
@@ -387,239 +466,328 @@ def _receive_once(
     return bytes(payload)
 
 
-def _send_software_burst(
+def _send_prebuilt_burst(
     radio: Any,
     *,
     air_payload: bytes,
-    software_transmissions: int,
+    logical_repeat_count: int,
+    repeat_separator_bits: int,
+    rf_xmit_call_count: int,
     inter_frame_gap_ms: float,
+    transmission_mode: str,
 ) -> dict[str, Any]:
-    frame_timings_ms: list[float] = []
+    started = time.monotonic()
     try:
         _worker_log(
             logging.INFO,
-            "send start payload_length_bytes=%s transmission_mode=software_repeat software_transmissions=%s inter_frame_gap_ms=%s",
+            "send start payload_length_bytes=%s transmission_mode=%s logical_repeat_count=%s repeat_separator_bits=%s rf_xmit_call_count=%s inter_frame_gap_ms=%s",
             len(air_payload),
-            software_transmissions,
+            transmission_mode,
+            logical_repeat_count,
+            repeat_separator_bits,
+            rf_xmit_call_count,
             inter_frame_gap_ms,
         )
-        for frame_index in range(software_transmissions):
-            frame_start = time.monotonic()
+        for frame_index in range(rf_xmit_call_count):
             _worker_log(
                 logging.INFO,
-                "RFxmit frame start mode=software_repeat frame_index=%s/%s payload_length_bytes=%s",
+                "RFxmit frame start mode=%s frame_index=%s/%s payload_length_bytes=%s",
+                transmission_mode,
                 frame_index + 1,
-                software_transmissions,
+                rf_xmit_call_count,
                 len(air_payload),
             )
             radio.RFxmit(air_payload)
-            frame_elapsed_ms = (time.monotonic() - frame_start) * 1000
-            frame_timings_ms.append(round(frame_elapsed_ms, 2))
             _worker_log(
                 logging.INFO,
-                "RFxmit frame complete mode=software_repeat frame_index=%s/%s payload_length_bytes=%s elapsed_ms=%.2f",
+                "RFxmit frame complete mode=%s frame_index=%s/%s payload_length_bytes=%s",
+                transmission_mode,
                 frame_index + 1,
-                software_transmissions,
+                rf_xmit_call_count,
                 len(air_payload),
-                frame_elapsed_ms,
             )
-            if inter_frame_gap_ms > 0 and frame_index + 1 < software_transmissions:
+            if inter_frame_gap_ms > 0 and frame_index + 1 < rf_xmit_call_count:
                 time.sleep(inter_frame_gap_ms / 1000.0)
     finally:
         _worker_log(
             logging.INFO,
-            "post_tx_idle start payload_length_bytes=%s software_transmissions=%s",
+            "post_tx_idle start payload_length_bytes=%s transmission_mode=%s logical_repeat_count=%s",
             len(air_payload),
-            software_transmissions,
+            transmission_mode,
+            logical_repeat_count,
         )
         if hasattr(radio, "setModeIDLE"):
             radio.setModeIDLE()
         _worker_log(
             logging.INFO,
-            "post_tx_idle complete payload_length_bytes=%s software_transmissions=%s",
+            "post_tx_idle complete payload_length_bytes=%s transmission_mode=%s logical_repeat_count=%s",
             len(air_payload),
-            software_transmissions,
+            transmission_mode,
+            logical_repeat_count,
         )
+    elapsed_ms = (time.monotonic() - started) * 1000
     return {
-        "software_transmissions": software_transmissions,
-        "inter_frame_gap_ms": inter_frame_gap_ms,
-        "frame_timings_ms": frame_timings_ms,
+        "transmission_mode": transmission_mode,
+        "logical_repeat_count": logical_repeat_count,
+        "repeat_separator_bits": repeat_separator_bits,
+        "rf_xmit_call_count": rf_xmit_call_count,
+        "payload_length_bytes": len(air_payload),
+        "elapsed_ms": round(elapsed_ms, 2),
     }
 
 
-def yardstick_worker_main(conn: Connection, args: dict[str, Any]) -> None:
-    generation = int(args["generation"])
-    device_index = int(args["device_index"])
-    mock_mode = bool(args.get("mock_mode", False))
-    radio: Any | None = None
-    timeout_exception: type[Exception] | None = None
-    modulation: int | None = None
-    last_error: str | None = None
+def _initialize_yardstick_worker(args: dict[str, Any]) -> _YardStickWorkerState:
+    """Build initial worker state and emit the startup log."""
 
-    _worker_log(logging.INFO, "started pid=%s generation=%s device_index=%s mock_mode=%s", os.getpid(), generation, device_index, mock_mode)
+    state = _YardStickWorkerState(
+        generation=int(args["generation"]),
+        device_index=int(args["device_index"]),
+        mock_mode=bool(args.get("mock_mode", False)),
+    )
+    _worker_log(
+        logging.INFO,
+        "started pid=%s generation=%s device_index=%s mock_mode=%s",
+        os.getpid(),
+        state.generation,
+        state.device_index,
+        state.mock_mode,
+    )
+    return state
 
-    while True:
-        try:
-            request = conn.recv()
-        except EOFError:
-            _worker_log(logging.INFO, "control pipe closed; exiting")
-            break
 
-        request_id = int(request["request_id"])
-        command = str(request["command"])
-        payload = request.get("payload", {})
-        started = time.monotonic()
+def _read_worker_request(conn: Connection) -> dict[str, Any] | None:
+    """Read one supervisor request, returning None when the pipe closes."""
 
-        try:
-            if command in {COMMAND_PING, COMMAND_STATUS}:
-                response = _response(
-                    request_id=request_id,
-                    kind=KIND_STATUS,
-                    status=_worker_status(generation=generation, radio=radio, last_error=last_error),
-                    timing_ms=(time.monotonic() - started) * 1000,
-                    payload={"message": "pong"},
-                )
-            elif command == COMMAND_OPEN:
-                if radio is None:
-                    _worker_log(logging.INFO, "open start device_index=%s", device_index)
-                    radio, timeout_exception, modulation = _open_radio(device_index, mock_mode=mock_mode)
-                    _worker_log(logging.INFO, "open complete device_index=%s", device_index)
-                response = _response(
-                    request_id=request_id,
-                    kind=KIND_OK,
-                    status=_worker_status(generation=generation, radio=radio, last_error=None),
-                    timing_ms=(time.monotonic() - started) * 1000,
-                )
-                last_error = None
-            elif command == COMMAND_SET_IDLE:
-                if radio is None:
-                    raise RuntimeError("Worker radio is not open.")
-                _worker_log(logging.INFO, "set_idle start")
-                if hasattr(radio, "setModeIDLE"):
-                    radio.setModeIDLE()
-                _worker_log(logging.INFO, "set_idle complete")
-                response = _response(
-                    request_id=request_id,
-                    kind=KIND_OK,
-                    status=_worker_status(generation=generation, radio=radio, last_error=None),
-                    timing_ms=(time.monotonic() - started) * 1000,
-                )
-                last_error = None
-            elif command == COMMAND_SEND:
-                if radio is None or modulation is None:
-                    raise RuntimeError("Worker radio is not open.")
-                air_payload = bytes.fromhex(str(payload["air_payload_hex"]))
-                tx_settings = _configure_tx_radio(
-                    radio,
-                    frequency_hz=int(payload["tx_frequency_hz"]),
-                    modulation=modulation,
-                )
-                burst_info = _send_software_burst(
-                    radio,
-                    air_payload=air_payload,
-                    software_transmissions=int(payload["software_transmissions"]),
-                    inter_frame_gap_ms=float(payload["inter_frame_gap_ms"]),
-                )
-                response = _response(
-                    request_id=request_id,
-                    kind=KIND_OK,
-                    status=_worker_status(generation=generation, radio=radio, last_error=None),
-                    timing_ms=(time.monotonic() - started) * 1000,
-                    payload={"tx_settings": tx_settings, "burst": burst_info},
-                )
-                last_error = None
-            elif command == COMMAND_RECEIVE:
-                if radio is None or modulation is None:
-                    raise RuntimeError("Worker radio is not open.")
-                _worker_log(
-                    logging.INFO,
-                    "receive start timeout=%s frequency_hz=%s packet_length_bytes=%s probe_mode=%s",
-                    payload["timeout"],
-                    payload["frequency_hz"],
-                    payload["packet_length_bytes"],
-                    payload["probe_mode"],
-                )
-                rx_settings = _configure_rx_radio(
-                    radio,
-                    frequency_hz=int(payload["frequency_hz"]),
-                    data_rate=int(payload["data_rate"]),
-                    packet_length_bytes=int(payload["packet_length_bytes"]),
-                    probe_mode=bool(payload["probe_mode"]),
-                    modulation=modulation,
-                )
-                raw_payload = _receive_once(radio, timeout_exception, payload.get("timeout"))
-                if raw_payload is None:
-                    response = _response(
-                        request_id=request_id,
-                        kind=KIND_NO_PACKET,
-                        status=_worker_status(generation=generation, radio=radio, last_error=None),
-                        timing_ms=(time.monotonic() - started) * 1000,
-                        payload={"rx_settings": rx_settings},
-                    )
-                else:
-                    _worker_log(
-                        logging.INFO,
-                        "receive complete bytes=%s frequency_hz=%s",
-                        len(raw_payload),
-                        payload["frequency_hz"],
-                    )
-                    response = _response(
-                        request_id=request_id,
-                        kind=KIND_OK,
-                        status=_worker_status(generation=generation, radio=radio, last_error=None),
-                        timing_ms=(time.monotonic() - started) * 1000,
-                        payload={"raw_payload_hex": raw_payload.hex(), "rx_settings": rx_settings},
-                    )
-                last_error = None
-            elif command == COMMAND_STOP:
-                _worker_log(logging.INFO, "STOP received")
-                if radio is not None:
-                    try:
-                        _cleanup_radio_for_exit(radio)
-                    except Exception as exc:
-                        _worker_log(
-                            logging.ERROR,
-                            "cleanup failure during STOP exception_type=%s error=%s\n%s",
-                            type(exc).__name__,
-                            exc,
-                            traceback.format_exc(),
-                        )
-                response = _response(
-                    request_id=request_id,
-                    kind=KIND_OK,
-                    status=_worker_status(generation=generation, radio=radio, last_error=last_error),
-                    timing_ms=(time.monotonic() - started) * 1000,
-                )
-                conn.send(response)
-                _worker_log(logging.INFO, "STOP complete")
-                break
-            else:
-                raise RuntimeError(f"Unsupported worker command: {command}")
-        except Exception as exc:
-            normalized = normalize_yardstick_backend_error(exc)
-            last_error = f"{type(normalized).__name__}: {normalized}"
-            _worker_log(
-                logging.ERROR,
-                "exception command=%s exception_type=%s error=%s\n%s",
-                command,
-                type(exc).__name__,
-                exc,
-                traceback.format_exc(),
-            )
+    try:
+        request = conn.recv()
+    except EOFError:
+        _worker_log(logging.INFO, "control pipe closed; exiting")
+        return None
+    return dict(request)
+
+
+def _dispatch_worker_request(
+    state: _YardStickWorkerState,
+    request: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Execute one worker request and return the response plus stop flag."""
+
+    request_id = int(request["request_id"])
+    command = str(request["command"])
+    payload = request.get("payload", {})
+    started = time.monotonic()
+
+    try:
+        if command in {COMMAND_PING, COMMAND_STATUS}:
             response = _response(
                 request_id=request_id,
+                kind=KIND_STATUS,
+                status=_worker_status(generation=state.generation, radio=state.radio, last_error=state.last_error),
+                timing_ms=(time.monotonic() - started) * 1000,
+                payload={"message": "pong"},
+            )
+            return response, False
+        if command == COMMAND_OPEN:
+            if state.radio is None:
+                _worker_log(logging.INFO, "open start device_index=%s", state.device_index)
+                state.radio, state.timeout_exception, state.modulation = _open_radio(
+                    state.device_index,
+                    mock_mode=state.mock_mode,
+                )
+                _worker_log(logging.INFO, "open complete device_index=%s", state.device_index)
+            state.last_error = None
+            return (
+                _response(
+                    request_id=request_id,
+                    kind=KIND_OK,
+                    status=_worker_status(generation=state.generation, radio=state.radio, last_error=None),
+                    timing_ms=(time.monotonic() - started) * 1000,
+                ),
+                False,
+            )
+        if command == COMMAND_SET_IDLE:
+            if state.radio is None:
+                raise RuntimeError("Worker radio is not open.")
+            _worker_log(logging.INFO, "set_idle start")
+            if hasattr(state.radio, "setModeIDLE"):
+                state.radio.setModeIDLE()
+            _worker_log(logging.INFO, "set_idle complete")
+            state.last_error = None
+            return (
+                _response(
+                    request_id=request_id,
+                    kind=KIND_OK,
+                    status=_worker_status(generation=state.generation, radio=state.radio, last_error=None),
+                    timing_ms=(time.monotonic() - started) * 1000,
+                ),
+                False,
+            )
+        if command == COMMAND_SEND:
+            if state.radio is None or state.modulation is None:
+                raise RuntimeError("Worker radio is not open.")
+            air_payload = bytes.fromhex(str(payload["air_payload_hex"]))
+            tx_settings = _configure_tx_radio(
+                state.radio,
+                frequency_hz=int(payload["tx_frequency_hz"]),
+                modulation=state.modulation,
+            )
+            _worker_log(
+                logging.INFO,
+                "send start payload_length_bytes=%s payload_bit_length=%s transmission_mode=%s logical_repeat_count=%s repeat_separator_bits=%s rf_xmit_call_count=%s",
+                len(air_payload),
+                payload.get("air_payload_bit_length"),
+                payload.get("transmission_mode", "embedded_repeat_payload"),
+                payload.get("logical_repeat_count", payload.get("software_transmissions", 1)),
+                payload.get("repeat_separator_bits", 0),
+                payload.get("rf_xmit_call_count", 1),
+            )
+            burst_info = _send_prebuilt_burst(
+                state.radio,
+                air_payload=air_payload,
+                logical_repeat_count=int(payload.get("logical_repeat_count", payload.get("software_transmissions", 1))),
+                repeat_separator_bits=int(payload.get("repeat_separator_bits", 0)),
+                rf_xmit_call_count=int(payload.get("rf_xmit_call_count", payload.get("software_transmissions", 1))),
+                inter_frame_gap_ms=float(payload.get("inter_frame_gap_ms", 0.0)),
+                transmission_mode=str(payload.get("transmission_mode", "embedded_repeat_payload")),
+            )
+            state.last_error = None
+            return (
+                _response(
+                    request_id=request_id,
+                    kind=KIND_OK,
+                    status=_worker_status(generation=state.generation, radio=state.radio, last_error=None),
+                    timing_ms=(time.monotonic() - started) * 1000,
+                    payload={"tx_settings": tx_settings, "burst": burst_info},
+                ),
+                False,
+            )
+        if command == COMMAND_RECEIVE:
+            if state.radio is None or state.modulation is None:
+                raise RuntimeError("Worker radio is not open.")
+            _worker_log(
+                logging.INFO,
+                "receive start timeout=%s frequency_hz=%s packet_length_bytes=%s probe_mode=%s",
+                payload["timeout"],
+                payload["frequency_hz"],
+                payload["packet_length_bytes"],
+                payload["probe_mode"],
+            )
+            rx_settings = _configure_rx_radio(
+                state.radio,
+                frequency_hz=int(payload["frequency_hz"]),
+                data_rate=int(payload["data_rate"]),
+                packet_length_bytes=int(payload["packet_length_bytes"]),
+                probe_mode=bool(payload["probe_mode"]),
+                modulation=state.modulation,
+            )
+            raw_payload = _receive_once(state.radio, state.timeout_exception, payload.get("timeout"))
+            state.last_error = None
+            if raw_payload is None:
+                return (
+                    _response(
+                        request_id=request_id,
+                        kind=KIND_NO_PACKET,
+                        status=_worker_status(generation=state.generation, radio=state.radio, last_error=None),
+                        timing_ms=(time.monotonic() - started) * 1000,
+                        payload={"rx_settings": rx_settings},
+                    ),
+                    False,
+                )
+            _worker_log(
+                logging.INFO,
+                "receive complete bytes=%s frequency_hz=%s",
+                len(raw_payload),
+                payload["frequency_hz"],
+            )
+            return (
+                _response(
+                    request_id=request_id,
+                    kind=KIND_OK,
+                    status=_worker_status(generation=state.generation, radio=state.radio, last_error=None),
+                    timing_ms=(time.monotonic() - started) * 1000,
+                    payload={"raw_payload_hex": raw_payload.hex(), "rx_settings": rx_settings},
+                ),
+                False,
+            )
+        if command == COMMAND_STOP:
+            _worker_log(logging.INFO, "STOP received")
+            if state.radio is not None:
+                try:
+                    _cleanup_radio_for_exit(state.radio)
+                except Exception as exc:
+                    _worker_log(
+                        logging.ERROR,
+                        "cleanup failure during STOP exception_type=%s error=%s\n%s",
+                        type(exc).__name__,
+                        exc,
+                        traceback.format_exc(),
+                    )
+            return (
+                _response(
+                    request_id=request_id,
+                    kind=KIND_OK,
+                    status=_worker_status(
+                        generation=state.generation,
+                        radio=state.radio,
+                        last_error=state.last_error,
+                    ),
+                    timing_ms=(time.monotonic() - started) * 1000,
+                ),
+                True,
+            )
+        raise RuntimeError(f"Unsupported worker command: {command}")
+    except Exception as exc:
+        normalized = normalize_yardstick_backend_error(exc)
+        state.last_error = f"{type(normalized).__name__}: {normalized}"
+        _worker_log(
+            logging.ERROR,
+            "exception command=%s exception_type=%s error=%s\n%s",
+            command,
+            type(exc).__name__,
+            exc,
+            traceback.format_exc(),
+        )
+        return (
+            _response(
+                request_id=request_id,
                 kind=KIND_ERROR,
-                status=_worker_status(generation=generation, radio=radio, last_error=last_error),
+                status=_worker_status(generation=state.generation, radio=state.radio, last_error=state.last_error),
                 timing_ms=(time.monotonic() - started) * 1000,
                 error_class=type(normalized).__name__,
                 error=str(normalized),
                 tb=traceback.format_exc(),
-            )
+            ),
+            False,
+        )
 
-        conn.send(response)
+
+def _write_worker_response(conn: Connection, response: dict[str, Any]) -> None:
+    """Write one worker response to the supervisor pipe."""
+
+    conn.send(response)
+
+
+def _shutdown_yardstick_worker(conn: Connection) -> None:
+    """Close the supervisor pipe and emit the final worker log."""
 
     conn.close()
     _worker_log(logging.INFO, "exiting")
+
+
+def yardstick_worker_main(conn: Connection, args: dict[str, Any]) -> None:
+    state = _initialize_yardstick_worker(args)
+
+    while True:
+        request = _read_worker_request(conn)
+        if request is None:
+            break
+        response, should_stop = _dispatch_worker_request(state, request)
+        _write_worker_response(conn, response)
+        if should_stop:
+            _worker_log(logging.INFO, "STOP complete")
+            break
+
+    _shutdown_yardstick_worker(conn)
 
 
 class YardStickWorkerSupervisor:
@@ -892,7 +1060,9 @@ class YardStickWorkerSupervisor:
     def _update_diagnostics_from_response(self, command: str, response: dict[str, Any]) -> None:
         status = response.get("status", {})
         self._diagnostics.worker_pid = response.get("worker_pid")
-        self._diagnostics.worker_generation = int(response.get("worker_generation", self._diagnostics.worker_generation))
+        self._diagnostics.worker_generation = int(
+            response.get("worker_generation", self._diagnostics.worker_generation)
+        )
         self._diagnostics.worker_alive = self._process.is_alive() if self._process is not None else False
         self._diagnostics.backend_available = bool(status.get("backend_available", False))
         self._diagnostics.last_operation_duration_ms = float(response.get("timing_ms", 0.0))
@@ -909,9 +1079,7 @@ class YardStickWorkerSupervisor:
         else:
             error = response.get("error") or "unknown worker failure"
             error_class = response.get("error_class")
-            self._diagnostics.last_error = (
-                f"{error_class}: {error}" if error_class else error
-            )
+            self._diagnostics.last_error = f"{error_class}: {error}" if error_class else error
             self._diagnostics.consecutive_failures += 1
 
     def _terminate_worker(self, *, reason: str) -> None:
