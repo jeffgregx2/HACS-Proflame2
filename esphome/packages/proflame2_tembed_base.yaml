@@ -182,11 +182,11 @@ api:
   on_client_connected:
     then:
       - lambda: |-
-          id(proflame2_radio).set_api_connected(true);
+          id(proflame2_radio).handle_api_client_connected(client_info);
   on_client_disconnected:
     then:
       - lambda: |-
-          id(proflame2_radio).set_api_connected(false);
+          id(proflame2_radio).handle_api_client_disconnected(client_info);
   actions:
     - action: proflame2_tx
       variables:

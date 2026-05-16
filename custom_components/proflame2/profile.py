@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .const import (
+    BACKEND_ESPHOME,
     CONF_ACTIVE_LISTENING,
     CONF_AUX,
     CONF_BACKEND_TYPE,
@@ -159,7 +160,10 @@ def normalize_entry_options(
 
     normalized.update(normalize_feature_options(raw_options))
     normalized[CONF_DEBUG_LOGGING] = bool(raw_options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
-    normalized[CONF_ACTIVE_LISTENING] = bool(raw_options.get(CONF_ACTIVE_LISTENING, False))
+    if CONF_ACTIVE_LISTENING in raw_options:
+        normalized[CONF_ACTIVE_LISTENING] = bool(raw_options[CONF_ACTIVE_LISTENING])
+    else:
+        normalized[CONF_ACTIVE_LISTENING] = raw_options.get(CONF_BACKEND_TYPE) == BACKEND_ESPHOME
     normalized[CONF_FIREPLACE_SHORT_NAME] = sanitize_fireplace_short_name(
         raw_options.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
     )

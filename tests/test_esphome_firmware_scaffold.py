@@ -108,6 +108,10 @@ def test_esphome_yaml_wires_local_external_component_and_tx_api() -> None:
     assert "homeassistant_services: true" in base
     assert "on_client_connected:" in base
     assert "on_client_disconnected:" in base
+    assert "handle_api_client_connected(client_info)" in base
+    assert "handle_api_client_disconnected(client_info)" in base
+    assert "set_api_connected(true)" not in base
+    assert "set_api_connected(false)" not in base
     assert "proflame2_tembed:" in base
     assert "id: proflame2_radio" in base
     assert 'proflame2_payload_bit_length_override: "182"' in base

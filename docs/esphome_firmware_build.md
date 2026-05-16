@@ -37,7 +37,7 @@ Use the LilyGO example and packages as the reference starting point:
 7. Build the firmware in ESPHome Builder.
 8. Deploy the firmware to the LilyGO device.
 9. Confirm the ESPHome device is online in Home Assistant.
-10. Add or reconfigure the Proflame2 integration to use the LilyGO CC1101 backend.
+10. Add or reconfigure the Proflame2 integration to use the LilyGO CC1101 controller.
 11. Run guided learning from Home Assistant.
 
 Do not manually create Proflame2-specific API encryption or OTA secrets. The
@@ -83,8 +83,8 @@ packages:
 
 ## Debug Firmware
 
-Normal users should not need raw FIFO capture controls or deep RF diagnostics.
-Those controls belong in debug firmware.
+Normal users should not need deep diagnostic controls. Those controls belong in
+debug firmware.
 
 When debug diagnostics are needed, include the debug package:
 
@@ -93,8 +93,8 @@ packages:
   proflame2_tembed_debug: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_debug.yaml@<release-or-branch>
 ```
 
-Debug firmware may expose controls such as manual FIFO capture and profile
-diagnostics. Production firmware should keep the UI focused on normal operation.
+Debug firmware may expose manual capture and profile diagnostics. Production
+firmware should keep the UI focused on normal operation.
 
 ## After Deployment
 

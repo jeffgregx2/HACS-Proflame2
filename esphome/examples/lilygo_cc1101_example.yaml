@@ -26,7 +26,7 @@
 # 5. Build and deploy from ESPHome Builder.
 #
 # 6. In Home Assistant, add/configure the Proflame2 integration, select the
-#    LilyGO CC1101 backend, and link it to this ESPHome device.
+#    LilyGO CC1101 controller, and link it to this ESPHome device.
 #
 # ESPHome's getting-started guide is the best reference for creating the base
 # device in ESPHome Builder:
@@ -85,7 +85,7 @@ packages:
   proflame2_tembed_display: !include ../packages/proflame2_tembed_display.yaml
 
 # Debug firmware is intentionally not enabled by default.
-# Uncomment only when troubleshooting low-level RF/FIFO behavior.
+# Uncomment only when troubleshooting deep controller diagnostics.
 #
 #   proflame2_tembed_debug: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_debug.yaml@<release-or-branch>
 #

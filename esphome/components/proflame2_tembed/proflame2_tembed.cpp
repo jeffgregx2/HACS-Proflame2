@@ -48,6 +48,10 @@ static void append_hex24_(std::string& value, uint32_t data) {
   append_hex_byte_(value, static_cast<uint8_t>(data & 0xFFU));
 }
 
+static bool is_home_assistant_api_client_(const std::string& client_info) {
+  return client_info.rfind("Home Assistant", 0) == 0;
+}
+
 static const char* tx_mode_to_string_(TXMode tx_mode) {
   switch (tx_mode) {
   case TXMode::CONTINUOUS_BURST:
@@ -1579,6 +1583,26 @@ void Proflame2TEmbedComponent::set_api_connected(bool value) {
   }
   this->display_.api_connected = value;
   this->mark_display_dirty_();
+}
+
+void Proflame2TEmbedComponent::handle_api_client_connected(const std::string& client_info) {
+  if (!is_home_assistant_api_client_(client_info)) {
+    return;
+  }
+  if (this->ha_api_client_count_ < UINT8_MAX) {
+    this->ha_api_client_count_++;
+  }
+  this->set_api_connected(this->ha_api_client_count_ > 0U);
+}
+
+void Proflame2TEmbedComponent::handle_api_client_disconnected(const std::string& client_info) {
+  if (!is_home_assistant_api_client_(client_info)) {
+    return;
+  }
+  if (this->ha_api_client_count_ > 0U) {
+    this->ha_api_client_count_--;
+  }
+  this->set_api_connected(this->ha_api_client_count_ > 0U);
 }
 
 void Proflame2TEmbedComponent::set_wifi_rssi_dbm(float value) {

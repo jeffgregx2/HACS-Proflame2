@@ -17,6 +17,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    BACKEND_ESPHOME,
     BACKEND_YARDSTICK,
     CONF_ACTIVE_LISTENING,
     CONF_AUX,
@@ -140,8 +141,6 @@ def _manual_profile_schema() -> vol.Schema:
             vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
             vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
             vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
-            vol.Required(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): bool,
-            vol.Required(CONF_ACTIVE_LISTENING, default=False): bool,
         }
     )
 
@@ -154,7 +153,6 @@ def _learn_setup_schema() -> vol.Schema:
             vol.Required(CONF_NAME): str,
             vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
             vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _learning_backend_selector(),
-            vol.Required(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): bool,
         }
     )
 
@@ -305,7 +303,6 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             suggested_values = self._learn_input or {
                 CONF_NAME: "",
                 CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
-                CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
                 CONF_FIREPLACE_SHORT_NAME: DEFAULT_FIREPLACE_SHORT_NAME,
             }
             return self.async_show_form(
@@ -316,7 +313,6 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._learn_input = {
             CONF_NAME: str(user_input[CONF_NAME]).strip(),
             CONF_BACKEND_TYPE: normalize_controller_id(user_input[CONF_BACKEND_TYPE]),
-            CONF_DEBUG_LOGGING: bool(user_input.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)),
             CONF_FIREPLACE_SHORT_NAME: sanitize_fireplace_short_name(
                 user_input.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
             ),
@@ -459,6 +455,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_DEBUG_LOGGING,
             DEFAULT_DEBUG_LOGGING,
         )
+        suggested_values[CONF_ACTIVE_LISTENING] = self._learn_input[CONF_BACKEND_TYPE] == BACKEND_ESPHOME
         return self.async_show_form(
             step_id="learn_features",
             data_schema=self.add_suggested_values_to_schema(
@@ -531,16 +528,11 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_D1: "",
             CONF_C2: "",
             CONF_D2: "",
-            CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
             **default_feature_options(),
         }
         if self._learn_input is not None:
             suggested[CONF_NAME] = self._learn_input[CONF_NAME]
             suggested[CONF_BACKEND_TYPE] = self._learn_input[CONF_BACKEND_TYPE]
-            suggested[CONF_DEBUG_LOGGING] = self._learn_input.get(
-                CONF_DEBUG_LOGGING,
-                DEFAULT_DEBUG_LOGGING,
-            )
             suggested[CONF_FIREPLACE_SHORT_NAME] = self._learn_input.get(
                 CONF_FIREPLACE_SHORT_NAME,
                 DEFAULT_FIREPLACE_SHORT_NAME,

@@ -1,104 +1,92 @@
 # LilyGO T-Embed CC1101 Controller
 
-The LilyGO T-Embed CC1101 backend uses an ESPHome device as the Proflame2 RF
-controller. It is designed to be installed near the fireplace and connected to
-Home Assistant over the ESPHome native API.
+The LilyGO T-Embed CC1101 is a Wi-Fi fireplace controller for Proflame2. It runs
+ESPHome firmware and is intended to be installed near the fireplace.
+
+Use this guide when you want a permanent controller that can both control the
+fireplace and keep Home Assistant updated when the original remote is used.
 
 ## Capabilities
 
 | Capability | Supported |
 | --- | --- |
-| Transmit Proflame2 commands | Yes |
-| Guided learning from the native remote | Yes |
-| Active listening for matching remote packets | Yes |
-| Home Assistant state synchronization | Yes |
-| ESPHome diagnostic entities | Yes |
+| Control the fireplace | Yes |
+| Guided learning from the original remote | Yes |
+| Active listening after setup | Yes |
+| Home Assistant state updates from original remote | Yes |
+| Additional controller software required | Yes, ESPHome firmware |
 
-Active listening only publishes packets that match the learned fireplace
-identity/profile. Packets from other Proflame2 remotes and unrelated RF noise
-are dropped by the firmware before they become Home Assistant state updates.
+## Pros And Cons
 
-## When To Choose LilyGO
+Pros:
 
-LilyGO is a good fit when:
+- Can be placed near the fireplace over Wi-Fi.
+- Supports active listening, so Home Assistant can track original remote changes.
+- Has a built-in screen for local status.
+- Good fit for a permanent installation.
 
-- You want a network RF node located near the fireplace.
-- You do not want a USB RF device attached to the Home Assistant host.
-- You want always-on active listening for native remote state tracking.
-- You are comfortable building and deploying ESPHome firmware.
-
-Tradeoffs:
+Cons:
 
 - Requires compatible LilyGO T-Embed CC1101 hardware.
-- Requires ESPHome firmware build and deployment.
-- Firmware updates are handled by the user through ESPHome.
+- Requires ESPHome firmware setup.
+- Requires USB power near the fireplace.
+- Depends on Wi-Fi reliability.
+
+## Placement
+
+During guided learning, hold the original remote within about 3 feet of the
+LilyGO controller.
+
+For normal operation, start with the LilyGO within about 15 feet of the
+fireplace. This is only a starting point. Your home layout, fireplace enclosure,
+metal, Wi-Fi placement, and local interference can change the reliable range.
 
 ## Setup Overview
 
 1. Install the Proflame2 Home Assistant integration.
-2. Create the LilyGO device in ESPHome Builder so ESPHome generates local API, OTA, and Wi-Fi secrets.
-3. Edit the generated ESPHome YAML using `esphome/examples/lilygo_cc1101_example.yaml` as the overlay reference.
-4. Build and deploy the LilyGO ESPHome firmware.
-5. Confirm the ESPHome device is online in Home Assistant.
-6. Add the Proflame2 integration.
-7. Select the LilyGO CC1101 RF backend.
-8. Link the integration to the ESPHome device.
-9. Run guided learning using the original fireplace remote.
-10. Validate basic controls.
-11. Enable active listening if you want state updates from the native remote.
+2. Create the LilyGO device in ESPHome Device Builder.
+3. Let ESPHome generate the local device YAML, API key, OTA password, and Wi-Fi
+   secrets.
+4. Edit the generated YAML using
+   `esphome/examples/lilygo_cc1101_example.yaml` as the reference.
+5. Build and deploy the LilyGO ESPHome firmware.
+6. Confirm the ESPHome device is online in Home Assistant.
+7. Add or reconfigure the Proflame2 integration.
+8. Select `LilyGO T-Embed CC1101` as the controller.
+9. Select the matching ESPHome device when prompted.
+10. Run guided learning with the original remote.
+11. Validate basic controls.
+12. Enable active listening if you want Home Assistant to track original remote
+    changes.
 
-## ESPHome Firmware
+## ESPHome Device Creation
 
-This repository provides ESPHome source and package files. It does not provide
-prebuilt firmware binaries.
-
-For general ESPHome device creation, see the ESPHome getting-started guide:
-https://esphome.io/guides/getting_started_hassio/
-
-For Proflame2-specific firmware guidance, see:
-[ESPHome firmware build guide](esphome_firmware_build.md)
-
-Use this repository file as the current LilyGO Proflame2 YAML reference:
-
-- `esphome/examples/lilygo_cc1101_example.yaml`
-- `esphome/packages/proflame2_tembed_base.yaml`
-- `esphome/packages/proflame2_tembed_display.yaml`
-- `esphome/packages/proflame2_tembed_debug.yaml`
-
-Production firmware should use the normal base/display packages. Debug-only
-packages expose deeper diagnostic controls and raw FIFO capture tools intended
-for troubleshooting, not normal operation.
-
-### ESPHome Builder Order
+This repository provides the Proflame2 ESPHome configuration, but ESPHome should
+create the local device first. That keeps the API encryption key, OTA password,
+and Wi-Fi secrets local to your Home Assistant installation.
 
 If you have not created the LilyGO device in ESPHome yet:
 
 1. In Home Assistant, install/open the ESPHome Device Builder add-on.
-2. Choose the ESPHome option to create a new device.
+2. Create a new ESPHome device.
 3. Enter a device name such as `lilygo-proflame2`.
 4. Enter your Wi-Fi details if ESPHome asks for them.
-5. Select an ESP32 board/device target. This initial choice only creates the
-   YAML; you will replace the generated `esp32:` block with the LilyGO target
-   from the Proflame2 example.
-6. Save the generated device YAML.
-7. Open the generated YAML for editing.
-8. Keep the generated local sections for `api:`, `ota:`, `wifi:`, `logger:`,
-   `esphome:`, and any generated secrets.
-9. Apply the Proflame2-specific edits from `esphome/examples/lilygo_cc1101_example.yaml`.
-10. Build and deploy from ESPHome.
-11. Confirm the ESPHome device appears online in Home Assistant.
-12. Start Proflame2 guided learning and select the LilyGO backend.
+5. Save the generated device YAML.
+6. Open the generated YAML for editing.
+7. Keep the generated local sections for `esphome:`, `api:`, `ota:`, `wifi:`,
+   `logger:`, and generated `!secret` values.
+8. Apply the Proflame2-specific edits from
+   `esphome/examples/lilygo_cc1101_example.yaml`.
+9. Build and deploy from ESPHome.
+10. Confirm the ESPHome device appears online in Home Assistant.
 
-The important point is that ESPHome creates the local API encryption key and OTA
-password for you. The Proflame2 example is an overlay on top of that generated
-device YAML, not a replacement for the generated local credentials.
-
-ESPHome's own guide for creating devices in Home Assistant is here:
+ESPHome's guide for creating devices in Home Assistant is here:
 https://esphome.io/guides/getting_started_hassio/
 
-### Package References
+## Package References
 
-For normal release use, prefer release-pinned `github://` package references:
+For normal release use, prefer release-pinned GitHub package references in the
+ESPHome YAML:
 
 ```yaml
 packages:
@@ -106,46 +94,42 @@ packages:
   proflame2_tembed_display: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_display.yaml@<release-or-branch>
 ```
 
-For local checkout development or manual sync into ESPHome, use local includes:
+Local installation by copying the ESPHome package files into your ESPHome
+configuration is also possible. Use the GitHub package path unless you have a
+specific reason to maintain local copies.
 
-```yaml
-packages:
-  proflame2_tembed_base: !include ../packages/proflame2_tembed_base.yaml
-  proflame2_tembed_display: !include ../packages/proflame2_tembed_display.yaml
-```
+## Guided Learning
 
-The debug package is intentionally omitted from production examples. Add it only
-when troubleshooting low-level RF/FIFO behavior.
+Guided learning connects the controller to your fireplace using the original
+remote.
 
-## Learning Flow
-
-During guided learning, Home Assistant asks you to press buttons on the native
-remote. The LilyGO device captures CC1101 FIFO byte windows and sends them to
-Home Assistant. Home Assistant validates accepted candidates and stores the
-learned identity/profile for the fireplace.
-
-Only validated candidates are promoted into the learned fireplace profile.
+Home Assistant will ask you to press buttons on the original remote. Keep the
+remote within about 3 feet of the LilyGO controller while learning. When learning
+is complete, Home Assistant stores the values needed to control that fireplace.
 
 ## Active Listening
 
-Active listening lets the LilyGO device monitor Proflame2 packets after setup.
-When it sees a valid packet matching the learned fireplace identity/profile, it
-publishes the packet to Home Assistant so the UI can track changes made by the
-native remote or another compatible controller.
+Active listening lets the LilyGO controller update Home Assistant when the
+original remote changes the fireplace.
 
 Important behavior:
 
 - Active listening is disabled by default.
-- It can be enabled from Home Assistant options/device control.
-- TX has priority; RX pauses during transmit and resumes afterward.
-- Repeats within a single transmission are suppressed.
-- Nonmatching or invalid packets are dropped.
+- It can be enabled from the Proflame2 options or LilyGO device controls.
+- Only the learned fireplace is reported to Home Assistant.
+- Fireplace commands from Home Assistant still take priority.
 
 ## Validation
 
-After setup, validate at least:
+After setup, validate:
 
-- LilyGO transmit is accepted by the fireplace.
-- `rtl_433` can decode LilyGO transmissions if you use it as an external witness.
-- Native remote changes are reflected in Home Assistant when active listening is enabled.
-- TX still works after active listening has been enabled.
+- LilyGO commands are accepted by the fireplace.
+- The original remote still controls the fireplace.
+- If active listening is enabled, Home Assistant updates when the original
+  remote is used.
+- The controller remains reliable from its installed location.
+
+## Technical Details
+
+Technical implementation notes are in
+[LilyGO CC1101 controller developer notes](lilygo_cc1101_controller_dev.md).

@@ -1,73 +1,93 @@
 # YardStick One Controller
 
-The YardStick backend uses a USB YardStick One with rfcat as the Proflame2 RF
-controller. It is useful when you prefer a directly attached USB RF backend and
-do not want to build ESPHome firmware.
+The YardStick One is a USB fireplace controller for Proflame2. It connects to
+the Home Assistant host by USB and does not require ESPHome firmware.
+
+Use this guide when you want a USB controller attached to the Home Assistant
+host.
 
 ## Capabilities
 
 | Capability | Supported |
 | --- | --- |
-| Transmit Proflame2 commands | Yes |
-| Guided learning from the native remote | Yes |
-| Receive for learning and validation | Yes |
-| Active listening | Receive-capable, environment-dependent |
-| ESPHome firmware required | No |
+| Control the fireplace | Yes |
+| Guided learning from the original remote | Yes |
+| Active listening after setup | No |
+| Home Assistant state updates from original remote | No |
+| Additional controller software required | No ESPHome firmware |
 
-## When To Choose YardStick
+## Pros And Cons
 
-YardStick is a good fit when:
+Pros:
 
-- You already have a YardStick One.
-- You can pass the USB device reliably into Home Assistant.
-- You want to avoid ESPHome firmware setup.
-- You want a direct RF backend attached to the Home Assistant host.
+- No additional controller firmware to build or install.
+- Plugs into the Home Assistant host by USB.
+- Supports guided learning from the original remote.
+- Controls the fireplace after setup.
 
-Tradeoffs:
+Cons:
 
-- Requires USB passthrough if Home Assistant runs in a VM or container.
-- Depends on the rfcat/libusb stack.
-- Placement is limited by USB location unless you extend the USB setup.
-- For always-on passive state tracking, LilyGO is usually the cleaner deployment model.
+- Does not support active listening after setup.
+- USB passthrough can be difficult in some VM or container installations.
+- Placement is limited by USB cable length and host location.
+- No local screen or status display.
+
+## Placement
+
+During guided learning, hold the original remote within about 3 feet of the
+YardStick controller.
+
+For normal operation, start with the YardStick within about 20 feet of the
+fireplace. This is only a starting point. Your home layout, fireplace enclosure,
+metal, USB placement, and local interference can change the reliable range.
+
+A USB extension cable can help place the YardStick closer to the fireplace.
 
 ## Setup Overview
 
 1. Connect the YardStick One to the Home Assistant host.
-2. Ensure the host/container/VM can access the USB device.
+2. Ensure Home Assistant can access the USB device.
 3. Install the Proflame2 Home Assistant integration.
-4. Add the Proflame2 integration.
-5. Select the YardStick RF backend.
-6. Run guided learning using the original fireplace remote.
+4. Add or reconfigure the Proflame2 integration.
+5. Select `YardStick One` as the controller.
+6. Run guided learning with the original remote.
 7. Validate basic controls.
 
-## Learning Flow
+## Guided Learning
 
-During guided learning, Home Assistant uses the YardStick backend to receive
-native remote packets. Valid decoded packets are used to learn the fireplace
-remote serial ID and profile values.
+Guided learning connects the controller to your fireplace using the original
+remote.
 
-The learned profile is then used to generate valid Proflame2 transmit packets
-for normal operation.
+Home Assistant will ask you to press buttons on the original remote. Keep the
+remote within about 3 feet of the YardStick while learning. When learning is
+complete, Home Assistant stores the values needed to control that fireplace.
+
+YardStick receive is used for guided learning only. YardStick does not keep Home
+Assistant updated when the original remote is used after setup.
 
 ## USB Notes
 
 If Home Assistant runs in a VM, Docker container, or supervised environment,
 make sure the YardStick USB device is passed through to the Home Assistant
-runtime. USB instability can cause receive or transmit failures even when the
-integration configuration is correct.
+runtime.
 
 If you see intermittent failures:
 
 - Confirm the YardStick device is still visible to Home Assistant.
 - Check VM/container USB passthrough rules.
-- Avoid sharing an unstable USB controller with other critical devices.
-- Restarting Home Assistant may not fix a lower-level USB passthrough problem.
+- Try a different USB port or powered USB hub.
+- Try a USB extension cable to move the YardStick closer to the fireplace.
 
 ## Validation
 
-After setup, validate at least:
+After setup, validate:
 
-- YardStick transmit is accepted by the fireplace.
-- `rtl_433` can decode YardStick transmissions if you use it as an external witness.
-- Guided learning can receive native remote packets.
+- YardStick commands are accepted by the fireplace.
+- The original remote still controls the fireplace.
 - Home Assistant controls reflect the expected state after commands are sent.
+- The controller remains reliable from its installed location.
+
+## Technical Details
+
+Technical implementation notes are in
+[YardStick controller developer notes](yardstick_controller_dev.md).

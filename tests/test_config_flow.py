@@ -273,6 +273,8 @@ async def test_manual_entry_form_exposes_only_hardware_backends_by_default(hass)
     option_values = {option["value"] for option in backend_field["selector"]["select"]["options"]}
     assert option_values == {BACKEND_YARDSTICK, BACKEND_ESPHOME}
     assert not any(field["name"] == CONF_ESPHOME_ENTRY_ID for field in serialized)
+    assert not any(field["name"] == CONF_DEBUG_LOGGING for field in serialized)
+    assert not any(field["name"] == CONF_ACTIVE_LISTENING for field in serialized)
 
 
 async def test_learning_form_includes_only_hardware_backends_by_default(hass) -> None:
@@ -295,6 +297,7 @@ async def test_learning_form_includes_only_hardware_backends_by_default(hass) ->
     option_values = {option["value"] for option in backend_field["selector"]["select"]["options"]}
     assert option_values == {BACKEND_YARDSTICK, BACKEND_ESPHOME}
     assert not any(field["name"] == CONF_ESPHOME_ENTRY_ID for field in serialized)
+    assert not any(field["name"] == CONF_DEBUG_LOGGING for field in serialized)
 
 
 async def test_learning_esphome_entry_requires_linked_esphome_config_entry(hass) -> None:
@@ -321,7 +324,6 @@ async def test_learning_esphome_entry_requires_linked_esphome_config_entry(hass)
             CONF_NAME: "Living Room Fireplace",
             CONF_FIREPLACE_SHORT_NAME: "LR",
             CONF_BACKEND_TYPE: BACKEND_ESPHOME,
-            CONF_DEBUG_LOGGING: False,
         },
     )
 
@@ -416,6 +418,7 @@ async def test_manual_esphome_entry_can_create_entry_with_linked_device(hass) ->
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_BACKEND_TYPE] == BACKEND_ESPHOME
     assert result["data"][CONF_ESPHOME_ENTRY_ID] == linked_entry.entry_id
+    assert result["options"][CONF_ACTIVE_LISTENING] is True
 
 
 async def test_duplicate_remote_id_is_rejected_for_same_controller(hass) -> None:
@@ -791,7 +794,6 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass, monkeypatch)
         user_input={
             "name": "Living Room Fireplace",
             CONF_BACKEND_TYPE: "fake",
-            CONF_DEBUG_LOGGING: False,
         },
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
@@ -853,7 +855,6 @@ async def test_guided_learning_timeout_is_per_prompt_not_overall(hass, monkeypat
         user_input={
             "name": "Living Room Fireplace",
             CONF_BACKEND_TYPE: "fake",
-            CONF_DEBUG_LOGGING: False,
         },
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
@@ -883,7 +884,6 @@ async def test_builtin_fake_backend_auto_completes_learning(hass, monkeypatch) -
         user_input={
             "name": "Living Room Fireplace",
             CONF_BACKEND_TYPE: "fake",
-            CONF_DEBUG_LOGGING: False,
         },
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
@@ -972,7 +972,6 @@ async def test_config_flow_surfaces_clean_yardstick_backend_unavailable_error(ha
         user_input={
             "name": "Living Room Fireplace",
             CONF_BACKEND_TYPE: "yardstick",
-            CONF_DEBUG_LOGGING: False,
         },
     )
 

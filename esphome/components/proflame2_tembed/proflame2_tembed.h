@@ -406,6 +406,8 @@ public:
   }
   void set_wifi_connected(bool value);
   void set_api_connected(bool value);
+  void handle_api_client_connected(const std::string& client_info);
+  void handle_api_client_disconnected(const std::string& client_info);
   void set_wifi_rssi_dbm(float value);
   void clear_wifi_rssi();
   void set_battery_percent(float value);
@@ -676,6 +678,7 @@ protected:
   uint32_t display_dim_timeout_ms_{60000U};
   bool display_wake_on_activity_{true};
   uint8_t display_dim_level_{3};
+  uint8_t ha_api_client_count_{0};
   uint32_t last_display_activity_ms_{0};
   bool display_backlight_refresh_pending_{true};
   float display_backlight_current_level_{1.0f};
