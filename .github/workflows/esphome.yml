@@ -13,10 +13,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -26,10 +26,10 @@ jobs:
           python -m pip install -r requirements-esphome.txt
 
       - name: Validate ESPHome config
-        run: python -m esphome config esphome/examples/t-embed-cc1101-proflame2.yaml
+        run: python -m esphome config esphome/examples/lilygo_cc1101_example.yaml
 
       - name: Compile ESPHome example
-        run: python -m esphome compile esphome/examples/t-embed-cc1101-proflame2.yaml
+        run: python -m esphome compile esphome/examples/lilygo_cc1101_example.yaml
 
       - name: Remove generated firmware outputs
         if: always()
