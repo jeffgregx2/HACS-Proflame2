@@ -1,0 +1,25 @@
+substitutions:
+  name: pf2-disp-preset
+  friendly_name: Proflame2 T-Embed
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ap:
+    ssid: ${friendly_name} Fallback
+
+packages:
+  proflame2_tembed_base: !include packages/proflame2_tembed_base.yaml
+  proflame2_tembed_display: !include packages/proflame2_tembed_display.yaml

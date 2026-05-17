@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
@@ -13,7 +14,12 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN, MANUFACTURER
+from .const import MANUFACTURER
+from .identity import (
+    fireplace_device_identifiers,
+    primary_entity_unique_id,
+    runtime_entity_unique_id,
+)
 from .profile import remote_id_as_hex
 from .runtime import (
     Proflame2RuntimeEntry,
@@ -190,10 +196,11 @@ class _Proflame2BaseSensor(SensorEntity):
         """Bind the entity to the fireplace device created during setup."""
 
         return DeviceInfo(
-            identifiers={(DOMAIN, remote_id_as_hex(self._runtime_entry.remote_profile.serial_id))},
+            identifiers=fireplace_device_identifiers(self._runtime_entry.fireplace_id),
             manufacturer=MANUFACTURER,
             name=self._runtime_entry.title,
             model=f"Backend: {self._runtime_entry.backend_type}",
+            via_device=self._runtime_entry.controller_device_identifier,
         )
 
     async def async_added_to_hass(self) -> None:
@@ -222,7 +229,7 @@ class Proflame2PrimaryFireplaceSensor(_Proflame2BaseSensor):
     def __init__(self, runtime_entry: Proflame2RuntimeEntry) -> None:
         super().__init__(runtime_entry)
         self._attr_name = runtime_entry.title
-        self._attr_unique_id = remote_id_as_hex(runtime_entry.remote_profile.serial_id)
+        self._attr_unique_id = primary_entity_unique_id(runtime_entry.config_entry_id)
 
     @property
     def native_value(self) -> str:
@@ -256,9 +263,7 @@ class Proflame2RuntimeSensor(_Proflame2BaseSensor):
         super().__init__(runtime_entry)
         self.entity_description = definition
         self._attr_name = definition.name
-        self._attr_unique_id = (
-            f"{remote_id_as_hex(runtime_entry.remote_profile.serial_id)}_{definition.key}"
-        )
+        self._attr_unique_id = runtime_entity_unique_id(runtime_entry.config_entry_id, definition.key)
         self._attr_entity_category = definition.entity_category
         self._attr_entity_registry_enabled_default = definition.enabled_default
 
@@ -292,9 +297,7 @@ def _primary_attributes(runtime: Proflame2RuntimeEntry) -> dict[str, str]:
         "operational_status": _status_value(runtime),
         "state_confidence": runtime.state_confidence,
         "pending_state": (
-            _summary_for_state(runtime, runtime.desired_state)
-            if runtime.desired_state is not None
-            else None
+            _summary_for_state(runtime, runtime.desired_state) if runtime.desired_state is not None else None
         ),
         "last_issue": _none_if_clear(_last_issue_summary(runtime)),
     }

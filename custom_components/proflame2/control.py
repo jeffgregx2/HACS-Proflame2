@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
-
-from .protocol.models import FireplaceFeatures, FireplaceState
+from collections.abc import Mapping
+from typing import Any
 
 from .const import (
     CONF_AUX,
@@ -15,6 +14,7 @@ from .const import (
     CONF_LIGHT,
     CONF_POWER,
 )
+from .protocol.models import FireplaceFeatures, FireplaceState
 
 
 class StateValidationError(ValueError):

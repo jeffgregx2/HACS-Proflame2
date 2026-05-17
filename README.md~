@@ -1,0 +1,178 @@
+# Proflame2 Fireplace Control For Home Assistant
+
+Control a Proflame2 fireplace from Home Assistant using a supported fireplace
+controller and your original handheld remote for setup.
+
+The integration adds normal Home Assistant controls for the fireplace, supports
+guided learning, and can expose saved profiles for common fireplace settings.
+
+![Proflame2 Home Assistant controls](docs/images/HA-Proflame2-Control.png)
+
+## What You Can Control
+
+Available controls depend on the features installed in your fireplace and the
+features you enable during setup.
+
+- Power
+- Flame level
+- Fan level
+- Light level
+- Front burner
+- Aux output
+- CPI / pilot mode
+- Saved fireplace profiles
+
+## Supported Controllers
+
+You need one supported controller for each fireplace. The controller must be
+close enough to the fireplace to work reliably in your home.
+
+| Controller | Controls Fireplace | Guided Learning | Active Listening | Summary |
+| --- | --- | --- | --- | --- |
+| LilyGO T-Embed CC1101 | Yes | Yes | Yes | Wi-Fi controller that can be installed near the fireplace. |
+| YardStick One | Yes | Yes | No | USB controller connected to the Home Assistant host. |
+
+### LilyGO T-Embed CC1101
+
+Choose LilyGO when you want a permanent Wi-Fi controller near the fireplace and
+want Home Assistant to stay updated when the original remote is used.
+
+Short tradeoff: LilyGO supports active listening and placement near the
+fireplace, but it requires ESPHome firmware setup and USB power near the
+fireplace.
+
+Setup guide: [LilyGO CC1101 controller](docs/lilygo_cc1101_controller.md)
+
+### YardStick One
+
+Choose YardStick when you want a USB controller attached to the Home Assistant
+host and do not want to build ESPHome firmware.
+
+Short tradeoff: YardStick needs no additional controller software to install
+(ESPHome), but it does not support active listening and placement is limited by
+USB.
+
+Setup guide: [YardStick controller](docs/yardstick_controller.md)
+
+## Installation
+
+### HACS
+
+1. Open Home Assistant.
+2. Open `HACS`.
+3. Open `Custom repositories`.
+4. Add this repository URL:
+   `https://github.com/jeffgregx2/HACS-Proflame2`
+5. Select category `Integration`.
+6. Install the integration.
+7. Restart Home Assistant.
+8. Add the `Proflame2` integration from Home Assistant settings.
+
+### Manual Install
+
+HACS is the recommended install path. If you need a manual install, copy
+`custom_components/proflame2` into `/config/custom_components/proflame2`, restart
+Home Assistant, then add the `Proflame2` integration.
+
+## First Setup
+
+1. Choose a controller: LilyGO T-Embed CC1101 or YardStick One.
+2. Follow the controller setup guide linked above.
+3. Add the `Proflame2` integration in Home Assistant.
+4. Select the controller type.
+5. For LilyGO, select the matching ESPHome device when prompted.
+6. Start guided learning.
+7. Hold the original remote within about 3 feet of the controller during
+   learning.
+8. Follow the prompts and press the requested buttons on the original remote.
+9. Select the fireplace features your installation supports.
+10. Validate basic controls from Home Assistant.
+
+Learning connects the controller to your fireplace using the original remote.
+Do not skip learning unless you already have known-good values for that exact
+fireplace.
+
+## Daily Use
+
+After setup, Home Assistant can control the fireplace from dashboards, scripts,
+scenes, automations, and profiles.
+
+For normal operation, start with the controller near the fireplace:
+
+- LilyGO: start within about 15 feet of the fireplace.
+- YardStick: start within about 20 feet of the fireplace.
+
+These are practical starting points, not guarantees. Fireplace location, walls,
+metal, USB placement, Wi-Fi, and local interference can change the reliable
+range.
+
+## Profiles
+
+Profiles are saved fireplace settings. Use them for common states such as
+`evening`, `warmup`, `low_flame`, or `fan_only`.
+
+Profiles are useful because Proflame2 fireplaces are controlled as a complete
+desired fireplace state. Instead of asking an automation to change one setting
+and hoping the other settings are already correct, a profile can apply the full
+state you want.
+
+To manage profiles, open the Proflame2 integration options in Home Assistant and
+choose `Profiles`. You can add, edit, or remove saved profiles there. Profiles
+can also appear as Home Assistant controls and can be called from automations.
+
+Example profile automation action:
+
+```yaml
+service: proflame2.apply_profile
+target:
+  device_id: YOUR_FIREPLACE_DEVICE_ID
+data:
+  profile_id: evening_relax
+```
+
+Example direct state automation action:
+
+```yaml
+service: proflame2.set_state
+target:
+  device_id: YOUR_FIREPLACE_DEVICE_ID
+data:
+  power: true
+  flame: 1
+  fan: 0
+  light: 0
+  front: false
+  aux: false
+  cpi: false
+```
+
+For automations, prefer profiles or include the full intended fireplace state in
+`proflame2.set_state`.
+
+## Active Listening
+
+Active listening lets Home Assistant update when the original remote changes the
+fireplace. This is supported by LilyGO and is disabled by default.
+
+YardStick does not support active listening. It can learn from the original
+remote during setup and it can control the fireplace, but it will not keep Home
+Assistant synchronized when another remote is used later.
+
+## Multiple Fireplaces
+
+Each fireplace needs its own controller close enough to communicate with that
+fireplace. During setup, use the native remote for the fireplace you are adding.
+
+At this time, one controller can control one fireplace.
+
+## More Information
+
+- [LilyGO CC1101 controller guide](docs/lilygo_cc1101_controller.md)
+- [YardStick controller guide](docs/yardstick_controller.md)
+- [ESPHome firmware build guide](docs/esphome_firmware_build.md)
+
+## Warranty And Safe Operation
+
+No warranty is provided. You are responsible for safe operation of your
+fireplace and automation. Avoid unattended operation that could leave the
+fireplace running longer than intended.

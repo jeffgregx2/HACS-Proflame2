@@ -13,9 +13,9 @@ pytest.importorskip("pytest_homeassistant_custom_component")
 
 pytestmark = pytest.mark.ha
 
-from homeassistant.util import slugify
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.proflame2.const import (
@@ -30,12 +30,10 @@ from custom_components.proflame2.const import (
     CONF_D2,
     CONF_DEBUG_LOGGING,
     CONF_FAN,
-    CONF_FLAME,
     CONF_FRONT,
     CONF_INITIAL_FRAME,
     CONF_INITIAL_PACKET_SOURCE,
     CONF_LIGHT,
-    CONF_POWER,
     CONF_REMOTE_ID,
     DATA_ACTIVE_LISTENING,
     DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS,
@@ -49,7 +47,7 @@ from custom_components.proflame2.const import (
 from custom_components.proflame2.packet_debug import PacketDebugLogPaths
 from custom_components.proflame2.protocol.models import FireplaceState
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
-from custom_components.proflame2.rf.base import SendResult
+from custom_components.proflame2.rf.base import BackendCapabilities, SendResult
 from custom_components.proflame2.rf.fake import FakeRFBackend
 from custom_components.proflame2.runtime import (
     _runtime_store,
@@ -139,9 +137,15 @@ async def test_number_controls_use_integer_configuration_and_values(hass) -> Non
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    flame = next(entity for entity in hass.data["number"].entities if entity.entity_id == _number_entity_id(entry.title, "Flame"))
-    fan = next(entity for entity in hass.data["number"].entities if entity.entity_id == _number_entity_id(entry.title, "Fan"))
-    light = next(entity for entity in hass.data["number"].entities if entity.entity_id == _number_entity_id(entry.title, "Light"))
+    flame = next(
+        entity for entity in hass.data["number"].entities if entity.entity_id == _number_entity_id(entry.title, "Flame")
+    )
+    fan = next(
+        entity for entity in hass.data["number"].entities if entity.entity_id == _number_entity_id(entry.title, "Fan")
+    )
+    light = next(
+        entity for entity in hass.data["number"].entities if entity.entity_id == _number_entity_id(entry.title, "Light")
+    )
 
     assert flame.native_step == 1
     assert fan.native_step == 1
@@ -208,9 +212,7 @@ async def test_debounced_controls_send_one_latest_full_state_packet(hass) -> Non
     assert primary.attributes["state_confidence"] == STATE_CONFIDENCE_REQUESTED
 
 
-async def test_controls_show_desired_state_during_debounce_and_active_send_without_flicker(
-    hass, monkeypatch
-) -> None:
+async def test_controls_show_desired_state_during_debounce_and_active_send_without_flicker(hass, monkeypatch) -> None:
     """Controls should keep showing desired values until TX finishes successfully."""
 
     hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
@@ -531,10 +533,7 @@ async def test_tx_failure_rolls_back_pending_controls(hass, monkeypatch) -> None
     assert primary.state == "On · Flame 1"
     assert primary.attributes["operational_status"] == "failed"
     assert primary.attributes["pending_state"] is None
-    assert (
-        primary.attributes["last_issue"]
-        == "Transmit failed because boom; controls reverted to last known state."
-    )
+    assert primary.attributes["last_issue"] == "Transmit failed because boom; controls reverted to last known state."
     assert runtime_entry.desired_state is None
 
 
@@ -755,9 +754,7 @@ async def test_flame_change_from_safe_off_fallback_forces_power_on_and_sends(has
     assert sent_packets[0].state.flame == 6
 
 
-async def test_debounce_task_exception_is_logged_and_surfaces_last_issue(
-    hass, monkeypatch, caplog
-) -> None:
+async def test_debounce_task_exception_is_logged_and_surfaces_last_issue(hass, monkeypatch, caplog) -> None:
     """Unexpected debounce-task failures should be logged and reflected in runtime state."""
 
     hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
@@ -817,14 +814,88 @@ async def test_debounced_send_logs_terminal_success(hass, caplog) -> None:
     await hass.async_block_till_done()
 
     assert "packet build start" in caplog.text
+    assert "PROFLAME_TX_PRESEND" in caplog.text
+
+
+async def test_send_does_not_start_confirmation_for_backend_without_receive(hass, monkeypatch, caplog) -> None:
+    """Backends that report can_receive=False should not enter the confirmation window."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 20.0
+
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    backend = runtime_entry.backend
+    assert isinstance(backend, FakeRFBackend)
+
+    async def fake_capabilities():
+        return BackendCapabilities(can_send=True, can_receive=False, can_learn=False)
+
+    async def fail_receive(timeout: float | None = None):
+        raise AssertionError("receive() should not be called when can_receive=False")
+
+    monkeypatch.setattr(backend, "capabilities", fake_capabilities)
+    monkeypatch.setattr(backend, "receive", fail_receive)
+    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 4},
+        blocking=True,
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+
+    primary = hass.states.get(_sensor_entity_id(entry.title))
+    assert primary is not None
+    assert primary.attributes["operational_status"] == "ready"
+    assert runtime_entry.confirmation_task is None
+    assert "starting post-TX confirmation" not in caplog.text
+    assert "post-TX confirmation started" not in caplog.text
+    assert "source=debounced_control" in caplog.text
+    assert "cmd1=0x01" in caplog.text
     assert "backend send start" in caplog.text
     assert "send execution succeeded" in caplog.text
     assert "debounced send terminal result=succeeded" in caplog.text
 
 
-async def test_restarting_pre_send_debounce_logs_timer_cancel_without_terminal_cancel(
-    hass, caplog
-) -> None:
+async def test_send_starts_confirmation_for_backend_with_receive(hass, monkeypatch, caplog) -> None:
+    """Backends that report can_receive=True should enter the confirmation window."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 20.0
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS] = 0.01
+
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    backend = runtime_entry.backend
+    assert isinstance(backend, FakeRFBackend)
+
+    async def fake_capabilities():
+        return BackendCapabilities(can_send=True, can_receive=True, can_learn=False)
+
+    monkeypatch.setattr(backend, "capabilities", fake_capabilities)
+    backend.queue_packets(None)
+    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 4},
+        blocking=True,
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+
+    primary = hass.states.get(_sensor_entity_id(entry.title))
+    assert primary is not None
+    assert "starting post-TX confirmation" in caplog.text
+
+
+async def test_restarting_pre_send_debounce_logs_timer_cancel_without_terminal_cancel(hass, caplog) -> None:
     """Restarting the debounce window should not look like a cancelled send."""
 
     hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.05
@@ -936,8 +1007,7 @@ async def test_debounced_send_timeout_fails_visibly(hass, monkeypatch) -> None:
     assert primary is not None
     assert primary.attributes["operational_status"] == "failed"
     assert (
-        primary.attributes["last_issue"]
-        == "Transmit timed out after 0 seconds; controls reverted to last known state."
+        primary.attributes["last_issue"] == "Transmit timed out after 0 seconds; controls reverted to last known state."
     )
 
 
@@ -969,9 +1039,7 @@ async def test_send_failure_logs_backend_cause_without_packet_debug(hass, monkey
     assert "RuntimeError: controller unavailable" in caplog.text
 
 
-async def test_debug_logging_enables_packet_debug_for_control_send_path(
-    hass, monkeypatch
-) -> None:
+async def test_debug_logging_enables_packet_debug_for_control_send_path(hass, monkeypatch) -> None:
     """The config-entry debug flag should activate packet debug outside learning too."""
 
     hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01

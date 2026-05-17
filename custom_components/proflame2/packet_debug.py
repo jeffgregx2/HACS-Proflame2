@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from queue import SimpleQueue
 from logging import Formatter, Logger, getLogger
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
+from queue import SimpleQueue
 from typing import cast
 
 from homeassistant.core import HomeAssistant
@@ -62,9 +62,7 @@ def _create_handler(log_path: Path) -> RotatingFileHandler:
         encoding="utf-8",
     )
     handler.setLevel("INFO")
-    handler.setFormatter(
-        Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
-    )
+    handler.setFormatter(Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
     return handler
 
 

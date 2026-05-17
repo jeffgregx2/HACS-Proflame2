@@ -232,9 +232,7 @@ async def test_profile_button_add_and_delete_follow_entry_reload(hass) -> None:
     assert deleted_state is None or deleted_state.state == "unavailable"
 
 
-async def test_profile_button_press_calls_shared_internal_executor_without_debounce(
-    hass, monkeypatch
-) -> None:
+async def test_profile_button_press_calls_shared_internal_executor_without_debounce(hass, monkeypatch) -> None:
     """Button press should call the shared apply-profile executor directly."""
 
     entry = _add_entry(
@@ -363,7 +361,4 @@ async def test_profile_button_press_failure_does_not_set_active_profile(hass, mo
 
     assert runtime_entry.last_applied_profile_id is None
     assert runtime_entry.last_applied_profile_name is None
-    assert (
-        runtime_entry.last_error
-        == "Transmit failed because boom; controls reverted to last known state."
-    )
+    assert runtime_entry.last_error == "Transmit failed because boom; controls reverted to last known state."

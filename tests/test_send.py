@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -17,12 +17,13 @@ from custom_components.proflame2.rf.base import SendResult
 from custom_components.proflame2.rf.fake import FakeRFBackend
 from custom_components.proflame2.rf.waveform import (
     AIR_PACKET_BYTES,
+    NATIVE_REPEAT_SEPARATOR_BITS,
     SMARTFIRE_DEFAULT_RFCAT_REPEAT,
     SMARTFIRE_DEFAULT_TOTAL_TRANSMISSIONS,
+    build_repeated_air_payload,
     build_transmission_plan,
     frame_to_symbol_string,
 )
-
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "yardstick_send_test.py"
 SCRIPT_SPEC = importlib.util.spec_from_file_location("yardstick_send_test", SCRIPT_PATH)
@@ -92,6 +93,23 @@ def test_waveform_matches_exact_smartfire_low_state_bytes(remote_profile) -> Non
     assert plan.air_payload.hex() == "e5a9a9b96aa96e55596b95559ae55566b9a9a5ae5a96580000"
 
 
+def test_repeated_air_payload_builds_one_native_gap_burst(remote_profile) -> None:
+    """YardStick should send repeated frame bits in one RFxmit payload."""
+
+    state = FireplaceState(power=True, flame=1, fan=0, light=0)
+    frame = encode_state(state, remote_profile)
+    plan = build_transmission_plan(frame)
+
+    payload, bit_length = build_repeated_air_payload(plan)
+
+    expected_bits = (plan.air_payload_bit_length * plan.repeat_count) + (
+        NATIVE_REPEAT_SEPARATOR_BITS * (plan.repeat_count - 1)
+    )
+    assert bit_length == expected_bits
+    assert len(payload) == 120
+    assert payload.startswith(plan.air_payload[:22])
+
+
 def test_waveform_matches_exact_smartfire_high_state_bytes(remote_profile) -> None:
     """Known higher-state frame should serialize to the exact SmartFire byte stream."""
 
@@ -137,8 +155,8 @@ def test_cli_repeat_override_changes_effective_backend_repeat(remote_profile) ->
     assert packet.transmission_plan.repeat_count == SMARTFIRE_DEFAULT_TOTAL_TRANSMISSIONS
 
 
-def test_cli_defaults_to_stock_remote_style_software_burst() -> None:
-    """The standalone sender should default to five software transmissions."""
+def test_cli_defaults_to_stock_remote_style_repeated_burst() -> None:
+    """The standalone sender should default to five logical repeats."""
 
     args = yardstick_send_test._build_parser().parse_args(
         [
@@ -348,6 +366,8 @@ def test_cli_tx_knobs_propagate_to_backend(monkeypatch) -> None:
                 "7",
                 "--inter-frame-gap-ms",
                 "12.5",
+                "--repeat-strategy",
+                "software_repeat",
                 "--yes",
             ]
         )
@@ -360,6 +380,7 @@ def test_cli_tx_knobs_propagate_to_backend(monkeypatch) -> None:
             "tx_frequency_hz": 315000000,
             "tx_transmissions": 7,
             "tx_inter_frame_gap_ms": 12.5,
+            "tx_repeat_strategy": "software_repeat",
         }
 
     asyncio.run(_run())
@@ -387,6 +408,7 @@ def test_interactive_console_reuses_one_backend_for_multiple_sends() -> None:
             tx_frequency_hz=314_973_000,
             transmissions=SMARTFIRE_DEFAULT_TOTAL_TRANSMISSIONS,
             inter_frame_gap_ms=0,
+            repeat_strategy=yardstick_send_test.YARDSTICK_TX_DEFAULT_REPEAT_STRATEGY,
             yes=True,
             no_close=True,
         )
@@ -402,7 +424,7 @@ def test_interactive_console_reuses_one_backend_for_multiple_sends() -> None:
 
 
 def test_console_commands_update_tx_experiment_settings() -> None:
-    """The interactive console should expose software burst knobs."""
+    """The interactive console should expose repeated-burst knobs."""
 
     async def _run() -> None:
         backend = type(
@@ -411,6 +433,7 @@ def test_console_commands_update_tx_experiment_settings() -> None:
             {
                 "_tx_transmissions": SMARTFIRE_DEFAULT_TOTAL_TRANSMISSIONS,
                 "_tx_inter_frame_gap_ms": 0.0,
+                "_tx_repeat_strategy": yardstick_send_test.YARDSTICK_TX_DEFAULT_REPEAT_STRATEGY,
             },
         )()
         session = yardstick_tx_console.TxConsoleSession(
@@ -423,28 +446,32 @@ def test_console_commands_update_tx_experiment_settings() -> None:
             tx_frequency_hz=314_973_000,
             transmissions=SMARTFIRE_DEFAULT_TOTAL_TRANSMISSIONS,
             inter_frame_gap_ms=0,
+            repeat_strategy=yardstick_send_test.YARDSTICK_TX_DEFAULT_REPEAT_STRATEGY,
             yes=True,
             no_close=True,
         )
 
         assert await yardstick_tx_console._handle_command(session, "transmissions 7") is True
         assert await yardstick_tx_console._handle_command(session, "gap 15") is True
+        assert await yardstick_tx_console._handle_command(session, "strategy software_repeat") is True
 
         assert session.transmissions == 7
         assert session.inter_frame_gap_ms == 15.0
+        assert session.repeat_strategy == "software_repeat"
         assert session.backend._tx_transmissions == 7
         assert session.backend._tx_inter_frame_gap_ms == 15.0
+        assert session.backend._tx_repeat_strategy == "software_repeat"
 
     asyncio.run(_run())
 
 
-def test_cli_help_describes_software_burst_controls() -> None:
-    """The CLI help text should describe the software burst controls only."""
+def test_cli_help_describes_repeated_burst_controls() -> None:
+    """The CLI help text should describe the repeated-burst controls only."""
 
     help_text = yardstick_send_test._build_parser().format_help()
 
     assert "--transmissions" in help_text
     assert "--inter-frame-gap-ms" in help_text
-    assert "software" in help_text
-    assert "--repeat" not in help_text
+    assert "--repeat-strategy" in help_text
+    assert "logical repeats" in help_text
     assert "--rfcat-repeat-mode" not in help_text

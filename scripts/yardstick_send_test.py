@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from pathlib import Path
 import sys
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from custom_components.proflame2.protocol.encoder import encode_packet
 from custom_components.proflame2.protocol.ecc import err1_for, err2_for
+from custom_components.proflame2.protocol.encoder import encode_packet
 from custom_components.proflame2.protocol.models import (
     ECCProfile,
     FireplaceFeatures,
@@ -25,16 +25,16 @@ from custom_components.proflame2.rf.yardstick import (
     PROFLAME2_DATA_RATE,
     PROFLAME2_FREQUENCY_HZ,
     YARDSTICK_TX_DEFAULT_INTER_FRAME_GAP_MS,
+    YARDSTICK_TX_DEFAULT_REPEAT_STRATEGY,
     YARDSTICK_TX_DEFAULT_TRANSMISSIONS,
+    YARDSTICK_TX_REPEAT_STRATEGIES,
     YardStickBackend,
     YardStickBackendUnavailableError,
 )
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Transmit one Proflame2 packet through a Yard Stick One."
-    )
+    parser = argparse.ArgumentParser(description="Transmit one Proflame2 packet through a Yard Stick One.")
     parser.add_argument("--id", required=True, help="Remote ID in hex, for example 3b3f02.")
     parser.add_argument("--c1", required=True, type=int, help="Cmd1 C nibble.")
     parser.add_argument("--d1", required=True, type=int, help="Cmd1 D nibble.")
@@ -59,7 +59,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=YARDSTICK_TX_DEFAULT_TRANSMISSIONS,
         help=(
-            "Number of explicit software RFxmit payload transmissions to send. "
+            "Number of logical repeats embedded in one RFxmit payload. "
             f"Defaults to {YARDSTICK_TX_DEFAULT_TRANSMISSIONS} to mirror the stock remote burst."
         ),
     )
@@ -67,7 +67,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--inter-frame-gap-ms",
         type=float,
         default=YARDSTICK_TX_DEFAULT_INTER_FRAME_GAP_MS,
-        help="Optional gap between software-transmitted frames in milliseconds. Defaults to 0.",
+        help="Optional embedded repeat gap in milliseconds. Defaults to the native Proflame2 gap.",
+    )
+    parser.add_argument(
+        "--repeat-strategy",
+        choices=YARDSTICK_TX_REPEAT_STRATEGIES,
+        default=YARDSTICK_TX_DEFAULT_REPEAT_STRATEGY,
+        help="Yard Stick rfcat repeat implementation strategy. This is a bench/debug knob, not a HA UI option.",
     )
     parser.add_argument(
         "--allow-off-flame",
@@ -98,7 +104,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _build_state(args: argparse.Namespace) -> FireplaceState:
-    flame = args.flame if (args.power == "off" and args.preserve_off_flame) else (0 if args.power == "off" else args.flame)
+    flame = (
+        args.flame if (args.power == "off" and args.preserve_off_flame) else (0 if args.power == "off" else args.flame)
+    )
     return FireplaceState(
         power=(args.power == "on"),
         flame=flame,
@@ -125,7 +133,9 @@ def _build_profile(args: argparse.Namespace) -> RemoteProfile:
     )
 
 
-def _build_packet_for_cli(args: argparse.Namespace, profile: RemoteProfile) -> tuple[FireplaceState, FireplaceState, ProflamePacket]:
+def _build_packet_for_cli(
+    args: argparse.Namespace, profile: RemoteProfile
+) -> tuple[FireplaceState, FireplaceState, ProflamePacket]:
     """Build the requested/effective TX packet for the standalone Yard Stick CLI."""
 
     requested_state = _build_state(args)
@@ -169,6 +179,7 @@ def _print_tx_preview(
     tx_frequency_hz: int,
     transmissions: int,
     inter_frame_gap_ms: float,
+    repeat_strategy: str,
     preserve_off_flame: bool,
     no_close: bool,
 ) -> None:
@@ -192,17 +203,10 @@ def _print_tx_preview(
     print(f"Cmd2/Err2: 0x{packet.frame.cmd2:02X} / 0x{packet.frame.err2:02X}")
     print(f"Air payload hex: {plan.air_payload.hex()}")
     print(f"Plan total transmissions: {plan.repeat_count}")
-    print("Transmission mode: software_repeat")
+    print(f"Transmission mode: {repeat_strategy}")
+    print("Effective burst settings: " f"logical_repeats={transmissions} " f"repeat_gap_ms={inter_frame_gap_ms}")
     print(
-        "Effective burst settings: "
-        f"software_transmissions={transmissions} "
-        f"inter_frame_gap_ms={inter_frame_gap_ms}"
-    )
-    print(
-        "TX settings: "
-        f"frequency_hz={tx_frequency_hz} "
-        f"modulation=MOD_ASK_OOK "
-        f"data_rate={PROFLAME2_DATA_RATE}"
+        "TX settings: " f"frequency_hz={tx_frequency_hz} " f"modulation=MOD_ASK_OOK " f"data_rate={PROFLAME2_DATA_RATE}"
     )
     print(f"Preserve off flame: {preserve_off_flame}")
     print(f"Skip close after TX: {no_close}")
@@ -220,6 +224,7 @@ async def _run(args: argparse.Namespace) -> int:
         tx_frequency_hz=args.tx_frequency,
         transmissions=args.transmissions,
         inter_frame_gap_ms=args.inter_frame_gap_ms,
+        repeat_strategy=args.repeat_strategy,
         preserve_off_flame=args.preserve_off_flame,
         no_close=args.no_close,
     )
@@ -233,6 +238,7 @@ async def _run(args: argparse.Namespace) -> int:
         tx_frequency_hz=args.tx_frequency,
         tx_transmissions=args.transmissions,
         tx_inter_frame_gap_ms=args.inter_frame_gap_ms,
+        tx_repeat_strategy=args.repeat_strategy,
     )
     try:
         result = await backend.send(packet)
@@ -246,11 +252,7 @@ async def _run(args: argparse.Namespace) -> int:
         if not args.no_close:
             await backend.close()
 
-    print(
-        "Transmit complete: "
-        f"backend={result.backend_name} "
-        f"remote=0x{result.packet.remote_id:06X}"
-    )
+    print("Transmit complete: " f"backend={result.backend_name} " f"remote=0x{result.packet.remote_id:06X}")
     return 0
 
 

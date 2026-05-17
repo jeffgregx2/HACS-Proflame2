@@ -3,34 +3,24 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass
+import inspect
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
-from .protocol.encoder import encode_packet
-from .protocol.models import FireplaceState
-from .protocol.models import ECCProfile, FireplaceFeatures, RemoteProfile
-from .protocol.packet import ProflameFrame, ProflamePacket
-from .rf.base import RFBackend, SendResult
-from .rf.fake import FakeRFBackend
-from .rf.waveform import ProflameTransmissionPlan
-from .rf.yardstick import (
-    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
-    YARDSTICK_RX_LEARNING_PACKET_BYTES,
-    YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
-    YardStickBackend,
-)
-
 from .const import (
+    BACKEND_ESPHOME,
     BACKEND_FAKE,
     BACKEND_YARDSTICK,
+    CONF_ACTIVE_LISTENING,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -39,7 +29,9 @@ from .const import (
     CONF_D1,
     CONF_D2,
     CONF_DEBUG_LOGGING,
+    CONF_ESPHOME_ENTRY_ID,
     CONF_FAN,
+    CONF_FIREPLACE_SHORT_NAME,
     CONF_FRONT,
     CONF_INITIAL_FRAME,
     CONF_INITIAL_PACKET_SOURCE,
@@ -47,7 +39,9 @@ from .const import (
     CONF_PROFILES,
     CONF_REMOTE_ID,
     DATA_ACTIVE_LISTENING,
+    DATA_ESPHOME_TRANSPORT_FACTORY,
     DATA_RUNTIME_ENTRIES,
+    DEFAULT_FIREPLACE_SHORT_NAME,
     DOMAIN,
     MANUFACTURER,
     OPERATIONAL_STATUS_READY,
@@ -56,16 +50,34 @@ from .const import (
     STATE_CONFIDENCE_RESTORED,
     STATE_CONFIDENCE_UNKNOWN,
 )
-from .profile import normalize_profiles, remote_id_as_hex
+from .identity import fireplace_device_identifiers
 from .packet_debug import (
     async_disable_packet_debug_logging,
     async_enable_packet_debug_logging,
+)
+from .profile import normalize_profiles, sanitize_fireplace_short_name
+from .protocol.encoder import encode_packet
+from .protocol.models import ECCProfile, FireplaceFeatures, FireplaceState, RemoteProfile
+from .protocol.packet import ProflameFrame, ProflamePacket
+from .rf.base import RFBackend, SendResult
+from .rf.esphome.transport import ESPHomeTransport, HomeAssistantESPHomeTransport
+from .rf.esphome_api import ESPHomeAPIBackend
+from .rf.fake import FakeRFBackend
+from .rf.registry import normalize_controller_id
+from .rf.waveform import ProflameTransmissionPlan
+from .rf.yardstick import (
+    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+    YARDSTICK_RX_LEARNING_PACKET_BYTES,
+    YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+    YardStickBackend,
 )
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.runtime_state"
 
 _LOGGER = logging.getLogger(__name__)
+
+ESPHomeTransportFactory = Callable[[HomeAssistant, ConfigEntry], ESPHomeTransport | Awaitable[ESPHomeTransport]]
 
 
 @dataclass
@@ -79,6 +91,11 @@ class Proflame2RuntimeEntry:
     features: FireplaceFeatures
     backend: RFBackend | None
     device_id: str
+    fireplace_id: str
+    controller_id: str
+    controller_device_id: str | None = None
+    controller_device_identifier: tuple[str, str] | None = None
+    display_short_name: str = DEFAULT_FIREPLACE_SHORT_NAME
     learning_in_progress: bool = False
     sending_in_progress: bool = False
     last_packet: ProflamePacket | None = None
@@ -98,6 +115,9 @@ class Proflame2RuntimeEntry:
     active_send_task: asyncio.Task[None] | None = None
     confirmation_task: asyncio.Task[None] | None = None
     active_listener_task: asyncio.Task[None] | None = None
+    display_sync_task: asyncio.Task[None] | None = None
+    last_display_sync_signature: tuple[Any, ...] | None = None
+    last_display_sync_monotonic: float | None = None
     shutting_down: bool = False
     shutdown_reason: str | None = None
 
@@ -135,9 +155,7 @@ def runtime_current_state(runtime_entry: Proflame2RuntimeEntry) -> FireplaceStat
     return None if runtime_entry.last_packet is None else runtime_entry.last_packet.state
 
 
-async def async_persist_runtime_entry_state(
-    hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry
-) -> None:
+async def async_persist_runtime_entry_state(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
     """Persist the current fireplace state used for restart restoration."""
 
     cache = await _async_load_persisted_runtime_state(hass)
@@ -182,9 +200,7 @@ async def async_set_runtime_current_state(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
 
 
-def clear_active_profile_if_state_differs(
-    runtime_entry: Proflame2RuntimeEntry, state: FireplaceState
-) -> None:
+def clear_active_profile_if_state_differs(runtime_entry: Proflame2RuntimeEntry, state: FireplaceState) -> None:
     """Clear the active profile marker when the current state no longer matches it."""
 
     if runtime_entry.active_profile_state is None:
@@ -195,9 +211,7 @@ def clear_active_profile_if_state_differs(
         runtime_entry.active_profile_state = None
 
 
-async def async_restore_runtime_state(
-    hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry
-) -> None:
+async def async_restore_runtime_state(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
     """Restore the last known state from persistent storage if one exists."""
 
     cache = await _async_load_persisted_runtime_state(hass)
@@ -237,9 +251,7 @@ async def async_restore_runtime_state(
             runtime_entry.remote_profile,
             source="restored_state",
         )
-    runtime_entry.state_confidence = str(
-        restored.get("state_confidence", STATE_CONFIDENCE_RESTORED)
-    )
+    runtime_entry.state_confidence = str(restored.get("state_confidence", STATE_CONFIDENCE_RESTORED))
     runtime_entry.last_applied_profile_id = restored.get("last_applied_profile_id")
     runtime_entry.last_applied_profile_name = restored.get("last_applied_profile_name")
     runtime_entry.operational_status = OPERATIONAL_STATUS_READY
@@ -304,15 +316,148 @@ async def async_initialize_safe_default_runtime_state(
     )
     runtime_entry.state_confidence = STATE_CONFIDENCE_RESTORED
     runtime_entry.operational_status = OPERATIONAL_STATUS_READY
-    runtime_entry.last_error = (
-        "State initialized from safe defaults; no observed fireplace state was available."
-    )
+    runtime_entry.last_error = "State initialized from safe defaults; no observed fireplace state was available."
     await async_persist_runtime_entry_state(hass, runtime_entry)
     _LOGGER.warning(
         "Proflame2 initialized safe default runtime state config_entry_id=%s state=%s",
         runtime_entry.config_entry_id,
         runtime_entry.last_packet.state,
     )
+
+
+def _linked_esphome_entry_id(entry: ConfigEntry) -> str | None:
+    """Return the linked ESPHome config entry id, if configured."""
+
+    linked_entry_id = entry.options.get(CONF_ESPHOME_ENTRY_ID) or entry.data.get(CONF_ESPHOME_ENTRY_ID)
+    return linked_entry_id if isinstance(linked_entry_id, str) and linked_entry_id else None
+
+
+def _controller_instance_id(entry: ConfigEntry, backend_type: str) -> str:
+    """Return a stable controller identity scoped to one config entry/backend."""
+
+    if backend_type == BACKEND_ESPHOME:
+        linked_entry_id = _linked_esphome_entry_id(entry)
+        if linked_entry_id is not None:
+            return f"esphome:{linked_entry_id}"
+    return f"{backend_type}:{entry.entry_id}"
+
+
+def _pick_controller_identifier(
+    device: dr.DeviceEntry,
+) -> tuple[str, str] | None:
+    """Return one stable identifier tuple when the controller happens to have one."""
+
+    if not device.identifiers:
+        return None
+
+    esphome_identifiers = sorted(identifier for identifier in device.identifiers if identifier[0] == "esphome")
+    if esphome_identifiers:
+        return esphome_identifiers[0]
+    return sorted(device.identifiers)[0]
+
+
+def _resolve_linked_controller_device(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> tuple[str, tuple[str, str] | None] | None:
+    """Resolve the linked ESPHome controller device id and optional identifier."""
+
+    linked_entry_id = _linked_esphome_entry_id(entry)
+    if linked_entry_id is None:
+        return None
+
+    device_registry = dr.async_get(hass)
+    devices = dr.async_entries_for_config_entry(device_registry, linked_entry_id)
+    ranked_devices: list[tuple[tuple[int, int, int, str], dr.DeviceEntry]] = []
+    for device in devices:
+        ranked_devices.append(
+            (
+                (
+                    0 if device.via_device_id is None else 1,
+                    0 if device.connections else 1,
+                    0 if device.identifiers else 1,
+                    device.name or "",
+                ),
+                device,
+            )
+        )
+    if ranked_devices:
+        _, device = min(ranked_devices, key=lambda item: item[0])
+        return device.id, _pick_controller_identifier(device)
+    return None
+
+
+def _create_fireplace_device(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    *,
+    fireplace_id: str,
+    backend_type: str,
+) -> dr.DeviceEntry:
+    """Create or update the fireplace device without assuming controller identifiers."""
+
+    device_registry = dr.async_get(hass)
+    return device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers=fireplace_device_identifiers(fireplace_id),
+        manufacturer=MANUFACTURER,
+        name=entry.title,
+        model=f"Backend: {backend_type}",
+    )
+
+
+def async_refresh_runtime_device_link(
+    hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry, entry: ConfigEntry
+) -> bool:
+    """Refresh the fireplace -> controller registry link when the controller exists."""
+
+    resolved = _resolve_linked_controller_device(hass, entry)
+    if resolved is None:
+        _LOGGER.debug(
+            "Proflame2 controller link unresolved config_entry_id=%s linked_esphome_entry_id=%s",
+            entry.entry_id,
+            _linked_esphome_entry_id(entry),
+        )
+        return False
+
+    controller_device_id, controller_identifier = resolved
+    runtime_entry.controller_device_id = controller_device_id
+    runtime_entry.controller_device_identifier = controller_identifier
+
+    device_registry = dr.async_get(hass)
+    device_registry.async_update_device(
+        runtime_entry.device_id,
+        via_device_id=controller_device_id,
+    )
+    _LOGGER.debug(
+        "Proflame2 controller link refreshed config_entry_id=%s fireplace_device_id=%s controller_device_id=%s via_identifier=%s",
+        entry.entry_id,
+        runtime_entry.device_id,
+        controller_device_id,
+        controller_identifier,
+    )
+    return True
+
+
+async def async_retry_runtime_device_link(
+    hass: HomeAssistant,
+    runtime_entry: Proflame2RuntimeEntry,
+    entry: ConfigEntry,
+    *,
+    delays: tuple[float, ...],
+) -> bool:
+    """Retry linking the fireplace device through the ESPHome controller device."""
+
+    if async_refresh_runtime_device_link(hass, runtime_entry, entry):
+        return True
+
+    for delay in delays:
+        await asyncio.sleep(delay)
+        if runtime_entry.shutting_down:
+            return False
+        if async_refresh_runtime_device_link(hass, runtime_entry, entry):
+            return True
+
+    return False
 
 
 def async_get_runtime_entries(hass: HomeAssistant) -> dict[str, Proflame2RuntimeEntry]:
@@ -335,9 +480,7 @@ def async_notify_runtime_entry_updated(hass: HomeAssistant, config_entry_id: str
     async_dispatcher_send(hass, async_runtime_signal(config_entry_id))
 
 
-async def async_setup_runtime_entry(
-    hass: HomeAssistant, entry: ConfigEntry
-) -> Proflame2RuntimeEntry:
+async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> Proflame2RuntimeEntry:
     """Create and store runtime state for one config entry."""
 
     features = FireplaceFeatures(
@@ -358,23 +501,41 @@ async def async_setup_runtime_entry(
         features=features,
     )
 
-    device_registry = dr.async_get(hass)
-    device = device_registry.async_get_or_create(
-        config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, remote_id_as_hex(remote_profile.serial_id))},
-        manufacturer=MANUFACTURER,
-        name=entry.title,
-        model=f"Backend: {entry.data[CONF_BACKEND_TYPE]}",
+    backend_type = normalize_controller_id(entry.data[CONF_BACKEND_TYPE])
+    fireplace_id = entry.entry_id
+    controller_id = _controller_instance_id(entry, backend_type)
+    linked_controller = _resolve_linked_controller_device(hass, entry)
+    controller_device_id = linked_controller[0] if linked_controller is not None else None
+    controller_device_identifier = linked_controller[1] if linked_controller is not None else None
+    device = _create_fireplace_device(
+        hass,
+        entry,
+        fireplace_id=fireplace_id,
+        backend_type=backend_type,
     )
-
-    backend_type = str(entry.data[CONF_BACKEND_TYPE])
     backend: RFBackend | None
-    active_listening_enabled = bool(hass.data.setdefault(DOMAIN, {}).get(DATA_ACTIVE_LISTENING, False))
+    active_listening_enabled = bool(
+        entry.options.get(
+            CONF_ACTIVE_LISTENING,
+            hass.data.setdefault(DOMAIN, {}).get(DATA_ACTIVE_LISTENING, False),
+        )
+    )
     debug_logging_enabled = bool(entry.options.get(CONF_DEBUG_LOGGING, False))
 
     if backend_type == BACKEND_FAKE:
         backend = FakeRFBackend()
         await backend.connect()
+    elif backend_type == BACKEND_ESPHOME:
+        backend = ESPHomeAPIBackend(
+            transport=await async_create_esphome_transport(
+                hass,
+                entry,
+                controller_id=controller_id,
+                debug_logging_enabled=debug_logging_enabled,
+            ),
+            remote_profile=remote_profile,
+            debug_logging_enabled=debug_logging_enabled,
+        )
     elif backend_type == BACKEND_YARDSTICK:
         backend = YardStickBackend(
             hass=hass,
@@ -385,6 +546,15 @@ async def async_setup_runtime_entry(
     else:
         raise ValueError(f"Unsupported backend type: {backend_type}")
 
+    set_active_listening_enabled = getattr(backend, "set_active_listening_enabled", None)
+    if callable(set_active_listening_enabled):
+        maybe_awaitable = set_active_listening_enabled(
+            active_listening_enabled,
+            remote_profile,
+        )
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+
     runtime_entry = Proflame2RuntimeEntry(
         config_entry_id=entry.entry_id,
         title=entry.title,
@@ -393,6 +563,13 @@ async def async_setup_runtime_entry(
         features=features,
         backend=backend,
         device_id=device.id,
+        fireplace_id=fireplace_id,
+        controller_id=controller_id,
+        controller_device_id=controller_device_id,
+        controller_device_identifier=controller_device_identifier,
+        display_short_name=sanitize_fireplace_short_name(
+            entry.options.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
+        ),
         saved_profiles=normalize_profiles(
             entry.options.get(CONF_PROFILES, {}),
             features=features,
@@ -400,6 +577,12 @@ async def async_setup_runtime_entry(
         active_listening_enabled=active_listening_enabled,
         debug_logging_enabled=debug_logging_enabled,
     )
+    if controller_device_id is not None:
+        device_registry = dr.async_get(hass)
+        device_registry.async_update_device(
+            runtime_entry.device_id,
+            via_device_id=controller_device_id,
+        )
     if debug_logging_enabled:
         log_paths = await async_enable_packet_debug_logging(hass)
         _LOGGER.warning(
@@ -432,6 +615,34 @@ async def async_setup_runtime_entry(
     return runtime_entry
 
 
+async def async_create_esphome_transport(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    *,
+    controller_id: str,
+    debug_logging_enabled: bool,
+) -> ESPHomeTransport:
+    """Create the gated ESPHome transport for tests/dev wiring."""
+
+    factory = hass.data.setdefault(DOMAIN, {}).get(DATA_ESPHOME_TRANSPORT_FACTORY)
+    if factory is not None:
+        maybe_transport = factory(hass, entry)
+        return await maybe_transport if inspect.isawaitable(maybe_transport) else maybe_transport
+
+    linked_entry_id = _linked_esphome_entry_id(entry)
+    if isinstance(linked_entry_id, str) and linked_entry_id:
+        return HomeAssistantESPHomeTransport(
+            hass,
+            linked_entry_id=linked_entry_id,
+            controller_id=controller_id,
+            debug_logging_enabled=debug_logging_enabled,
+        )
+
+    raise RuntimeError(
+        "ESPHome backend is not configured; no ESPHome transport factory is registered and no linked ESPHome entry id is present."
+    )
+
+
 async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Unload and discard runtime state for one config entry."""
 
@@ -445,6 +656,7 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
             runtime_entry.active_send_task,
             runtime_entry.confirmation_task,
             runtime_entry.active_listener_task,
+            runtime_entry.display_sync_task,
         ):
             if task is not None:
                 task.cancel()
@@ -455,6 +667,7 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
                 runtime_entry.active_send_task,
                 runtime_entry.confirmation_task,
                 runtime_entry.active_listener_task,
+                runtime_entry.display_sync_task,
             )
             if task is not None
         ]
@@ -488,6 +701,7 @@ async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
             runtime_entry.active_send_task,
             runtime_entry.confirmation_task,
             runtime_entry.active_listener_task,
+            runtime_entry.display_sync_task,
         ):
             if task is not None:
                 task.cancel()
@@ -498,6 +712,7 @@ async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
                 runtime_entry.active_send_task,
                 runtime_entry.confirmation_task,
                 runtime_entry.active_listener_task,
+                runtime_entry.display_sync_task,
             )
             if task is not None
         ]
@@ -542,15 +757,18 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "title": runtime_entry.title,
         "backend_type": runtime_entry.backend_type,
         "device_id": runtime_entry.device_id,
+        "fireplace_id": runtime_entry.fireplace_id,
+        "controller_id": runtime_entry.controller_id,
+        "controller_device_id": runtime_entry.controller_device_id,
+        "controller_device_identifier": runtime_entry.controller_device_identifier,
+        "display_short_name": runtime_entry.display_short_name,
         "learning_in_progress": runtime_entry.learning_in_progress,
         "sending_in_progress": runtime_entry.sending_in_progress,
         "operational_status": runtime_entry.operational_status,
         "state_confidence": runtime_entry.state_confidence,
         "shutting_down": runtime_entry.shutting_down,
         "shutdown_reason": runtime_entry.shutdown_reason,
-        "desired_state": (
-            asdict(runtime_entry.desired_state) if runtime_entry.desired_state is not None else None
-        ),
+        "desired_state": (asdict(runtime_entry.desired_state) if runtime_entry.desired_state is not None else None),
         "remote_profile": {
             "serial_id": runtime_entry.remote_profile.serial_id,
             "ecc": asdict(runtime_entry.remote_profile.ecc),
@@ -585,7 +803,11 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "backend_diagnostics": (
             runtime_entry.backend.serialize_worker_diagnostics()
             if isinstance(runtime_entry.backend, YardStickBackend)
-            else None
+            else (
+                runtime_entry.backend.serialize_diagnostics()
+                if isinstance(runtime_entry.backend, ESPHomeAPIBackend)
+                else None
+            )
         ),
     }
 
@@ -627,9 +849,7 @@ def serialize_packet(packet: ProflamePacket) -> dict[str, Any]:
         "received_at": packet.received_at.isoformat() if packet.received_at else None,
         "rssi": packet.rssi,
         "transmission_plan": (
-            serialize_transmission_plan(packet.transmission_plan)
-            if packet.transmission_plan is not None
-            else None
+            serialize_transmission_plan(packet.transmission_plan) if packet.transmission_plan is not None else None
         ),
         "is_echo_candidate": packet.is_echo_candidate,
         "echo_delay_ms": packet.echo_delay_ms,

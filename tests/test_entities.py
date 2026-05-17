@@ -10,6 +10,7 @@ pytest.importorskip("pytest_homeassistant_custom_component")
 pytestmark = pytest.mark.ha
 
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -272,9 +273,7 @@ async def test_diagnostic_entities_are_disabled_by_default(hass) -> None:
     await hass.async_block_till_done()
 
     entity_registry = er.async_get(hass)
-    remote_id_entry = entity_registry.async_get(
-        _secondary_entity_id(entry.title, "Remote ID")
-    )
+    remote_id_entry = entity_registry.async_get(_secondary_entity_id(entry.title, "Remote ID"))
     cmd1_entry = entity_registry.async_get(_secondary_entity_id(entry.title, "Last Cmd1"))
 
     assert remote_id_entry is not None
@@ -323,10 +322,7 @@ async def test_last_issue_updates_after_failed_service_call(hass, monkeypatch) -
         == "Transmit failed because RF backend is unavailable; controls reverted to last known state."
     )
     assert issue is not None
-    assert (
-        issue.state
-        == "Transmit failed because RF backend is unavailable; controls reverted to last known state."
-    )
+    assert issue.state == "Transmit failed because RF backend is unavailable; controls reverted to last known state."
 
 
 async def test_primary_entity_shows_active_profile_only_after_apply_profile(hass) -> None:
@@ -440,14 +436,9 @@ async def test_diagnostic_entities_reflect_runtime_packet_data(hass) -> None:
     assert hass.states.get(_secondary_entity_id(entry.title, "Remote ID")).state == "3b3f02"
     assert hass.states.get(_secondary_entity_id(entry.title, "Last Cmd1")).state == "0x01"
     assert hass.states.get(_secondary_entity_id(entry.title, "Last Err1")).state == "0x76"
-    assert (
-        '"flame": 1'
-        in hass.states.get(_secondary_entity_id(entry.title, "Last Requested State JSON")).state
-    )
+    assert '"flame": 1' in hass.states.get(_secondary_entity_id(entry.title, "Last Requested State JSON")).state
     assert hass.states.get(_secondary_entity_id(entry.title, "Last Backend")).state == "fake"
-    assert "repeat_count=5" in hass.states.get(
-        _secondary_entity_id(entry.title, "Last Transmission Plan")
-    ).state
+    assert "repeat_count=5" in hass.states.get(_secondary_entity_id(entry.title, "Last Transmission Plan")).state
 
 
 async def test_multiple_fireplaces_have_clean_entity_names_and_unique_ids(hass) -> None:
@@ -470,3 +461,120 @@ async def test_multiple_fireplaces_have_clean_entity_names_and_unique_ids(hass) 
     assert second_primary.original_name == second.title
     assert hass.states.get(_secondary_entity_id(first.title, "Summary")) is None
     assert hass.states.get(_secondary_entity_id(second.title, "Summary")) is None
+
+
+async def test_same_serial_different_backends_create_distinct_devices_and_unique_ids(hass) -> None:
+    """Two entries with the same serial should still have separate HA identities."""
+
+    first = _add_entry(
+        hass,
+        title="Living Room LilyGO",
+        remote_id=0x3B3F02,
+        backend_type=BACKEND_FAKE,
+    )
+    assert await hass.config_entries.async_setup(first.entry_id)
+    second = _add_entry(
+        hass,
+        title="Living Room YardStick",
+        remote_id=0x3B3F02,
+        backend_type=BACKEND_YARDSTICK,
+    )
+    assert await hass.config_entries.async_setup(second.entry_id)
+    await hass.async_block_till_done()
+
+    runtime_entries = hass.data[DOMAIN]["runtime_entries"]
+    first_runtime = runtime_entries[first.entry_id]
+    second_runtime = runtime_entries[second.entry_id]
+
+    assert first_runtime.device_id != second_runtime.device_id
+
+    device_registry = dr.async_get(hass)
+    first_device = device_registry.async_get(first_runtime.device_id)
+    second_device = device_registry.async_get(second_runtime.device_id)
+    assert first_device is not None
+    assert second_device is not None
+    assert first_device.identifiers == {(DOMAIN, f"fireplace:{first.entry_id}")}
+    assert second_device.identifiers == {(DOMAIN, f"fireplace:{second.entry_id}")}
+
+    entity_registry = er.async_get(hass)
+    first_primary = entity_registry.async_get(_primary_entity_id(first.title))
+    second_primary = entity_registry.async_get(_primary_entity_id(second.title))
+    assert first_primary is not None
+    assert second_primary is not None
+    assert first_primary.unique_id == f"{first.entry_id}_primary"
+    assert second_primary.unique_id == f"{second.entry_id}_primary"
+
+
+async def test_legacy_serial_scoped_registry_entries_migrate_when_unambiguous(hass) -> None:
+    """Legacy serial-based registry identity should migrate for one unambiguous entry."""
+
+    entry = _add_entry(hass, title="Living Room Fireplace", remote_id=0x3B3F02)
+    entity_registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+    old_device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "3b3f02")},
+        manufacturer="OpenAI",
+        name=entry.title,
+        model="Backend: fake",
+    )
+    entity_registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "3b3f02",
+        config_entry=entry,
+        device_id=old_device.id,
+        original_name=entry.title,
+    )
+    entity_registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "3b3f02_last_issue",
+        config_entry=entry,
+        device_id=old_device.id,
+        original_name="Last Issue",
+    )
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    primary_entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_primary")
+    last_issue_entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_last_issue")
+    primary = entity_registry.async_get(primary_entity_id) if primary_entity_id else None
+    last_issue = entity_registry.async_get(last_issue_entity_id) if last_issue_entity_id else None
+    assert primary is not None
+    assert last_issue is not None
+    assert primary.unique_id == f"{entry.entry_id}_primary"
+    assert last_issue.unique_id == f"{entry.entry_id}_last_issue"
+
+    migrated_device = device_registry.async_get(primary.device_id)
+    assert migrated_device is not None
+    assert migrated_device.identifiers == {(DOMAIN, f"fireplace:{entry.entry_id}")}
+
+
+async def test_legacy_device_migration_skips_existing_target_identifier(hass) -> None:
+    """Registry migration must not fail if the target fireplace device already exists."""
+
+    entry = _add_entry(hass, title="Living Room Fireplace", remote_id=0x3B3F02)
+    device_registry = dr.async_get(hass)
+    target_device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, f"fireplace:{entry.entry_id}")},
+        manufacturer="Proflame2",
+        name=entry.title,
+        model="Backend: fake",
+    )
+    legacy_device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "3b3f02")},
+        manufacturer="Proflame2",
+        name=f"{entry.title} Legacy",
+        model="Backend: fake",
+    )
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert device_registry.async_get(target_device.id) is not None
+    assert device_registry.async_get(legacy_device.id) is not None
+    assert device_registry.async_get(target_device.id).identifiers == {(DOMAIN, f"fireplace:{entry.entry_id}")}

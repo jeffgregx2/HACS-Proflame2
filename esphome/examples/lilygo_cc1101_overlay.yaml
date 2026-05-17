@@ -1,0 +1,51 @@
+# LilyGO T-Embed CC1101 Proflame2 ESPHome overlay
+#
+# Do not copy this over a blank YAML file.
+#
+# Recommended setup order:
+#
+# 1. In ESPHome Builder, create a new ESP32 device first. ESPHome creates the
+#    local YAML file and the local secrets for Wi-Fi, API encryption, and OTA
+#    updates. Those secrets belong to your Home Assistant installation.
+#
+# 2. Open the YAML ESPHome generated for that device.
+#
+# 3. Keep the generated local connection blocks:
+#    - esphome:
+#    - wifi:
+#    - api:
+#    - ota:
+#    - logger:
+#
+#    Do not replace the generated API encryption key or OTA password with
+#    Proflame2-specific secret names.
+#
+# 4. Copy the substitutions, switch, and packages blocks below to the bottom of
+#    your generated YAML.
+#
+# 5. Replace the generated esp32: block with the LilyGO target below.
+#
+# 6. Build and deploy from ESPHome Builder.
+#
+# 7. In Home Assistant, add/configure the Proflame2 integration, select the
+#    LilyGO CC1101 controller, and link it to this ESPHome device.
+#
+# ESPHome's getting-started guide is the best reference for creating the base
+# device in ESPHome Builder:
+# https://esphome.io/guides/getting_started_hassio/
+
+substitutions:
+  proflame2_package_ref: "main"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+switch:
+  - platform: restart
+    name: Restart
+
+packages:
+  proflame2_tembed_base: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_base.yaml@${proflame2_package_ref}
+  proflame2_tembed_display: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_display.yaml@${proflame2_package_ref}

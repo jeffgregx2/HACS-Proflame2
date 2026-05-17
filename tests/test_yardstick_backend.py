@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import multiprocessing as mp
-import time
 
 import pytest
 
@@ -14,12 +13,12 @@ from custom_components.proflame2.protocol.encoder import encode_packet
 from custom_components.proflame2.protocol.models import FireplaceState
 from custom_components.proflame2.rf import yardstick
 from custom_components.proflame2.rf.capture import diagnose_air_payload
-from custom_components.proflame2.rf.waveform import build_transmission_plan
+from custom_components.proflame2.rf.waveform import build_repeated_air_payload, build_transmission_plan
 from custom_components.proflame2.rf.yardstick import (
     DEFAULT_RX_SCAN_OFFSETS_HZ,
     DIAGNOSTIC_PACKET_BYTES,
-    PROFLAME2_FREQUENCY_HZ,
     PROFLAME2_DATA_RATE,
+    PROFLAME2_FREQUENCY_HZ,
     REASON_DEVICE_NOT_FOUND,
     REASON_LIBUSB_UNAVAILABLE,
     REASON_PERMISSION_DENIED,
@@ -27,6 +26,7 @@ from custom_components.proflame2.rf.yardstick import (
     YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
     YARDSTICK_RX_LEARNING_PACKET_BYTES,
     YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
+    YARDSTICK_TX_STRATEGY_SOFTWARE_REPEAT,
     YardStickBackend,
     _should_suppress_verbose_failure,
     normalize_yardstick_backend_error,
@@ -36,7 +36,6 @@ from custom_components.proflame2.rf.yardstick_worker import (
     COMMAND_PING,
     COMMAND_RECEIVE,
     COMMAND_SEND,
-    COMMAND_STOP,
     YardStickWorkerSupervisor,
     _cleanup_radio_for_exit,
 )
@@ -48,6 +47,13 @@ class _FakeRadio:
     def __init__(self) -> None:
         self.MOD_ASK_OOK = 0x30
         self.calls: list[tuple[str, int | bool | None]] = []
+        self.registers: dict[int, int] = {
+            0x08: 0x00,
+            0x12: 0x30,
+            0x13: 0x00,
+            0x1B: 0x03,
+            0x22: 0x10,
+        }
 
     def setModeIDLE(self) -> None:
         self.calls.append(("setModeIDLE", None))
@@ -60,6 +66,9 @@ class _FakeRadio:
 
     def setMdmDRate(self, value: int) -> None:
         self.calls.append(("setMdmDRate", value))
+
+    def peek(self, address: int) -> int:
+        return self.registers.get(address, 0x00)
 
     def makePktFLEN(self, value: int) -> None:
         self.calls.append(("makePktFLEN", value))
@@ -324,14 +333,18 @@ def test_worker_supervisor_mock_mode_start_send_ping_stop() -> None:
             COMMAND_SEND,
             {
                 "air_payload_hex": "e5a9a9b96aa96e55596b95559ae55695b9a9a5aea6a9580000",
+                "air_payload_bit_length": 200,
                 "tx_frequency_hz": PROFLAME2_FREQUENCY_HZ,
-                "software_transmissions": 5,
-                "inter_frame_gap_ms": 0.0,
+                "logical_repeat_count": 5,
+                "repeat_separator_bits": 12,
+                "rf_xmit_call_count": 1,
+                "transmission_mode": "embedded_repeat_payload",
             },
             timeout=5.0,
         )
         assert send_response["success"] is True
-        assert send_response["payload"]["burst"]["software_transmissions"] == 5
+        assert send_response["payload"]["burst"]["logical_repeat_count"] == 5
+        assert send_response["payload"]["burst"]["rf_xmit_call_count"] == 1
         diagnostics = supervisor.serialize_diagnostics()
         assert diagnostics["backend_available"] is True
         assert diagnostics["worker_alive"] is True
@@ -508,6 +521,35 @@ def test_diagnostic_packet_length_is_applied_in_probe_mode() -> None:
     asyncio.run(_run())
 
 
+def test_receive_settings_include_rfcat_register_snapshot() -> None:
+    """Receive diagnostics should preserve the raw rfcat register state."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            probe_mode=True,
+            packet_length_bytes=DIAGNOSTIC_PACKET_BYTES,
+        )
+        await backend.connect()
+
+        settings = backend._build_receive_settings_snapshot()
+        raw_registers = settings["radio_settings"]["raw_registers"]
+
+        assert raw_registers["PKTCTRL0"] == "0x00"
+        assert raw_registers["MDMCFG2"] == "0x30"
+        assert raw_registers["AGCCTRL2"] == "0x03"
+        assert raw_registers["FREND0"] == "0x10"
+        assert settings["live_raw_registers"]["PKTCTRL0"] == "0x00"
+
+    asyncio.run(_run())
+
+
 def test_receive_status_reports_no_payload() -> None:
     """A timeout should leave a structured no-payload status behind."""
 
@@ -594,7 +636,11 @@ def test_worker_backed_send_uses_supervisor_and_never_calls_rflib(remote_profile
                             "modulation_mode": 0x30,
                             "data_rate": PROFLAME2_DATA_RATE,
                         },
-                        "burst": {"software_transmissions": 5},
+                        "burst": {
+                            "transmission_mode": "embedded_repeat_payload",
+                            "logical_repeat_count": 5,
+                            "rf_xmit_call_count": 1,
+                        },
                     },
                 },
             }
@@ -617,7 +663,11 @@ def test_worker_backed_send_uses_supervisor_and_never_calls_rflib(remote_profile
             COMMAND_OPEN,
             COMMAND_SEND,
         ]
-        assert fake_supervisor.requests[-1][1]["air_payload_hex"] == packet.transmission_plan.air_payload.hex()
+        expected_payload, expected_bit_length = build_repeated_air_payload(packet.transmission_plan)
+        assert fake_supervisor.requests[-1][1]["air_payload_hex"] == expected_payload.hex()
+        assert fake_supervisor.requests[-1][1]["air_payload_bit_length"] == expected_bit_length
+        assert fake_supervisor.requests[-1][1]["logical_repeat_count"] == 5
+        assert fake_supervisor.requests[-1][1]["rf_xmit_call_count"] == 1
 
     asyncio.run(_run())
 
@@ -716,8 +766,8 @@ def test_receive_status_reports_post_processing_exception(monkeypatch) -> None:
     asyncio.run(_run())
 
 
-def test_send_uses_transmission_plan_payload_and_software_burst(remote_profile) -> None:
-    """Yard Stick TX should default to five explicit software transmissions."""
+def test_send_uses_one_embedded_repeat_payload(remote_profile) -> None:
+    """Yard Stick TX should send one payload containing logical repeats."""
 
     async def _run() -> None:
         fake_radio = _FakeRadio()
@@ -738,24 +788,61 @@ def test_send_uses_transmission_plan_payload_and_software_burst(remote_profile) 
 
         result = await backend.send(packet)
 
+        expected_payload, _expected_bit_length = build_repeated_air_payload(packet.transmission_plan)
         assert result.backend_name == "yardstick"
-        assert fake_radio.last_payload == packet.transmission_plan.air_payload
+        assert fake_radio.last_payload == expected_payload
         assert fake_radio.last_repeat == 0
-        assert fake_radio.calls.count(("RFxmit", 0)) == packet.transmission_plan.repeat_count
+        assert fake_radio.calls.count(("RFxmit", 0)) == 1
         assert ("setFreq", PROFLAME2_FREQUENCY_HZ) in fake_radio.calls
         assert ("setMdmDRate", PROFLAME2_DATA_RATE) in fake_radio.calls
         assert ("setPktPQT", 0) in fake_radio.calls
         assert ("setMaxPower", None) in fake_radio.calls
         assert any(name == "_configure_transmit_radio" for name, _args in executor_calls)
-        assert any(name == "_transmit_air_payload" for name, _args in executor_calls)
+        transmit_calls = [args for name, args in executor_calls if name == "_transmit_air_payload"]
+        assert len(transmit_calls) == 1
+        assert transmit_calls[0][0] == expected_payload
+        assert transmit_calls[0][1:] == (5, 12, 1, 0.0, "embedded_repeat_payload")
         assert fake_radio.calls.count(("setModeIDLE", None)) >= 2
         assert fake_radio.calls[-1] == ("setModeIDLE", None)
 
     asyncio.run(_run())
 
 
-def test_send_software_gap_sleep_occurs_only_when_configured(remote_profile, monkeypatch) -> None:
-    """Inter-frame sleep should be used only for nonzero software burst gaps."""
+def test_send_can_fall_back_to_software_repeat_strategy(remote_profile, monkeypatch) -> None:
+    """Yard Stick can preserve old RFxmit-per-repeat behavior as a backend fallback."""
+
+    async def _run() -> None:
+        fake_radio = _FakeRadio()
+        sleep_calls: list[float] = []
+
+        async def fake_executor_job(func, *args):
+            return func(*args)
+
+        monkeypatch.setattr(yardstick.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+        backend = YardStickBackend(
+            radio=fake_radio,
+            executor_job=fake_executor_job,
+            sweep_enabled=False,
+            tx_transmissions=3,
+            tx_inter_frame_gap_ms=10,
+            tx_repeat_strategy=YARDSTICK_TX_STRATEGY_SOFTWARE_REPEAT,
+        )
+        state = FireplaceState(power=True, flame=1, fan=0, light=0)
+        packet = encode_packet(state, remote_profile, source="test")
+        packet.transmission_plan = build_transmission_plan(packet.frame)
+
+        await backend.send(packet)
+
+        assert fake_radio.last_payload == packet.transmission_plan.air_payload
+        assert fake_radio.calls.count(("RFxmit", 0)) == 3
+        assert sleep_calls == [0.01, 0.01]
+
+    asyncio.run(_run())
+
+
+def test_send_gap_override_changes_embedded_separator_bits(remote_profile, monkeypatch) -> None:
+    """Gap overrides should shape embedded bits, not sleep between RFxmit calls."""
 
     async def _run() -> None:
         fake_radio = _FakeRadio()
@@ -779,8 +866,14 @@ def test_send_software_gap_sleep_occurs_only_when_configured(remote_profile, mon
 
         await backend.send(packet)
 
-        assert fake_radio.calls.count(("RFxmit", 0)) == 3
-        assert sleep_calls == [0.01, 0.01]
+        expected_payload, _expected_bit_length = build_repeated_air_payload(
+            packet.transmission_plan,
+            repeat_count=3,
+            separator_bits=23,
+        )
+        assert fake_radio.last_payload == expected_payload
+        assert fake_radio.calls.count(("RFxmit", 0)) == 1
+        assert sleep_calls == []
 
     asyncio.run(_run())
 
@@ -832,8 +925,9 @@ def test_send_success_is_not_masked_by_post_tx_idle_failure(remote_profile) -> N
 
         result = await backend.send(packet)
 
+        expected_payload, _expected_bit_length = build_repeated_air_payload(packet.transmission_plan)
         assert result.backend_name == "yardstick"
-        assert fake_radio.last_payload == packet.transmission_plan.air_payload
+        assert fake_radio.last_payload == expected_payload
         assert fake_radio.last_repeat == 0
         assert fake_radio.calls.count(("setModeIDLE", None)) >= 2
         assert fake_radio.calls[-1] == ("setModeIDLE", None)
@@ -907,9 +1001,7 @@ def test_send_lock_contention_times_out_cleanly(remote_profile) -> None:
         )
         await backend._operation_lock.acquire()
         try:
-            packet = encode_packet(
-                FireplaceState(power=True, flame=1), remote_profile, source="test"
-            )
+            packet = encode_packet(FireplaceState(power=True, flame=1), remote_profile, source="test")
             packet.transmission_plan = build_transmission_plan(packet.frame)
             with pytest.raises(
                 RuntimeError,
@@ -1002,9 +1094,7 @@ def test_close_skips_nonexistent_radio_close_method() -> None:
 def test_noise_like_idle_payload_suppresses_verbose_decode_output() -> None:
     """Overwhelmingly idle/noise-like payloads should not dump giant symbol logs."""
 
-    raw_payload = bytes.fromhex(
-        "f800000000000000000000000000000000000000000000000000000000000000"
-    )
+    raw_payload = bytes.fromhex("f800000000000000000000000000000000000000000000000000000000000000")
     diagnostics = diagnose_air_payload(raw_payload)
 
     assert diagnostics.candidates == ()
@@ -1014,9 +1104,7 @@ def test_noise_like_idle_payload_suppresses_verbose_decode_output() -> None:
 def test_structured_near_miss_payload_keeps_verbose_decode_output() -> None:
     """Plausible structured payloads should keep detailed diagnostics."""
 
-    raw_payload = bytes.fromhex(
-        "f8000000000000014dcb554b72aacb5caaacd72ab4adcd4d2d"
-    )
+    raw_payload = bytes.fromhex("f8000000000000014dcb554b72aacb5caaacd72ab4adcd4d2d")
     diagnostics = diagnose_air_payload(raw_payload)
 
     assert diagnostics.candidates == ()

@@ -38,7 +38,7 @@ class ProflameFrame:
         )
 
     @classmethod
-    def from_bytes(cls, payload: bytes) -> "ProflameFrame":
+    def from_bytes(cls, payload: bytes) -> ProflameFrame:
         """Build a frame from the canonical byte payload."""
 
         if len(payload) != 7:
@@ -71,10 +71,11 @@ class ProflamePacket:
     source: str | None = None
     received_at: datetime | None = None
     rssi: float | None = None
-    transmission_plan: "ProflameTransmissionPlan | None" = None
+    transmission_plan: ProflameTransmissionPlan | None = None
     is_echo_candidate: bool = False
     echo_delay_ms: float | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    display_state: Any | None = None
 
     def __post_init__(self) -> None:
         """Keep the operational packet aligned with the logical frame."""
@@ -91,11 +92,11 @@ class ProflamePacket:
         raw: bytes | str | None = None,
         received_at: datetime | None = None,
         rssi: float | None = None,
-        transmission_plan: "ProflameTransmissionPlan | None" = None,
+        transmission_plan: ProflameTransmissionPlan | None = None,
         is_echo_candidate: bool = False,
         echo_delay_ms: float | None = None,
         warnings: tuple[str, ...] | list[str] | None = None,
-    ) -> "ProflamePacket":
+    ) -> ProflamePacket:
         """Build an operational packet from a logical frame.
 
         State decoding here intentionally does not require ECC constants. The

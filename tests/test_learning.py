@@ -10,6 +10,12 @@ import pytest
 
 pytestmark = pytest.mark.protocol
 
+from custom_components.proflame2.const import (
+    BACKEND_ESPHOME,
+    BACKEND_YARDSTICK,
+    DATA_ESPHOME_TRANSPORT_FACTORY,
+    DOMAIN,
+)
 from custom_components.proflame2.learning import (
     ERROR_AMBIGUOUS_PROFILE,
     ERROR_BACKEND_UNAVAILABLE,
@@ -19,18 +25,20 @@ from custom_components.proflame2.learning import (
     LearnResult,
     LearnSession,
     async_capture_next_learning_packet,
+    async_close_learning_session,
     async_create_learning_backend,
     async_learn_remote_profile,
     async_run_learning_with_backend,
+    async_start_learning_session,
     derive_learn_result_from_session,
-)
-from custom_components.proflame2.const import (
-    BACKEND_YARDSTICK,
-    DOMAIN,
 )
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.base import BackendCapabilities, ReceiveStatus, RFBackend
+from custom_components.proflame2.rf.esphome.contract import ESPHomeRXEvent
+from custom_components.proflame2.rf.esphome.transport import MockESPHomeTransport
+from custom_components.proflame2.rf.esphome_api import ESPHomeAPIBackend
 from custom_components.proflame2.rf.fake import FakeRFBackend
+from custom_components.proflame2.rf.waveform import build_transmission_plan
 from custom_components.proflame2.rf.yardstick import (
     PROFLAME2_FREQUENCY_HZ,
     YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
@@ -203,6 +211,87 @@ def test_yardstick_learning_backend_uses_proven_rx_defaults(monkeypatch) -> None
     asyncio.run(_run())
 
 
+def test_esphome_learning_backend_uses_fifo_transport_factory() -> None:
+    """Guided LilyGO learning should construct the FIFO-scanning ESPHome backend."""
+
+    class _FakeHass:
+        def __init__(self) -> None:
+            self.data = {DOMAIN: {DATA_ESPHOME_TRANSPORT_FACTORY: lambda hass, entry: MockESPHomeTransport()}}
+
+    async def _run() -> None:
+        backend = await async_create_learning_backend(
+            _FakeHass(),
+            BACKEND_ESPHOME,
+            esphome_entry_id="esphome-entry-1",
+        )
+
+        assert isinstance(backend, ESPHomeAPIBackend)
+        assert isinstance(backend.transport, MockESPHomeTransport)
+        assert backend.connected is True
+        assert backend.transport.active_listening_enabled is False
+
+    asyncio.run(_run())
+
+
+def test_esphome_learning_session_updates_firmware_learning_mode() -> None:
+    """Guided LilyGO learning should explicitly coordinate firmware learning UI/status."""
+
+    transport = MockESPHomeTransport()
+
+    class _FakeHass:
+        def __init__(self) -> None:
+            self.data = {DOMAIN: {DATA_ESPHOME_TRANSPORT_FACTORY: lambda hass, entry: transport}}
+
+    async def _run() -> None:
+        frame = ProflameFrame(
+            serial_id=0x3B3F02,
+            cmd1=0x01,
+            err1=0x76,
+            cmd2=0x16,
+            err2=0xEF,
+        )
+        packet = ProflamePacket.from_frame(frame, source="test")
+        payload = build_transmission_plan(packet.frame).air_payload
+        session = await async_start_learning_session(
+            _FakeHass(),
+            BACKEND_ESPHOME,
+            esphome_entry_id="esphome-entry-1",
+        )
+        session.prompt_index = 0
+        session.prompt_label = "power_on"
+        session.prompt_instruction = "Press Power ON"
+        transport.push_rx_event(
+            ESPHomeRXEvent(
+                event_id="learn-1",
+                raw_payload=payload,
+                capture_metadata={
+                    "event_kind": "fifo_capture",
+                    "artifact_class": "raw_fifo_window",
+                    "source": "lilygo_cc1101_fifo",
+                },
+            )
+        )
+
+        await async_capture_next_learning_packet(session)
+        await async_close_learning_session(session)
+
+        assert transport.learning_mode_updates[0]["active"] is True
+        assert transport.learning_mode_updates[1] == {
+            "active": True,
+            "step_title": "Learn 1",
+            "instruction": "Press Power ON",
+            "status": "Listening",
+        }
+        assert transport.learning_mode_updates[-1] == {
+            "active": False,
+            "step_title": "Learn",
+            "instruction": "Not active",
+            "status": "Idle",
+        }
+
+    asyncio.run(_run())
+
+
 def test_smartfire_tx_reference_frequency_remains_unchanged() -> None:
     """RX learning defaults should not change the SmartFire TX reference."""
 
@@ -287,9 +376,7 @@ def test_guided_learning_succeeds_after_restore_duplicate_and_cmd2_change() -> N
             receive_timeout=0.01,
         )
 
-        for prompt_index, prompt_label in enumerate(
-            ("power_on", "power_off", "restore_power_on", "flame_down")
-        ):
+        for prompt_index, prompt_label in enumerate(("power_on", "power_off", "restore_power_on", "flame_down")):
             session.prompt_index = prompt_index
             session.prompt_label = prompt_label
             packet = await async_capture_next_learning_packet(session)
@@ -397,8 +484,13 @@ def test_guided_learning_logs_exception_details_in_heartbeat(caplog, monkeypatch
 
         assert "guided learning receive failed" in caplog.text
         assert "Traceback" in caplog.text
-        assert any("exception_type=RuntimeError error=boom" in message for message in fake_packet_logger.exception_messages)
-        assert any("outcome=exception" in message and "reason=RuntimeError" in message and "error=boom" in message for message in fake_packet_logger.info_messages)
+        assert any(
+            "exception_type=RuntimeError error=boom" in message for message in fake_packet_logger.exception_messages
+        )
+        assert any(
+            "outcome=exception" in message and "reason=RuntimeError" in message and "error=boom" in message
+            for message in fake_packet_logger.info_messages
+        )
         assert not any("reason=None" in message for message in fake_packet_logger.info_messages)
 
     asyncio.run(_run())

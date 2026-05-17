@@ -1,0 +1,8 @@
+# ESPHome validation dependencies are intentionally isolated from the Home
+# Assistant custom-component test environment.
+#
+# ESPHome pins dependencies that can conflict with the HA pytest stack used by
+# this repository, so ESPHome validation uses a dedicated venv.
+#
+# Match the deployed firmware baseline used for LilyGO validation.
+esphome==2026.4.2

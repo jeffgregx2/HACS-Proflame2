@@ -18,7 +18,7 @@
         "description": "Enter the permanent learned remote profile for one Proflame2 fireplace.",
         "data": {
           "name": "Fireplace name",
-          "backend_type": "RF backend",
+          "backend_type": "Controller Type",
           "remote_id": "Remote ID",
           "c1": "C1",
           "d1": "D1",
@@ -28,17 +28,29 @@
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log"
+          "cpi": "CPI supported"
+        }
+      },
+      "manual_esphome": {
+        "title": "Choose LilyGO ESPHome device",
+        "description": "{setup_text}",
+        "data": {
+          "esphome_entry_id": "LilyGO ESPHome device"
         }
       },
       "learn": {
         "title": "Learn fireplace profile",
-        "description": "Choose the RF backend to use for guided learning. After this step, listening starts automatically. The fireplace does not need to start in any specific state. The integration will guide you through a small sequence of button presses so it can confirm one stable remote profile.",
+        "description": "Choose the controller type to use for guided learning. After this step, listening starts automatically. The fireplace does not need to start in any specific state. The integration will guide you through a small sequence of button presses so it can confirm one stable remote profile.",
         "data": {
           "name": "Fireplace name",
-          "backend_type": "RF backend",
-          "debug_logging": "Enable packet debug log"
+          "backend_type": "Controller Type"
+        }
+      },
+      "learn_esphome": {
+        "title": "Choose LilyGO ESPHome device",
+        "description": "{setup_text}",
+        "data": {
+          "esphome_entry_id": "LilyGO ESPHome device"
         }
       },
       "learn_features": {
@@ -50,7 +62,8 @@
           "front": "Front burner supported",
           "aux": "Aux supported",
           "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log"
+          "debug_logging": "Enable packet debug log",
+          "active_listening": "Enable active listening"
         }
       },
       "learn_failed": {
@@ -75,10 +88,12 @@
       "invalid_profile": "The saved profile contains an invalid fireplace state.",
       "invalid_profile_name": "Profile name is required.",
       "duplicate_profile_id": "A saved profile with that name already exists.",
-      "unknown_profile": "Choose an existing saved profile."
+      "unknown_profile": "Choose an existing saved profile.",
+      "required": "This field is required.",
+      "invalid_esphome_entry": "Select a valid ESPHome device."
     },
     "abort": {
-      "already_configured": "A fireplace with this remote ID is already configured."
+      "already_configured": "A fireplace with this remote ID is already configured for this controller."
     }
   },
   "options": {
@@ -104,7 +119,8 @@
           "front": "Front burner supported",
           "aux": "Aux supported",
           "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log"
+          "debug_logging": "Enable packet debug log",
+          "active_listening": "Enable active listening"
         }
       },
       "profiles": {

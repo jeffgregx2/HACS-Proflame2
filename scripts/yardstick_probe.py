@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
-import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -14,9 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.proflame2.rf.capture import find_proflame_candidates
 from custom_components.proflame2.rf.yardstick import (
-    DIAGNOSTIC_PACKET_BYTES,
     PROBE_RX_BANDWIDTH,
-    PROFLAME2_FREQUENCY_HZ,
     YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
     YARDSTICK_RX_LEARNING_PACKET_BYTES,
     YARDSTICK_RX_LEARNING_SWEEP_ENABLED,

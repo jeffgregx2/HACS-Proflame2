@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass, field
 
 from ..protocol.packet import ProflameFrame, ProflamePacket
-
 from .base import BackendCapabilities, CaptureResult, RFBackend, SendResult
 from .capture import CaptureSample
 

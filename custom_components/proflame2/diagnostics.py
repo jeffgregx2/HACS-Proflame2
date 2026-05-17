@@ -9,9 +9,7 @@ from .runtime import async_get_runtime_entries, serialize_runtime_entry
 from .version import build_flavor, integration_version
 
 
-async def async_get_config_entry_diagnostics(
-    hass: HomeAssistant, entry: ConfigEntry
-) -> dict:
+async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigEntry) -> dict:
     """Return minimal diagnostics for future troubleshooting."""
 
     return {

@@ -1,0 +1,8 @@
+[run]
+source = custom_components/proflame2
+data_file = /tmp/proflame2.coverage
+omit =
+    custom_components/proflame2/rf/dev/*
+
+[report]
+show_missing = True

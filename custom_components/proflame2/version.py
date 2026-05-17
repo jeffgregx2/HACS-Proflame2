@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_INTEGRATION_VERSION = "0.1.0-dev"
+DEFAULT_INTEGRATION_VERSION = "0.4.0"
 BUILD_DEV = "dev"
 BUILD_PROD = "prod"
+ENABLE_FAKE_BACKEND_ENV = "PROFLAME2_ENABLE_FAKE_BACKEND"
 
 
 def _derive_build_from_version(version: str) -> str:
@@ -48,6 +49,13 @@ def is_dev_build() -> bool:
     """Return ``True`` when the active build should expose dev-only UX."""
 
     return build_flavor() == BUILD_DEV
+
+
+def fake_backend_enabled() -> bool:
+    """Return whether the simulated RF backend may be exposed in user-facing flows."""
+
+    value = os.getenv(ENABLE_FAKE_BACKEND_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 INTEGRATION_VERSION = integration_version()
