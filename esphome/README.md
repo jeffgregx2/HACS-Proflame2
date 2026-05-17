@@ -36,19 +36,17 @@ CI artifacts or attached to GitHub releases.
 
 ## User Entry Point
 
-Use the production example as an overlay on top of an ESPHome-generated device
-YAML:
+Use the production overlay on top of an ESPHome-generated device YAML:
 
-- `examples/lilygo_cc1101_example.yaml`
+- `examples/lilygo_cc1101_overlay.yaml`
 
-Do not start by copying the example over a blank YAML. Create the ESPHome
+Do not start by copying the overlay over a blank YAML. Create the ESPHome
 device first so ESPHome generates local Wi-Fi, API encryption, and OTA secrets.
-Then apply the Proflame2-specific board/package edits from the example.
+Then apply the Proflame2-specific board/package edits from the overlay.
 
 High-level user instructions live in:
 
 - `../docs/lilygo_cc1101_controller.md`
-- `../docs/esphome_firmware_build.md`
 
 ## Package Files
 
@@ -62,16 +60,19 @@ Debug firmware may additionally include:
 - `packages/proflame2_tembed_debug.yaml`
 
 The debug package exposes manual FIFO capture/profile controls and other
-low-level RF diagnostics. It is intentionally omitted from the normal example.
+low-level RF diagnostics. It is intentionally omitted from the normal overlay.
 
 ## Release-Pinned Package Example
 
 For normal users after releases are tagged:
 
 ```yaml
+substitutions:
+  proflame2_package_ref: "main"
+
 packages:
-  proflame2_tembed_base: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_base.yaml@<release-or-branch>
-  proflame2_tembed_display: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_display.yaml@<release-or-branch>
+  proflame2_tembed_base: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_base.yaml@${proflame2_package_ref}
+  proflame2_tembed_display: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_display.yaml@${proflame2_package_ref}
 ```
 
 For local checkout development or manual sync into ESPHome:
@@ -84,7 +85,7 @@ packages:
 
 ## Hardware Target
 
-The production example targets the LilyGO T-Embed CC1101:
+The production overlay targets the LilyGO T-Embed CC1101:
 
 ```yaml
 esp32:

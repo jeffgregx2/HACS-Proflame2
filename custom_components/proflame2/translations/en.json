@@ -18,7 +18,7 @@
         "description": "Enter the permanent learned remote profile for one Proflame2 fireplace.",
         "data": {
           "name": "Fireplace name",
-          "backend_type": "RF backend",
+          "backend_type": "Controller Type",
           "remote_id": "Remote ID",
           "c1": "C1",
           "d1": "D1",
@@ -40,10 +40,10 @@
       },
       "learn": {
         "title": "Learn fireplace profile",
-        "description": "Choose the RF backend to use for guided learning. After this step, listening starts automatically. The fireplace does not need to start in any specific state. The integration will guide you through a small sequence of button presses so it can confirm one stable remote profile.",
+        "description": "Choose the controller type to use for guided learning. After this step, listening starts automatically. The fireplace does not need to start in any specific state. The integration will guide you through a small sequence of button presses so it can confirm one stable remote profile.",
         "data": {
           "name": "Fireplace name",
-          "backend_type": "RF backend"
+          "backend_type": "Controller Type"
         }
       },
       "learn_esphome": {

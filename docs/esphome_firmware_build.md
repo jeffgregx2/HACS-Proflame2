@@ -1,79 +1,59 @@
-# ESPHome Firmware Build Guide
+# ESPHome Firmware Build Reference
 
-This guide is for LilyGO T-Embed CC1101 users. The Proflame2 integration does
-not distribute prebuilt firmware. You build and deploy firmware locally with
-ESPHome.
+This reference is for advanced LilyGO T-Embed CC1101 users and developers. If
+you are setting up a LilyGO controller for normal use, start with the
+[LilyGO CC1101 controller guide](lilygo_cc1101_controller.md).
 
-## Requirements
+The normal user setup path is:
 
-- Home Assistant with ESPHome Builder, or the ESPHome CLI.
-- LilyGO T-Embed CC1101 hardware.
-- Network access from Home Assistant to the LilyGO device.
-- The Proflame2 Home Assistant integration installed.
+1. Create the ESPHome device in ESPHome Builder.
+2. Apply `esphome/examples/lilygo_cc1101_overlay.yaml` to the generated YAML.
+3. Build and deploy from ESPHome Builder.
+4. Add or reconfigure the Proflame2 integration in Home Assistant.
 
-## Build Model
+## Source-Only Firmware
 
-The firmware is provided as ESPHome source:
+This project distributes ESPHome source and configuration. It does not
+distribute prebuilt firmware binaries.
 
-- External component source under `esphome/components/proflame2_tembed`.
-- Package files under `esphome/packages`.
-- Example YAML under `esphome/examples`.
+Normal LilyGO firmware uses these package files through the overlay:
 
-Use the LilyGO example and packages as the reference starting point:
-
-- `esphome/examples/lilygo_cc1101_example.yaml`
 - `esphome/packages/proflame2_tembed_base.yaml`
 - `esphome/packages/proflame2_tembed_display.yaml`
+
+Debug firmware can additionally include:
+
 - `esphome/packages/proflame2_tembed_debug.yaml`
 
-## Recommended User Flow
+The debug package exposes manual FIFO capture/profile controls and other
+low-level diagnostics. It is intentionally omitted from normal firmware.
 
-1. Install the Proflame2 Home Assistant integration.
-2. Create a new ESPHome device with ESPHome Builder.
-3. Let ESPHome generate the YAML and local secrets.
-4. Keep the generated `esphome:`, `wifi:`, `api:`, `ota:`, and `logger:` sections.
-5. Replace the generated `esp32:` block with the LilyGO target from the example YAML.
-6. Add the Proflame2 `packages:` block from the example YAML.
-7. Build the firmware in ESPHome Builder.
-8. Deploy the firmware to the LilyGO device.
-9. Confirm the ESPHome device is online in Home Assistant.
-10. Add or reconfigure the Proflame2 integration to use the LilyGO CC1101 controller.
-11. Run guided learning from Home Assistant.
+## Release Pinning
 
-Do not manually create Proflame2-specific API encryption or OTA secrets. The
-generated ESPHome device already has local API/OTA credentials; keep those.
+The overlay uses a release substitution:
 
-## Creating The Base ESPHome Device
+```yaml
+substitutions:
+  proflame2_package_ref: "main"
+```
 
-If you are starting from scratch, use ESPHome Builder first:
-
-1. Open Home Assistant.
-2. Open the ESPHome Device Builder add-on.
-3. Create a new device.
-4. Give it a name, for example `lilygo-proflame2`.
-5. Enter Wi-Fi details if prompted.
-6. Let ESPHome create the initial YAML file.
-7. Open that generated YAML for editing.
-
-At this point, the YAML should already contain local device identity, API, OTA,
-Wi-Fi, and logging configuration. Keep those generated sections. Then apply the
-Proflame2 changes from `esphome/examples/lilygo_cc1101_example.yaml`.
-
-ESPHome's getting-started guide covers the base device creation flow:
-https://esphome.io/guides/getting_started_hassio/
-
-## Package References
-
-For normal release use, prefer release-pinned `github://` package references:
+The package references use that value:
 
 ```yaml
 packages:
-  proflame2_tembed_base: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_base.yaml@<release-or-branch>
-  proflame2_tembed_display: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_display.yaml@<release-or-branch>
+  proflame2_tembed_base: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_base.yaml@${proflame2_package_ref}
+  proflame2_tembed_display: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_display.yaml@${proflame2_package_ref}
 ```
 
-For local checkout development or manual sync into ESPHome, use local includes
-from this repository layout:
+The default `"main"` value uses the latest repository version when you rebuild
+the LilyGO firmware. For reproducible builds, pin the value to a release tag
+such as `"v0.3.0"`. If you pin a release tag, update it whenever you upgrade the
+Proflame2 integration and rebuild the LilyGO firmware.
+
+## Local Checkout Development
+
+For local development or manual sync into ESPHome, use local includes instead
+of GitHub package references:
 
 ```yaml
 packages:
@@ -81,27 +61,31 @@ packages:
   proflame2_tembed_display: !include ../packages/proflame2_tembed_display.yaml
 ```
 
-## Debug Firmware
+Only use local includes when the package files exist at that relative path in
+your ESPHome configuration directory.
 
-Normal users should not need deep diagnostic controls. Those controls belong in
-debug firmware.
+## Validation
 
-When debug diagnostics are needed, include the debug package:
+Python tests do not require ESPHome to be installed:
 
-```yaml
-packages:
-  proflame2_tembed_debug: github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_debug.yaml@<release-or-branch>
+```bash
+./.venv/bin/python -m pytest -q
 ```
 
-Debug firmware may expose manual capture and profile diagnostics. Production
-firmware should keep the UI focused on normal operation.
+ESPHome validation uses a dedicated virtualenv because ESPHome and Home
+Assistant currently require different dependency versions:
 
-## After Deployment
+```bash
+python3 -m venv .venv-esphome
+./.venv-esphome/bin/python -m pip install -r requirements-esphome.txt
+make esphome-config
+make esphome-compile
+make esphome-validate
+```
 
-After firmware deployment:
+Compile success is not RF validation. For release or hardware changes, validate:
 
-1. Confirm the ESPHome device is available in Home Assistant.
-2. Confirm the Proflame2 integration can link to the ESPHome device.
-3. Run guided learning.
-4. Validate TX from Home Assistant.
-5. Enable active listening if desired and validate native remote state updates.
+- LilyGO TX is decoded by `rtl_433` and accepted by the fireplace.
+- Guided learning completes from the native remote.
+- Native remote or YardStick TX is reflected in Home Assistant through LilyGO
+  active listening when active listening is enabled.

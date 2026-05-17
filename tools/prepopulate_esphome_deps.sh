@@ -12,7 +12,7 @@ Purpose:
   ESPHome / PlatformIO / ESP-IDF dependency caches.
 
 Defaults:
-  config-path: esphome/examples/lilygo_cc1101_example.yaml
+  config-path: esphome/validate_display_preset.yaml
 
 Environment overrides:
   PROFLAME2_SOURCE_REPO   Source repo root. Defaults to script repo root.
@@ -38,7 +38,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="${PROFLAME2_SOURCE_REPO:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-DEFAULT_CONFIG="esphome/examples/lilygo_cc1101_example.yaml"
+DEFAULT_CONFIG="esphome/validate_display_preset.yaml"
 CONFIG_REL="${1:-$DEFAULT_CONFIG}"
 CONFIG_ABS="$REPO_ROOT/$CONFIG_REL"
 

@@ -24,7 +24,7 @@ def _yaml_entity_block(text: str, entity_id: str) -> str:
 def test_esphome_firmware_tree_contains_expected_source_files() -> None:
     expected = {
         "README.md",
-        "examples/lilygo_cc1101_example.yaml",
+        "examples/lilygo_cc1101_overlay.yaml",
         "packages/proflame2_tembed_base.yaml",
         "packages/proflame2_tembed_display.yaml",
         "packages/proflame2_tembed_display_lvgl.yaml",
@@ -60,7 +60,7 @@ def test_esphome_firmware_tree_contains_expected_source_files() -> None:
 
 def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
     header = _read("components/proflame2_tembed/proflame2_tembed.h")
-    plan = (REPO_ROOT / "docs/proflame2_tembed_decomposition_plan.md").read_text(encoding="utf-8")
+    developer_notes = (REPO_ROOT / "docs/lilygo_cc1101_controller_dev.md").read_text(encoding="utf-8")
 
     assert "ESPHome integration shell" in header
     assert "`BatteryMonitor` owns PMIC/battery reads." in header
@@ -70,11 +70,11 @@ def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
     assert "`ActiveListenerController` owns learned-profile packet acceptance policy." in header
     assert "`TxController` owns TX payload validation and transport-shape policy." in header
 
-    assert "# Proflame2 T-Embed Decomposition Status" in plan
-    assert "## Current Boundaries" in plan
-    assert "## Completed Split Order" in plan
-    assert "Active RX is FIFO semantic capture only." in " ".join(plan.split())
-    assert "GDO edge-interval ownership path remains out of scope" in plan
+    assert "# LilyGO CC1101 Controller Developer Notes" in developer_notes
+    assert "## Architecture" in developer_notes
+    assert "## Receive Model" in developer_notes
+    assert "The legacy edge-interval ownership path was removed" in developer_notes
+    assert "TX is timing-sensitive" in developer_notes
 
 
 def test_esphome_external_component_uses_codegen_schema_and_action() -> None:
@@ -95,10 +95,10 @@ def test_esphome_external_component_uses_codegen_schema_and_action() -> None:
 
 
 def test_esphome_yaml_wires_local_external_component_and_tx_api() -> None:
-    example = _read("examples/lilygo_cc1101_example.yaml")
+    example = _read("examples/lilygo_cc1101_overlay.yaml")
     base = _read("packages/proflame2_tembed_base.yaml")
 
-    assert "LilyGO T-Embed CC1101 Proflame2 ESPHome example" in example
+    assert "LilyGO T-Embed CC1101 Proflame2 ESPHome overlay" in example
     assert "type: local" in base
     assert "path: components" in base
     assert "components: [proflame2_tembed]" in base
@@ -476,17 +476,22 @@ def test_display_boot_state_has_visible_default_label() -> None:
 
 def test_esphome_base_package_does_not_require_display_package() -> None:
     base = _read("packages/proflame2_tembed_base.yaml")
-    example = _read("examples/lilygo_cc1101_example.yaml")
+    example = _read("examples/lilygo_cc1101_overlay.yaml")
 
     assert "packages:" not in base or "proflame2_tembed_display" not in base
-    assert "proflame2_tembed_display: !include ../packages/proflame2_tembed_display.yaml" in example
+    assert 'proflame2_package_ref: "main"' in example
+    assert (
+        "proflame2_tembed_display: "
+        "github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_display.yaml@"
+        "${proflame2_package_ref}"
+    ) in example
 
 
 def test_esphome_yaml_documents_tembed_board_facts() -> None:
     combined = "\n".join(
         [
             _read("README.md"),
-            _read("examples/lilygo_cc1101_example.yaml"),
+            _read("examples/lilygo_cc1101_overlay.yaml"),
             _read("packages/proflame2_tembed_base.yaml"),
             _read("components/proflame2_tembed/radio_cc1101.h"),
         ]

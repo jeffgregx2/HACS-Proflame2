@@ -45,31 +45,21 @@ A USB extension cable can help place the YardStick closer to the fireplace.
 
 ## Setup Overview
 
-1. Connect the YardStick One to the Home Assistant host.
-2. Ensure Home Assistant can access the USB device.
-3. Install the Proflame2 Home Assistant integration.
-4. Add or reconfigure the Proflame2 integration.
-5. Select `YardStick One` as the controller.
-6. Run guided learning with the original remote.
-7. Validate basic controls.
+YardStick setup has four main parts:
 
-## Guided Learning
+1. Install the [Proflame2 Home Assistant integration](../README.md#installation).
+2. Connect the YardStick One to the Home Assistant host by USB.
+3. Confirm Home Assistant can access the YardStick USB device.
+4. Add the YardStick-backed fireplace in Home Assistant and run guided learning.
 
-Guided learning connects the controller to your fireplace using the original
-remote.
+YardStick does not use ESPHome, so there is no ESPHome firmware, ESPHome
+Builder setup, or ESPHome device selection step.
 
-Home Assistant will ask you to press buttons on the original remote. Keep the
-remote within about 3 feet of the YardStick while learning. When learning is
-complete, Home Assistant stores the values needed to control that fireplace.
+## Connect The YardStick
 
-YardStick receive is used for guided learning only. YardStick does not keep Home
-Assistant updated when the original remote is used after setup.
-
-## USB Notes
-
-If Home Assistant runs in a VM, Docker container, or supervised environment,
-make sure the YardStick USB device is passed through to the Home Assistant
-runtime.
+Connect the YardStick One to the computer running Home Assistant by USB. If
+Home Assistant runs in a VM, Docker container, or supervised environment, make
+sure the YardStick USB device is passed through to the Home Assistant runtime.
 
 If you see intermittent failures:
 
@@ -77,6 +67,38 @@ If you see intermittent failures:
 - Check VM/container USB passthrough rules.
 - Try a different USB port or powered USB hub.
 - Try a USB extension cable to move the YardStick closer to the fireplace.
+- If the YardStick is connected directly to a USB 3.0 port, try a USB extension
+  cable to separate it from the port. USB 3.0 connectors can sometimes create
+  interference for nearby radio devices.
+
+## Add The Fireplace In Home Assistant
+
+After the YardStick is connected and available to Home Assistant:
+
+1. Open Settings -> Devices & services -> Proflame 2 Fireplace.
+2. Select Add entry.
+3. Select Learn from remote.
+4. Enter the fireplace name. This is the name visible in Home Assistant.
+5. Enter a fireplace short name.
+6. Select `YARD Stick One USB Controller` as the Controller Type.
+7. Select Submit.
+8. Start guided learning.
+9. Hold the original remote within about 3 feet of the YardStick controller.
+10. Follow the prompts and press the requested buttons on the original remote.
+11. Select the fireplace features your installation supports.
+12. Validate Power, Flame, Fan, and any other enabled controls.
+
+## Guided Learning
+
+Guided learning connects the controller to your fireplace using the original
+remote. Home Assistant will ask you to press buttons on the original remote.
+Keep the remote within about 3 feet of the YardStick while learning.
+
+When learning is complete, Home Assistant stores the values needed to control
+that fireplace.
+
+YardStick receive is used for guided learning only. YardStick does not keep Home
+Assistant updated when the original remote is used after setup.
 
 ## Validation
 

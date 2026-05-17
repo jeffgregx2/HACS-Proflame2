@@ -26,10 +26,10 @@ jobs:
           python -m pip install -r requirements-esphome.txt
 
       - name: Validate ESPHome config
-        run: python -m esphome config esphome/examples/lilygo_cc1101_example.yaml
+        run: python -m esphome config esphome/validate_display_preset.yaml
 
       - name: Compile ESPHome example
-        run: python -m esphome compile esphome/examples/lilygo_cc1101_example.yaml
+        run: python -m esphome compile esphome/validate_display_preset.yaml
 
       - name: Remove generated firmware outputs
         if: always()

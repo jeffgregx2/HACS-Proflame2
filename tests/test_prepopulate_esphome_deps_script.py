@@ -9,7 +9,7 @@ def test_prepopulate_esphome_deps_script_exists_and_targets_example_config() -> 
 
     assert script.is_file()
     assert content.startswith("#!/bin/zsh")
-    assert "esphome/examples/lilygo_cc1101_example.yaml" in content
+    assert "esphome/validate_display_preset.yaml" in content
     assert "esphome config" in content
     assert "esphome compile" in content
     assert "analysis" in content

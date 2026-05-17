@@ -167,10 +167,25 @@ At this time, one controller can only control one fireplace.
 
 - [LilyGO CC1101 controller guide](docs/lilygo_cc1101_controller.md)
 - [YardStick controller guide](docs/yardstick_controller.md)
-- [ESPHome firmware build guide](docs/esphome_firmware_build.md)
+
+## Relationship To SmartFire
+
+[SmartFire](https://github.com/johnellinwood/SmartFire) demonstrated that
+Proflame2 fireplaces can be controlled programmatically and provides valuable
+reference behavior for packet construction, ECC handling, and transmit timing.
+
+This project builds on that work with a different product goal: a Home
+Assistant integration with guided learning, pluggable controllers,
+multi-fireplace support, feature-gated configuration, diagnostics, saved
+profiles, and atomic full-state control. Thank you to everyone who worked on
+SmartFire for the information that made this project possible.
 
 ## Warranty And Safe Operation
 
 No warranty is provided. You are responsible for safe operation of your
 fireplace and automation. Avoid unattended operation that could leave the
 fireplace running longer than intended.
+
+## License
+
+GNU General Public License v3.0. See [LICENSE](LICENSE).

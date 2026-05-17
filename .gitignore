@@ -226,6 +226,7 @@ __marimo__/
 
 # jEdit inspection/backup files
 #*#
+*~
 
 # Protocol debug data, we don't want that checked in
 analysis/
