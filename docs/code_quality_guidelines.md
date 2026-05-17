@@ -33,6 +33,13 @@ senior engineer can navigate, evaluate, debug, and safely change.
    Formatting and linting should be automated. Human review should focus on
    correctness, maintainability, behavior, and design.
 
+6. Preserve installed-user compatibility.
+   Once a feature has shipped, changes must account for existing Home Assistant
+   entries, options, learned profiles, ESPHome contracts, service schemas,
+   entity names, diagnostics, and persisted data. Do not break existing
+   installations unless the project intentionally changes the major version and
+   documents the required upgrade path.
+
 ## Repository Structure
 
 Organize code by domain and responsibility, not by vague utility buckets.
@@ -225,6 +232,40 @@ For artifact-like data, include provenance fields when relevant:
 - decode/validation status
 - ownership guarantee
 - allowed and prohibited uses
+
+## Migration And Backward Compatibility
+
+Post-release changes must treat existing installations as data that belongs to
+the user. Any change that touches persisted configuration, options, entities,
+service schemas, controller contracts, learned profiles, diagnostics, or
+firmware/API payloads must include an explicit compatibility decision.
+
+Default policy:
+
+- Preserve existing config entries and options.
+- Preserve learned fireplace profiles and serial/C/D identity data.
+- Preserve entity IDs, unique IDs, device identifiers, and service schemas
+  unless a migration handles the old shape.
+- Preserve ESPHome firmware contracts across compatible releases, or reject
+  incompatible firmware with a clear diagnostic instead of failing silently.
+- Preserve existing controller behavior unless the change is opt-in or
+  migrated.
+- Add migration code when persisted data shape changes.
+- Add tests for migrations and compatibility behavior.
+- Document user-visible behavior changes in release notes.
+
+Breaking changes are allowed only when all of these are true:
+
+- The major version changes.
+- The release notes explicitly identify the breaking change.
+- The documentation explains how to upgrade safely.
+- The code fails safely for unsupported old state instead of corrupting or
+  silently discarding user data.
+
+For Home Assistant config entries, prefer additive options and explicit
+`async_migrate_entry` handling over destructive rewrites. For ESPHome/LilyGO
+changes, prefer protocol-version checks, clear diagnostics, and documented
+firmware upgrade ordering.
 
 ## Documentation Philosophy
 
