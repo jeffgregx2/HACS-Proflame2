@@ -1,6 +1,8 @@
 substitutions:
   name: pf2-disp-preset
   friendly_name: Proflame2 T-Embed
+  proflame2_package_ref: "main"
+  proflame2_asset_base_url: assets/icons
 
 esphome:
   name: ${name}

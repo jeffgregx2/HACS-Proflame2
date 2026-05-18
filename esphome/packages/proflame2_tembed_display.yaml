@@ -7,6 +7,7 @@
 substitutions:
   proflame2_display_name: "${friendly_name}"
   proflame2_display_short_name: "---"
+  proflame2_asset_base_url: "https://raw.githubusercontent.com/jeffgregx2/HACS-Proflame2/${proflame2_package_ref}/esphome/assets/icons"
 
 packages:
   proflame2_tembed_display_lvgl: !include ../packages/proflame2_tembed_display_lvgl.yaml
@@ -16,17 +17,17 @@ psram:
   speed: 80MHz
 
 image:
-  - file: mdi:battery-outline
+  - file: ${proflame2_asset_base_url}/battery-outline.svg
     id: proflame2_header_battery_icon
     type: grayscale
     transparency: alpha_channel
     resize: 12x12
-  - file: mdi:wifi
+  - file: ${proflame2_asset_base_url}/wifi.svg
     id: proflame2_header_wifi_icon
     type: grayscale
     transparency: alpha_channel
     resize: 12x12
-  - file: mdi:home-assistant
+  - file: ${proflame2_asset_base_url}/home-assistant.svg
     id: proflame2_header_api_icon
     type: grayscale
     transparency: alpha_channel
