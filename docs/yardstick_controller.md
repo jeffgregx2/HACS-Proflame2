@@ -76,12 +76,12 @@ If you see intermittent failures:
 After the YardStick is connected and available to Home Assistant:
 
 1. Open Settings -> Devices & services -> Proflame 2 Fireplace.
-2. Select Add entry.
-3. Select Learn from remote.
+2. Select `Add entry`.
+3. Select `Learn from remote`.
 4. Enter the fireplace name. This is the name visible in Home Assistant.
 5. Enter a fireplace short name.
-6. Select `YARD Stick One USB Controller` as the Controller Type.
-7. Select Submit.
+6. Select `YARD Stick One USB Controller` as the `Controller Type`.
+7. Select `Submit`.
 8. Start guided learning.
 9. Hold the original remote within about 3 feet of the YardStick controller.
 10. Follow the prompts and press the requested buttons on the original remote.

@@ -14,7 +14,7 @@ fireplace and keep Home Assistant updated when the original remote is used.
 | Guided learning from the original remote | Yes |
 | Active listening after setup | Yes |
 | Home Assistant state updates from original remote | Yes |
-| Additional controller software required | Yes, ESPHome firmware |
+| Additional controller software required | ESPHome Builder to configure |
 
 ## Pros And Cons
 
@@ -47,27 +47,28 @@ The LilyGO controller requires firmware compatible with the Proflame2
 integration installed in Home Assistant. Setup has five main parts:
 
 1. Install the [Proflame2 Home Assistant integration](../README.md#installation).
-2. Create a new ESPHome device so ESPHome generates local connection secrets.
-3. Apply the Proflame2 LilyGO overlay to the generated ESPHome YAML.
+2. Create a new ESPHome device. This creates the device YAML configuration file
+   you need for the next steps.
+3. Use the LilyGO YAML helper to update the device YAML configuration file.
 4. Build and deploy the firmware to the LilyGO. The first install normally uses
-   USB; later updates should use ESPHome OTA over Wi-Fi.
+   USB; later updates should use Over-The-Air (OTA) updates via Wi-Fi.
 5. Add the LilyGO-backed fireplace in Home Assistant and run guided learning.
 
 ## Create The ESPHome Device
 
-Using ESPHome Builder, add a new device so ESPHome creates the local YAML
-file, API encryption key, OTA password, and Wi-Fi secrets for your Home
-Assistant installation.
+Using ESPHome Builder, add a new device so ESPHome creates the device YAML
+configuration file for your Home Assistant installation.
 
 1. In Home Assistant, open ESPHome Builder.
 2. Select `+ New Device`.
 3. Select `New Device Setup` and continue.
-4. Enter a name such as `Fireplace-LilyGO`, then select Next.
+4. Enter a name such as `Fireplace-LilyGO`, then select `Next`.
 5. Select `ESP32-S3` as the device type.
 6. Continue through the ESPHome Builder prompts. If the LilyGO is connected to
    the computer by USB, ESPHome may proceed directly to compiling and flashing
    the generated starter firmware.
-7. When the device has been created, open the generated YAML for editing.
+7. When the device has been created, select `EDIT` to open the YAML
+   configuration file.
 
 Avoid spaces and tabs in the ESPHome device name. The name is also used for the
 device hostname, such as `Fireplace-LilyGO.local`.
@@ -75,59 +76,61 @@ device hostname, such as `Fireplace-LilyGO.local`.
 ESPHome's guide for creating devices in Home Assistant is here:
 https://esphome.io/guides/getting_started_hassio/
 
-## Apply The Proflame2 Overlay
+## Update The ESPHome YAML
 
-After ESPHome creates the base device, apply the Proflame2 LilyGO overlay:
+After ESPHome creates the base device, use the LilyGO YAML helper to update the
+device YAML configuration file:
 
-1. Open
-   [lilygo_cc1101_overlay.yaml](../esphome/examples/lilygo_cc1101_overlay.yaml).
-2. Follow the comments at the top of that file.
-3. Keep the ESPHome-generated `api`, `ota`, `wifi`, and `logger` sections.
-4. Replace the generated `esp32` block with the LilyGO `esp32` block.
-5. Copy the remaining `substitutions`, `switch`, and `packages` blocks to the
-   bottom of your generated YAML.
+1. In ESPHome Builder, open the YAML editor for the device you created in the
+   prior step.
+2. Select all of the YAML text and copy it.
+3. Open the [LilyGO YAML helper](tools/lilygo-yaml-helper.html).
+4. Paste the copied YAML into the left text box in the helper.
+5. Select `Add LilyGO Proflame2 support`.
+6. Copy the generated YAML from the right text box.
+7. Return to the ESPHome Builder YAML editor.
+8. Select all of the existing YAML text.
+9. Paste the changed YAML from the helper.
+10. Save the YAML in ESPHome Builder.
 
-The overlay tells ESPHome where to download the Proflame2 firmware configuration
-from GitHub. You only need to edit your device YAML file; you do not need to
-copy any other Proflame2 YAML files.
+The helper preserves the ESPHome-generated `api`, `ota`, `wifi`, `logger`, and
+device identity settings. It also updates the ESP32 framework to the current
+validated LilyGO firmware framework, adds the Proflame2 package references, and
+adds a restart switch if one is not already present.
 
-The overlay includes a `proflame2_package_ref` value that tells ESPHome which
-version of the LilyGO firmware configuration to download from GitHub. The
-default is `"main"`, which uses the latest repository version when you rebuild
-the LilyGO firmware.
-
-Advanced users may pin this to a release tag such as `"v0.3.0"` for
-reproducible firmware builds. If you pin a release tag, update it whenever you
-upgrade the Proflame2 integration and rebuild the LilyGO firmware.
+To manually update your YAML file instead, see
+[manual LilyGO YAML setup](lilygo_cc1101_manual_yaml.md).
 
 ## Build And Deploy
 
-After applying the overlay:
+After updating the YAML:
 
-1. Save the ESPHome YAML.
-2. For the first install, connect the LilyGO by USB to the computer running the
+1. For the first install, connect the LilyGO by USB to the computer running the
    browser with ESPHome Builder open.
-3. Build the firmware in ESPHome Builder.
-4. Deploy the firmware to the LilyGO device.
-5. Confirm the ESPHome device appears online in ESPHome Builder.
+2. In ESPHome Builder, select `Install` for the LilyGO device.
+3. For the first install, choose `Plugged into this computer` and follow the
+   browser USB prompts.
+4. Confirm the ESPHome device appears online in ESPHome Builder.
 
 After the firmware is installed and the LilyGO is online, you should not need
-USB for normal firmware updates. Future updates can be built and deployed from
-ESPHome Builder using OTA over Wi-Fi.
+USB for normal firmware updates. For future updates, select `Install` and then
+choose `Wireless` to build and deploy using Over-The-Air (OTA) updates via
+Wi-Fi.
 
-If ESPHome reports missing API or OTA secrets, return to the generated YAML and
-restore the `api` and `ota` sections ESPHome created for the device.
+If the YAML helper reports missing `api`, `ota`, or `wifi` sections, redo
+[Update The ESPHome YAML](#update-the-esphome-yaml) and make sure you copy the
+full YAML configuration file from ESPHome Builder.
 
 ## Add The ESPHome Device To Home Assistant
 
 After the LilyGO firmware is online, add the ESPHome device to Home Assistant:
 
 1. Open Settings -> Devices & services -> ESPHome.
-2. Select Add device.
-3. For Host, enter the ESPHome device name with `.local` added, such as
+2. Select `Add device`.
+3. For `Host`, enter the ESPHome device name with `.local` added, such as
    `Fireplace-LilyGO.local`.
 4. Leave the port unchanged.
-5. Select Submit.
+5. Select `Submit`.
 6. Confirm the ESPHome device is online in Home Assistant.
 
 If `.local` discovery does not work in your network, use the LilyGO IP address
@@ -138,14 +141,14 @@ instead.
 After the ESPHome device is available in Home Assistant:
 
 1. Open Settings -> Devices & services -> Proflame 2 Fireplace.
-2. Select Add entry.
-3. Select Learn from remote.
+2. Select `Add entry`.
+3. Select `Learn from remote`.
 4. Enter the fireplace name. This is the name visible in Home Assistant.
 5. Enter a fireplace short name. Controllers with displays, such as the LilyGO,
    show this shorter name on the display.
-6. Select `LilyGO T-Embed CC1101` as the Controller Type. This tells the
+6. Select `LilyGO T-Embed CC1101` as the `Controller Type`. This tells the
    Proflame2 integration what kind of controller you are using.
-7. Select Submit.
+7. Select `Submit`.
 8. Select the matching ESPHome device when prompted. This is the device name you
    created earlier in ESPHome, such as `Fireplace-LilyGO`.
 9. Start guided learning.
