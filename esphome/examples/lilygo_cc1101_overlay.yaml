@@ -3,7 +3,7 @@
 # This file is the manual/reference overlay. Most users should use the browser
 # YAML helper instead:
 #
-#   docs/tools/lilygo-yaml-helper.html
+#   https://jeffgregx2.github.io/HACS-Proflame2/tools/lilygo-yaml-helper.html
 #
 # The helper lets you paste the ESPHome Builder generated YAML and returns a
 # complete LilyGO Proflame2 YAML file.

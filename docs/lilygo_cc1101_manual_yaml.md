@@ -1,7 +1,7 @@
 # Manual LilyGO YAML Setup
 
 Most users should use the
-[LilyGO YAML helper](tools/lilygo-yaml-helper.html). This page is for manual
+[LilyGO YAML helper](https://jeffgregx2.github.io/HACS-Proflame2/tools/lilygo-yaml-helper.html). This page is for manual
 setup or troubleshooting when you want to edit the ESPHome YAML yourself.
 
 ## Manual Overlay
