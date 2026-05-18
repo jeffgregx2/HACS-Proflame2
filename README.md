@@ -34,6 +34,8 @@ LilyGO is a full-featured Proflame2 controller with a built-in display that show
 ![LilyGO Controller](docs/images/LilyGO-Display.png)
 
 Note: ESPHome Builder is required in order to configure the LilyGO firmware.
+The LilyGO setup guide includes a browser YAML helper that updates the ESPHome
+Builder generated YAML for Proflame2.
 
 Setup guide: [LilyGO CC1101 controller](docs/lilygo_cc1101_controller.md)
 

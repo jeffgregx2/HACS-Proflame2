@@ -330,6 +330,7 @@ async def test_learning_esphome_entry_requires_linked_esphome_config_entry(hass)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "learn_esphome"
     assert result["description_placeholders"] == {"setup_text": LILYGO_ESPHOME_LINK_HELP}
+    assert "docs/lilygo_cc1101_controller.md" in LILYGO_ESPHOME_LINK_HELP
     serialized = voluptuous_serialize.convert(
         result["data_schema"],
         custom_serializer=cv.custom_serializer,

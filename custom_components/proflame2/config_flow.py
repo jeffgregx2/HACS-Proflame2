@@ -86,9 +86,9 @@ from .rf.yardstick import YardStickBackendUnavailableError
 
 LILYGO_ESPHOME_LINK_HELP = (
     "Select the ESPHome device that runs the LilyGO T-Embed CC1101 Proflame2 firmware.\n\n"
-    "This is only required for controllers that include ESPHome devices, such as the LilyGO. "
-    "If the list is empty, add the ESPHome device through Home Assistant's ESPHome integration first, "
-    "then return to this setup flow."
+    "If the device is not listed, create and flash the LilyGO ESPHome device first, then add it through "
+    "Home Assistant's ESPHome integration and return to this setup flow.\n\n"
+    "Setup guide: https://github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/lilygo_cc1101_controller.md"
 )
 
 

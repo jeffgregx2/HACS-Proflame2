@@ -1,6 +1,14 @@
 # LilyGO T-Embed CC1101 Proflame2 ESPHome overlay
 #
-# Do not copy this over a blank YAML file.
+# This file is the manual/reference overlay. Most users should use the browser
+# YAML helper instead:
+#
+#   docs/tools/lilygo-yaml-helper.html
+#
+# The helper lets you paste the ESPHome Builder generated YAML and returns a
+# complete LilyGO Proflame2 YAML file.
+#
+# Do not copy this overlay over a blank YAML file.
 #
 # Recommended setup order:
 #
@@ -20,10 +28,12 @@
 #    Do not replace the generated API encryption key or OTA password with
 #    Proflame2-specific secret names.
 #
-# 4. Copy the substitutions, switch, and packages blocks below to the bottom of
-#    your generated YAML.
+# 4. Copy or merge the substitutions, switch, and packages blocks below into
+#    your generated YAML. There can only be one top-level substitutions block,
+#    one packages block, and one switch block.
 #
-# 5. Replace the generated esp32: block with the LilyGO target below.
+# 5. Update the generated esp32.framework.type value to arduino. The current
+#    LilyGO Proflame2 firmware is validated on the Arduino framework.
 #
 # 6. Build and deploy from ESPHome Builder.
 #
