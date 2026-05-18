@@ -84,7 +84,8 @@ device YAML configuration file:
 1. In ESPHome Builder, open the YAML editor for the device you created in the
    prior step.
 2. Select all of the YAML text and copy it.
-3. Open the [LilyGO YAML helper](tools/lilygo-yaml-helper.html).
+3. Open the
+   [LilyGO YAML helper](https://jeffgregx2.github.io/HACS-Proflame2/tools/lilygo-yaml-helper.html).
 4. Paste the copied YAML into the left text box in the helper.
 5. Select `Add LilyGO Proflame2 support`.
 6. Copy the generated YAML from the right text box.
