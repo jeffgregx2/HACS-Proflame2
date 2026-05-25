@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -16,6 +17,21 @@ assert SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+
+def _rtl433_source_root() -> Path:
+    configured = os.environ.get("PROFLAME2_RTL433_SOURCE")
+    candidates = [
+        Path(configured).expanduser() if configured else None,
+        Path.home() / "Tools" / "rtl_433",
+        REPO_ROOT / "rtl_433",
+    ]
+    for candidate in candidates:
+        if candidate is not None and (candidate / "src" / "pulse_slicer.c").is_file():
+            return candidate
+    raise AssertionError(
+        "rtl_433 source tree not found. Set PROFLAME2_RTL433_SOURCE or clone it under ~/Tools/rtl_433."
+    )
 
 
 MODEL_CAPTURE = """
@@ -218,7 +234,7 @@ def test_missing_sections_do_not_crash() -> None:
 
 
 def test_rtl433_proflame2_pcm_debug_instrumentation_is_present() -> None:
-    pulse_slicer = (REPO_ROOT / "rtl_433" / "src" / "pulse_slicer.c").read_text(encoding="utf-8")
+    pulse_slicer = (_rtl433_source_root() / "src" / "pulse_slicer.c").read_text(encoding="utf-8")
 
     assert "#define PROFLAME2_PCM_DEBUG 1" in pulse_slicer
     assert "PROFLAME2_PCM_DEBUG slicer" in pulse_slicer
