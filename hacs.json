@@ -1,6 +1,5 @@
 {
   "name": "Proflame2 Home Assistant Integration",
-  "domains": ["proflame2"],
   "homeassistant": "2025.1.0",
   "render_readme": true
 }
