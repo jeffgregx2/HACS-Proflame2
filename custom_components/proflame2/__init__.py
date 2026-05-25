@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from homeassistant.const import Platform
     from homeassistant.core import HomeAssistant
 
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
@@ -31,6 +32,7 @@ from .version import INTEGRATION_VERSION
 
 __version__ = INTEGRATION_VERSION
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS: list[Platform] = ["sensor", "switch", "number", "button"]
 _LOGGER = logging.getLogger(__name__)
 _DISPLAY_SYNC_RETRY_DELAYS_SECONDS: tuple[float, ...] = (5.0, 15.0, 30.0)
