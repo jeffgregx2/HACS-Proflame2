@@ -18,5 +18,5 @@
   "requirements": [
     "rfcat>=2.0.1"
   ],
-  "version": "0.5.2-beta1"
+  "version": "0.5.2"
 }
