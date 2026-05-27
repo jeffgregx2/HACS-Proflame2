@@ -40,6 +40,14 @@ senior engineer can navigate, evaluate, debug, and safely change.
    installations unless the project intentionally changes the major version and
    documents the required upgrade path.
 
+7. Use codified lifecycle automation.
+   Repository lifecycle operations should use existing GitHub Actions or other
+   checked-in automation before manual edits. Version stamping, release
+   validation, HACS validation, hassfest, ESPHome validation, and similar
+   repeatable operations must follow the repository's workflows when they
+   exist. Manual execution is acceptable only for inspection, emergency repair,
+   or one-off investigation, and should not replace the canonical workflow.
+
 ## Repository Structure
 
 Organize code by domain and responsibility, not by vague utility buckets.
@@ -266,6 +274,43 @@ For Home Assistant config entries, prefer additive options and explicit
 `async_migrate_entry` handling over destructive rewrites. For ESPHome/LilyGO
 changes, prefer protocol-version checks, clear diagnostics, and documented
 firmware upgrade ordering.
+
+## Lifecycle Automation
+
+Lifecycle operations are changes to repository state, release state, or
+distribution metadata rather than normal feature implementation. Examples
+include:
+
+- stamping integration versions
+- creating release tags
+- publishing GitHub releases
+- validating release metadata
+- preparing HACS publication
+- running HACS and hassfest checks
+- validating ESPHome example/package builds
+- publishing GitHub Pages or other generated distribution artifacts
+
+Default policy:
+
+- Before performing a lifecycle operation manually, check whether a matching
+  GitHub Action or checked-in script already exists.
+- If an action exists, use it as the canonical path. For example, version
+  stamping must use the release-version workflow rather than directly editing
+  `manifest.json` and `version.py`.
+- If no action exists and the lifecycle operation is likely to be repeated,
+  first consider whether a new workflow or script should be created to codify
+  the operation.
+- Prefer automation that validates before mutating repository state. If a
+  workflow must mutate a branch, document that the branch must be pulled before
+  further local work.
+- Do not create release tags until the stamped version files, branch state, and
+  validation checks are consistent.
+- Release validation should verify tag format, prerelease/final release status,
+  and stamped version consistency.
+
+Manual lifecycle work is allowed when automation is unavailable or would create
+more risk than it removes, but the decision should be explicit. Do not
+silently bypass an existing workflow for convenience.
 
 ## Documentation Philosophy
 
