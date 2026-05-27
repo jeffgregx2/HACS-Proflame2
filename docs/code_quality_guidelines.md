@@ -308,6 +308,22 @@ Default policy:
 - Release validation should verify tag format, prerelease/final release status,
   and stamped version consistency.
 
+Branch and release flow:
+
+- Treat `dev` as the working release-preparation branch and `main` as the
+  published stable branch.
+- For beta releases, stamp `dev` to `X.Y.Z-betaN`, validate it, and publish the
+  prerelease tag from `dev`. Do not merge beta stamp commits into `main` as a
+  final release.
+- For final releases, start from the validated `dev` code line, stamp `dev` to
+  `X.Y.Z`, merge `dev` into `main`, then create the final release tag from
+  `main`.
+- After a final release, bring `dev` back in sync with `main` when needed so
+  future work starts from the released baseline.
+- Avoid stamping `main` separately when `dev` already contains the intended
+  release content. Separate main-only stamping creates avoidable back-merge
+  conflicts in version files.
+
 Manual lifecycle work is allowed when automation is unavailable or would create
 more risk than it removes, but the decision should be explicit. Do not
 silently bypass an existing workflow for convenience.
