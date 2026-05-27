@@ -109,6 +109,7 @@ def _backend_factory(*backends: FakeRFBackend):
 def _enable_fake_backend(monkeypatch) -> None:
     """Opt into Fake for tests that intentionally exercise simulated hardware."""
 
+    monkeypatch.setenv("PROFLAME2_BUILD", "dev")
     monkeypatch.setenv(ENABLE_FAKE_BACKEND_ENV, "true")
 
 

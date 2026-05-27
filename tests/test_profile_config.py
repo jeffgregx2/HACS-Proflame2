@@ -302,16 +302,16 @@ def test_build_profile_id_slugifies_display_name() -> None:
     assert build_profile_id("Evening Relax") == "evening_relax"
 
 
-def test_build_metadata_defaults_to_dev_with_fake_disabled(monkeypatch) -> None:
-    """Fake should stay hidden unless explicitly enabled, even in dev builds."""
+def test_build_metadata_defaults_to_prod_with_fake_disabled(monkeypatch) -> None:
+    """Released builds should default to production with Fake hidden."""
 
     monkeypatch.delenv("PROFLAME2_VERSION", raising=False)
     monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
     monkeypatch.delenv(ENABLE_FAKE_BACKEND_ENV, raising=False)
 
-    assert integration_version() == "0.1.0-dev"
-    assert build_flavor() == "dev"
-    assert is_dev_build() is True
+    assert integration_version() == "0.5.1"
+    assert build_flavor() == "prod"
+    assert is_dev_build() is False
     assert fake_backend_enabled() is False
     assert available_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
     assert available_learning_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
@@ -321,9 +321,10 @@ def test_fake_backend_requires_explicit_opt_in(monkeypatch) -> None:
     """Test fixtures may opt into Fake without exposing it by default."""
 
     monkeypatch.delenv("PROFLAME2_VERSION", raising=False)
-    monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
+    monkeypatch.setenv("PROFLAME2_BUILD", "dev")
     monkeypatch.setenv(ENABLE_FAKE_BACKEND_ENV, "true")
 
+    assert build_flavor() == "dev"
     assert fake_backend_enabled() is True
     assert available_backend_types() == (
         BACKEND_YARDSTICK,

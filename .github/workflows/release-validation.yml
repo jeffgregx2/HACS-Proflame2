@@ -1,0 +1,91 @@
+name: Validate Release
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Release tag to validate, for example v0.5.2 or v0.5.2-beta1
+        required: true
+      prerelease:
+        description: Whether the release should be treated as a prerelease
+        required: true
+        type: boolean
+
+jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release inputs
+        id: release
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag_name="${{ github.event.inputs.tag_name }}"
+            prerelease="${{ github.event.inputs.prerelease }}"
+          else
+            tag_name="${{ github.event.release.tag_name }}"
+            prerelease="${{ github.event.release.prerelease }}"
+          fi
+
+          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out release tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.release.outputs.tag_name }}
+
+      - name: Validate release tag, metadata, and stamped versions
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"].strip()
+          prerelease = os.environ["RELEASE_PRERELEASE"].strip().lower() == "true"
+
+          match = re.fullmatch(r"v(?P<version>\d+\.\d+\.\d+(?:-beta\d+)?)", tag)
+          if match is None:
+              raise SystemExit(
+                  f"Invalid release tag {tag!r}. Use vX.Y.Z or vX.Y.Z-betaN."
+              )
+
+          version = match.group("version")
+          is_beta = "-beta" in version
+          if is_beta and not prerelease:
+              raise SystemExit(f"Beta release tag {tag!r} must be marked as a GitHub prerelease.")
+          if not is_beta and prerelease:
+              raise SystemExit(f"Final release tag {tag!r} must not be marked as a GitHub prerelease.")
+
+          manifest = json.loads(Path("custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
+          manifest_version = manifest.get("version")
+          if manifest_version != version:
+              raise SystemExit(
+                  f"manifest.json version mismatch: expected {version!r}, found {manifest_version!r}."
+              )
+
+          version_text = Path("custom_components/proflame2/version.py").read_text(encoding="utf-8")
+          version_match = re.search(
+              r'^DEFAULT_INTEGRATION_VERSION = "(?P<version>[^"]+)"$',
+              version_text,
+              flags=re.MULTILINE,
+          )
+          if version_match is None:
+              raise SystemExit("DEFAULT_INTEGRATION_VERSION not found in version.py.")
+
+          default_version = version_match.group("version")
+          if default_version != version:
+              raise SystemExit(
+                  f"version.py mismatch: expected {version!r}, found {default_version!r}."
+              )
+
+          print(f"Release {tag} is valid.")
+          PY

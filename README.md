@@ -51,6 +51,19 @@ There are two ways you can install the Proflame2 integration: [HACS](https://www
 
 ### HACS
 
+The easiest way to install the Proflame2 integration before it is available in
+the default HACS catalog is to add it as a custom HACS repository.
+
+[![Add to HACS via My Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jeffgregx2&repository=HACS-Proflame2&category=Integration)
+
+1. Click `Add to HACS`.
+2. Confirm the repository in Home Assistant.
+3. Install the integration from HACS.
+4. Restart Home Assistant.
+5. Add the `Proflame2` integration from Home Assistant settings.
+
+If the button does not work, add the repository manually:
+
 1. Open Home Assistant.
 2. Open `HACS`.
 3. Open `Custom repositories`.

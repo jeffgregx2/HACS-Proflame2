@@ -1,10 +1,12 @@
 set_state:
   name: Set fireplace state
   description: Atomically apply a full Proflame 2 fireplace command.
-  target:
-    device:
-      integration: proflame2
   fields:
+    device_id:
+      required: false
+      selector:
+        device:
+          integration: proflame2
     config_entry_id:
       required: false
       selector:
@@ -52,10 +54,12 @@ set_state:
 apply_profile:
   name: Apply saved profile
   description: Apply one named saved fireplace profile for the targeted Proflame 2 fireplace.
-  target:
-    device:
-      integration: proflame2
   fields:
+    device_id:
+      required: false
+      selector:
+        device:
+          integration: proflame2
     config_entry_id:
       required: false
       selector:
