@@ -26,6 +26,10 @@ After ESPHome Builder creates the device YAML:
 6. Add the restart switch from the overlay only if your YAML does not already
    have a `platform: restart` switch.
 
+Do not copy the repository `esphome/components` directory into your ESPHome
+configuration. The package downloads the Proflame2 ESPHome component from
+GitHub using `proflame2_package_ref`.
+
 The current LilyGO Proflame2 firmware is validated on the Arduino framework.
 ESPHome Builder may create the starter YAML with `esp-idf`; change only the
 framework type unless you know the board value is wrong.
