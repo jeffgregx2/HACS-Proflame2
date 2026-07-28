@@ -26,7 +26,11 @@ from .const import (
     BACKEND_ESPHOME,
     CONF_LEARNING_DEBUG_LOGGING,
     CONF_REMOTE_ID,
+    CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    CONF_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DATA_LEARNING_DEBUG_LOGGING,
+    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DEFAULT_DEBUG_LOGGING,
     DOMAIN,
 )
@@ -48,6 +52,11 @@ CONFIG_SCHEMA = vol.Schema(
             vol.Schema(
                 {
                     vol.Optional(CONF_LEARNING_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): cv.boolean,
+                    vol.Optional(CONF_YARDSTICK_LEARNING_FREQUENCY_HZ): vol.All(
+                        cv.positive_int,
+                        vol.Range(min=314_000_000, max=316_000_000),
+                    ),
+                    vol.Optional(CONF_YARDSTICK_LEARNING_SWEEP_ENABLED): cv.boolean,
                 }
             ),
         ),
@@ -165,6 +174,20 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     if learning_debug_logging:
         _LOGGER.warning(
             "Proflame2 YAML learning debug logging override is ENABLED; guided learning will write packet diagnostic files"
+        )
+    if CONF_YARDSTICK_LEARNING_FREQUENCY_HZ in domain_config:
+        frequency_hz = int(domain_config[CONF_YARDSTICK_LEARNING_FREQUENCY_HZ])
+        domain_data[DATA_YARDSTICK_LEARNING_FREQUENCY_HZ] = frequency_hz
+        _LOGGER.warning(
+            "Proflame2 YAML YardStick learning frequency override is ENABLED frequency_hz=%s",
+            frequency_hz,
+        )
+    if CONF_YARDSTICK_LEARNING_SWEEP_ENABLED in domain_config:
+        sweep_enabled = bool(domain_config[CONF_YARDSTICK_LEARNING_SWEEP_ENABLED])
+        domain_data[DATA_YARDSTICK_LEARNING_SWEEP_ENABLED] = sweep_enabled
+        _LOGGER.warning(
+            "Proflame2 YAML YardStick learning sweep override is ENABLED sweep_enabled=%s",
+            sweep_enabled,
         )
     async_register_shutdown_listener(hass)
     return True

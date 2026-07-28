@@ -45,11 +45,15 @@ from custom_components.proflame2.const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    CONF_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DATA_FAKE_LEARNING_DELAY,
     DATA_LEARNING_BACKEND_FACTORY,
     DATA_LEARNING_DEBUG_LOGGING,
     DATA_LEARNING_RECEIVE_TIMEOUT,
     DATA_LEARNING_TIMEOUT,
+    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
 )
 from custom_components.proflame2.learning import LearnSession
@@ -125,6 +129,39 @@ def test_yaml_learning_debug_config_schema_accepts_hidden_override() -> None:
 
     assert enabled[DOMAIN][CONF_LEARNING_DEBUG_LOGGING] is True
     assert empty[DOMAIN] is None
+
+
+def test_yaml_yardstick_learning_tuning_schema_accepts_hidden_overrides() -> None:
+    """Domain YAML should support support-only YardStick learning RX tuning."""
+
+    configured = CONFIG_SCHEMA(
+        {
+            DOMAIN: {
+                CONF_YARDSTICK_LEARNING_FREQUENCY_HZ: "314973000",
+                CONF_YARDSTICK_LEARNING_SWEEP_ENABLED: "true",
+            }
+        }
+    )
+
+    assert configured[DOMAIN][CONF_YARDSTICK_LEARNING_FREQUENCY_HZ] == 314_973_000
+    assert configured[DOMAIN][CONF_YARDSTICK_LEARNING_SWEEP_ENABLED] is True
+
+
+async def test_yaml_yardstick_learning_tuning_overrides_are_stored(hass) -> None:
+    """YardStick support tuning should be available before guided learning starts."""
+
+    assert await async_setup(
+        hass,
+        {
+            DOMAIN: {
+                CONF_YARDSTICK_LEARNING_FREQUENCY_HZ: 314_973_000,
+                CONF_YARDSTICK_LEARNING_SWEEP_ENABLED: True,
+            }
+        },
+    )
+
+    assert hass.data[DOMAIN][DATA_YARDSTICK_LEARNING_FREQUENCY_HZ] == 314_973_000
+    assert hass.data[DOMAIN][DATA_YARDSTICK_LEARNING_SWEEP_ENABLED] is True
 
 
 async def _advance_guided_learning(

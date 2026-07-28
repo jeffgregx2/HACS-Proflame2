@@ -14,6 +14,8 @@ from custom_components.proflame2.const import (
     BACKEND_ESPHOME,
     BACKEND_YARDSTICK,
     DATA_ESPHOME_TRANSPORT_FACTORY,
+    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
 )
 from custom_components.proflame2.learning import (
@@ -270,6 +272,37 @@ def test_yardstick_learning_backend_uses_proven_rx_defaults(monkeypatch) -> None
         assert backend._frequency_hz == YARDSTICK_RX_LEARNING_FREQUENCY_HZ
         assert backend._packet_length_bytes == YARDSTICK_RX_LEARNING_PACKET_BYTES
         assert backend._sweep_enabled is YARDSTICK_RX_LEARNING_SWEEP_ENABLED
+
+    asyncio.run(_run())
+
+
+def test_yardstick_learning_backend_uses_yaml_rx_tuning_overrides(monkeypatch) -> None:
+    """Support-only YAML tuning should flow into the YardStick learning backend."""
+
+    class _FakeHass:
+        def __init__(self) -> None:
+            self.data = {
+                DOMAIN: {
+                    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ: 314_973_000,
+                    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED: True,
+                }
+            }
+
+        async def async_add_executor_job(self, func, *args):
+            return func(*args)
+
+    async def _run() -> None:
+        async def fake_connect(self) -> None:
+            return None
+
+        monkeypatch.setattr(YardStickBackend, "connect", fake_connect)
+
+        backend = await async_create_learning_backend(_FakeHass(), BACKEND_YARDSTICK)
+
+        assert isinstance(backend, YardStickBackend)
+        assert backend._frequency_hz == 314_973_000
+        assert backend._packet_length_bytes == YARDSTICK_RX_LEARNING_PACKET_BYTES
+        assert backend._sweep_enabled is True
 
     asyncio.run(_run())
 
