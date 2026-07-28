@@ -41,6 +41,7 @@ from .const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    DATA_LEARNING_DEBUG_LOGGING,
     DATA_LEARNING_RECEIVE_TIMEOUT,
     DATA_LEARNING_TIMEOUT,
     DEFAULT_DEBUG_LOGGING,
@@ -644,11 +645,14 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         assert self._learn_input is not None
         domain_data = self.hass.data.setdefault(DOMAIN, {})
+        debug_logging = bool(self._learn_input.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)) or bool(
+            domain_data.get(DATA_LEARNING_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)
+        )
         try:
             return await async_start_learning_session(
                 self.hass,
                 self._learn_input[CONF_BACKEND_TYPE],
-                debug_logging=bool(self._learn_input.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)),
+                debug_logging=debug_logging,
                 timeout=float(domain_data.get(DATA_LEARNING_TIMEOUT, DEFAULT_LEARN_TIMEOUT_SECONDS)),
                 receive_timeout=float(
                     domain_data.get(

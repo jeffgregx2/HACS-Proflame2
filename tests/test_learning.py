@@ -109,6 +109,69 @@ def test_learning_times_out_cleanly() -> None:
     asyncio.run(_run())
 
 
+def test_guided_learning_timeout_logs_receive_status_summary(caplog) -> None:
+    """Prompt timeout should emit one compact diagnostic summary without packet debug."""
+
+    class _NoCandidateBackend(RFBackend):
+        name = "yardstick"
+
+        def __init__(self) -> None:
+            self.last_receive_status = None
+
+        async def connect(self) -> None:
+            return None
+
+        async def close(self, *, reason: str | None = None) -> None:
+            return None
+
+        async def send(self, packet):
+            raise NotImplementedError
+
+        async def receive(self, timeout: float | None = None):
+            if timeout:
+                await asyncio.sleep(timeout)
+            self.last_receive_status = ReceiveStatus(
+                outcome="payload_no_candidates",
+                reason="decoder_rejected",
+                active_frequency_hz=315000000,
+                payload_length_bytes=255,
+                candidate_count=0,
+            )
+            return None
+
+        async def learn(self, timeout: float | None = None):
+            raise NotImplementedError
+
+        async def capabilities(self) -> BackendCapabilities:
+            return BackendCapabilities(can_receive=True)
+
+    async def _run() -> None:
+        session = LearnSession(
+            backend=_NoCandidateBackend(),
+            step_timeout=0.02,
+            receive_timeout=0.01,
+            debug_logging_enabled=False,
+            prompt_index=0,
+            prompt_label="power_on",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = await async_capture_next_learning_packet(session)
+
+        assert result.success is False
+        assert result.error_code == ERROR_TIMEOUT
+        assert "guided learning prompt timed out" in caplog.text
+        assert "last_receive_outcome=payload_no_candidates" in caplog.text
+        assert "last_receive_reason=decoder_rejected" in caplog.text
+        assert "active_freq_hz=315000000" in caplog.text
+        assert "payload_length_bytes=255" in caplog.text
+        assert "candidate_count=0" in caplog.text
+        assert session.receive_outcome_counts["payload_no_candidates"] >= 1
+        assert session.receive_reason_counts["decoder_rejected"] >= 1
+
+    asyncio.run(_run())
+
+
 def test_learning_rejects_inconsistent_remote_ids() -> None:
     """Mixed remote IDs must fail instead of being guessed."""
 

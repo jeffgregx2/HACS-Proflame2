@@ -6,6 +6,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+import voluptuous as vol
+
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.const import Platform
@@ -20,7 +22,14 @@ try:
 except ImportError:  # pragma: no cover - older HA versions may not expose this name.
     DeviceIdentifierCollisionError = ValueError  # type: ignore[misc,assignment]
 
-from .const import BACKEND_ESPHOME, CONF_REMOTE_ID, DOMAIN
+from .const import (
+    BACKEND_ESPHOME,
+    CONF_LEARNING_DEBUG_LOGGING,
+    CONF_REMOTE_ID,
+    DATA_LEARNING_DEBUG_LOGGING,
+    DEFAULT_DEBUG_LOGGING,
+    DOMAIN,
+)
 from .identity import (
     fireplace_device_identifier,
     legacy_fireplace_device_identifier,
@@ -32,7 +41,19 @@ from .version import INTEGRATION_VERSION
 
 __version__ = INTEGRATION_VERSION
 
-CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Optional(DOMAIN): vol.Any(
+            None,
+            vol.Schema(
+                {
+                    vol.Optional(CONF_LEARNING_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): cv.boolean,
+                }
+            ),
+        ),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
 PLATFORMS: list[Platform] = ["sensor", "switch", "number", "button"]
 _LOGGER = logging.getLogger(__name__)
 _DISPLAY_SYNC_RETRY_DELAYS_SECONDS: tuple[float, ...] = (5.0, 15.0, 30.0)
@@ -137,7 +158,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     from .runtime import async_register_shutdown_listener
 
-    hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_config = config.get(DOMAIN) or {}
+    learning_debug_logging = bool(domain_config.get(CONF_LEARNING_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
+    domain_data[DATA_LEARNING_DEBUG_LOGGING] = learning_debug_logging
+    if learning_debug_logging:
+        _LOGGER.warning(
+            "Proflame2 YAML learning debug logging override is ENABLED; guided learning will write packet diagnostic files"
+        )
     async_register_shutdown_listener(hass)
     return True
 
