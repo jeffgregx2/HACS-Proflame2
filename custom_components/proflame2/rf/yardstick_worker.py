@@ -95,6 +95,7 @@ _YARDSTICK_RX_REGISTER_ADDRESSES: dict[str, int] = {
 
 
 def _read_yardstick_register(radio: Any, address: int) -> str:
+    errors: list[str] = []
     for method_name in ("peek", "getRFRegister", "readRFRegister"):
         method = getattr(radio, method_name, None)
         if method is None:
@@ -102,7 +103,9 @@ def _read_yardstick_register(radio: Any, address: int) -> str:
         try:
             return f"0x{int(method(address)) & 0xFF:02X}"
         except Exception as exc:  # pragma: no cover - depends on rflib backend quirks
-            return f"unavailable:{method_name}:{type(exc).__name__}"
+            errors.append(f"{method_name}:{type(exc).__name__}")
+    if errors:
+        return "unavailable:" + ",".join(errors)
     return "unavailable:no_register_reader"
 
 
@@ -155,6 +158,15 @@ class MockRfCat:
         time.sleep(min(timeout / 1000.0, 0.01) if timeout else 0.01)
         raise TimeoutError("mock timeout")
 
+    def getBuildInfo(self) -> bytes:
+        return b"MockRfCat r0"
+
+    def getCompilerInfo(self) -> bytes:
+        return b"mock-compiler"
+
+    def reprHardwareConfig(self) -> str:
+        return "Dongle:              MockRfCat\nFirmware rev:        0\nBootloader:          Not installed"
+
 
 @dataclass(slots=True)
 class WorkerBackendStatus:
@@ -194,6 +206,7 @@ class _YardStickWorkerState:
     radio: Any | None = None
     timeout_exception: type[Exception] | None = None
     modulation: int | None = None
+    startup_metadata: dict[str, Any] | None = None
     last_error: str | None = None
 
 
@@ -288,6 +301,57 @@ def _response(
 
 def _worker_log(level: int, message: str, *args: Any) -> None:
     _LOGGER.log(level, "Yard Stick worker: " + message, *args)
+
+
+def _stringify_radio_metadata_value(value: Any) -> str:
+    """Return a log/debug-safe string for rflib metadata call results."""
+
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _collect_yardstick_startup_metadata(radio: Any) -> dict[str, Any]:
+    """Collect non-fatal rfcat/YardStick firmware metadata."""
+
+    metadata: dict[str, Any] = {}
+    for method_name in ("getBuildInfo", "getCompilerInfo", "reprHardwareConfig"):
+        method = getattr(radio, method_name, None)
+        if not callable(method):
+            metadata[method_name] = {
+                "available": False,
+                "error": "method_unavailable",
+            }
+            continue
+        try:
+            metadata[method_name] = {
+                "available": True,
+                "value": _stringify_radio_metadata_value(method()),
+            }
+        except Exception as exc:  # pragma: no cover - depends on rflib firmware quirks
+            metadata[method_name] = {
+                "available": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    return metadata
+
+
+def _log_yardstick_startup_metadata(
+    metadata: dict[str, Any],
+    *,
+    device_index: int,
+    source: str,
+) -> None:
+    """Log rfcat/YardStick startup metadata in a predictable support format."""
+
+    _LOGGER.info(
+        "Proflame2 Yard Stick startup metadata device_index=%s source=%s getBuildInfo=%r getCompilerInfo=%r reprHardwareConfig=%r",
+        device_index,
+        source,
+        metadata.get("getBuildInfo"),
+        metadata.get("getCompilerInfo"),
+        metadata.get("reprHardwareConfig"),
+    )
 
 
 def _cleanup_radio_for_exit(radio: Any) -> None:
@@ -594,6 +658,12 @@ def _dispatch_worker_request(
                     state.device_index,
                     mock_mode=state.mock_mode,
                 )
+                state.startup_metadata = _collect_yardstick_startup_metadata(state.radio)
+                _log_yardstick_startup_metadata(
+                    state.startup_metadata,
+                    device_index=state.device_index,
+                    source="worker_open",
+                )
                 _worker_log(logging.INFO, "open complete device_index=%s", state.device_index)
             state.last_error = None
             return (
@@ -602,6 +672,7 @@ def _dispatch_worker_request(
                     kind=KIND_OK,
                     status=_worker_status(generation=state.generation, radio=state.radio, last_error=None),
                     timing_ms=(time.monotonic() - started) * 1000,
+                    payload={"startup_metadata": state.startup_metadata or {}},
                 ),
                 False,
             )

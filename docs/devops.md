@@ -2,6 +2,66 @@
 
 This document captures project-specific release operations for maintainers.
 
+## Repository Access
+
+Canonical GitHub repository:
+
+- Owner/repo: `jeffgregx2/HACS-Proflame2`
+- HTTPS URL: `https://github.com/jeffgregx2/HACS-Proflame2`
+- Local `origin`: `git@github.com:jeffgregx2/HACS-Proflame2.git`
+- Normal working branch: `dev`
+- Published stable branch: `main`
+
+For Codex sessions in this workspace, use HTTPS for read-only GitHub access.
+The local git remote is SSH-backed, but Codex does not have a usable SSH key in
+this environment (`git@github.com: Permission denied (publickey)`). Do not spend
+time retrying SSH for issue lookup or remote reads unless credentials have been
+explicitly changed.
+
+The GitHub CLI is not installed in this workspace. Use the GitHub REST API with
+`curl` for read-only issue context:
+
+```bash
+curl -L --fail https://api.github.com/repos/jeffgregx2/HACS-Proflame2/issues/11
+curl -L --fail https://api.github.com/repos/jeffgregx2/HACS-Proflame2/issues/11/comments
+```
+
+For a different issue, replace only the issue number in both URLs. GitHub
+attachment links in issue comments can also be fetched with `curl -L --fail`.
+For read-only git refs, use HTTPS directly:
+
+```bash
+git ls-remote --heads https://github.com/jeffgregx2/HACS-Proflame2.git dev main
+```
+
+Do not store GitHub tokens, credentials, or one-off authenticated URLs in this
+repository. If a workflow requires authenticated GitHub writes, stop and confirm
+the intended credential path instead of guessing. Prefer GitHub Actions for
+release operations.
+
+## Python Environment
+
+Use the repository virtual environment for Python commands:
+
+```bash
+./.venv/bin/python -m pytest -q
+./.venv/bin/ruff check custom_components tools tests
+./.venv/bin/black --check custom_components tools tests
+```
+
+The Makefile already defaults `PYTHON`, `RUFF`, and `BLACK` to `./.venv/bin/*`,
+so `make test`, `make lint-python`, and `make format-python-check` are safe
+entrypoints.
+
+ESPHome validation uses a separate virtual environment:
+
+```bash
+make esphome-validate
+```
+
+That target creates/uses `./.venv-esphome/bin/python` and installs
+`requirements-esphome.txt` as needed.
+
 ## Release A Version
 
 Use this flow when promoting `dev` to `main` and creating a HACS/ESPHome release.

@@ -61,6 +61,8 @@ from .yardstick_worker import (
     COMMAND_RECEIVE,
     COMMAND_SEND,
     YardStickWorkerSupervisor,
+    _collect_yardstick_startup_metadata,
+    _log_yardstick_startup_metadata,
 )
 
 if TYPE_CHECKING:
@@ -128,6 +130,7 @@ _YARDSTICK_RX_REGISTER_ADDRESSES: dict[str, int] = {
 
 
 def _read_yardstick_register(radio: Any, address: int) -> str:
+    errors: list[str] = []
     for method_name in ("peek", "getRFRegister", "readRFRegister"):
         method = getattr(radio, method_name, None)
         if method is None:
@@ -135,7 +138,9 @@ def _read_yardstick_register(radio: Any, address: int) -> str:
         try:
             return f"0x{int(method(address)) & 0xFF:02X}"
         except Exception as exc:  # pragma: no cover - depends on rflib backend quirks
-            return f"unavailable:{method_name}:{type(exc).__name__}"
+            errors.append(f"{method_name}:{type(exc).__name__}")
+    if errors:
+        return "unavailable:" + ",".join(errors)
     return "unavailable:no_register_reader"
 
 
@@ -490,6 +495,7 @@ class YardStickBackend(RFBackend):
         self._shutdown_requested = False
         self._last_radio_settings: dict[str, Any] | None = None
         self._last_worker_rx_settings: dict[str, Any] | None = None
+        self._last_worker_open_payload: dict[str, Any] | None = None
         self.last_receive_diagnostics: YardStickReceiveDiagnostics | None = None
         if self._worker_mode and self._worker_supervisor is None:
             self._worker_supervisor = self._worker_supervisor_factory(device_index=device_index)
@@ -525,6 +531,9 @@ class YardStickBackend(RFBackend):
             self._debug("connect: lock acquired")
             await self._async_connect_locked()
             if self._worker_mode:
+                worker_startup_metadata = None
+                if self._last_worker_open_payload is not None:
+                    worker_startup_metadata = self._last_worker_open_payload.get("startup_metadata")
                 radio_settings = {
                     "smartfire_reference_url": SMARTFIRE_REFERENCE_URL,
                     "smartfire_reference_baseline": {
@@ -539,6 +548,7 @@ class YardStickBackend(RFBackend):
                     "packet_length_bytes": self._packet_length_bytes,
                     "probe_mode": self._probe_mode,
                     "worker_mode": True,
+                    "startup_metadata": worker_startup_metadata if isinstance(worker_startup_metadata, dict) else {},
                 }
             else:
                 self._debug("connect: rx configure start")
@@ -548,6 +558,13 @@ class YardStickBackend(RFBackend):
                     label="receive_radio_configuration",
                 )
             self._last_radio_settings = radio_settings
+            startup_metadata = radio_settings.get("startup_metadata")
+            if isinstance(startup_metadata, dict):
+                _log_yardstick_startup_metadata(
+                    startup_metadata,
+                    device_index=self._device_index,
+                    source="worker_open_response" if self._worker_mode else "direct_connect",
+                )
             _LOGGER.info(
                 "Proflame2 Yard Stick open succeeded device_index=%s rx_frequency_hz=%s tx_frequency_hz=%s",
                 self._device_index,
@@ -597,6 +614,8 @@ class YardStickBackend(RFBackend):
                 response["worker_pid"],
                 response["worker_generation"],
             )
+            payload = response.get("payload", {})
+            self._last_worker_open_payload = payload if isinstance(payload, dict) else {}
             return
         if self._radio is None:
             self._debug("connect: open required yes")
@@ -1602,6 +1621,7 @@ class YardStickBackend(RFBackend):
             "address_filtering": _radio_setting(self._radio, "address_filtering", "getPktAddr"),
             "agc_gain": _radio_setting(self._radio, "agc_gain", "getAGCState"),
             "raw_registers": _yardstick_register_snapshot(self._radio),
+            "startup_metadata": _collect_yardstick_startup_metadata(self._radio),
             "rx_mode_explicitly_set": entered_rx_mode,
             "manchester_enabled": _radio_setting(
                 self._radio,

@@ -302,14 +302,29 @@ def test_build_profile_id_slugifies_display_name() -> None:
     assert build_profile_id("Evening Relax") == "evening_relax"
 
 
-def test_build_metadata_defaults_to_prod_with_fake_disabled(monkeypatch) -> None:
-    """Released builds should default to production with Fake hidden."""
+def test_build_metadata_defaults_to_current_beta_with_fake_disabled(monkeypatch) -> None:
+    """Current beta builds should default to dev flavor with Fake still hidden."""
 
     monkeypatch.delenv("PROFLAME2_VERSION", raising=False)
     monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
     monkeypatch.delenv(ENABLE_FAKE_BACKEND_ENV, raising=False)
 
-    assert integration_version() == "0.5.1"
+    assert integration_version() == "0.5.4-beta2"
+    assert build_flavor() == "dev"
+    assert is_dev_build() is True
+    assert fake_backend_enabled() is False
+    assert available_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
+    assert available_learning_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
+
+
+def test_build_metadata_prod_release_override_hides_fake(monkeypatch) -> None:
+    """Production release versions should derive prod flavor with Fake hidden."""
+
+    monkeypatch.setenv("PROFLAME2_VERSION", "0.5.4")
+    monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
+    monkeypatch.delenv(ENABLE_FAKE_BACKEND_ENV, raising=False)
+
+    assert integration_version() == "0.5.4"
     assert build_flavor() == "prod"
     assert is_dev_build() is False
     assert fake_backend_enabled() is False
