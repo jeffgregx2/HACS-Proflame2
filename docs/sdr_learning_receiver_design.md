@@ -17,6 +17,8 @@ Proflame2 SDR acquisition and decode path that ships to users.
 
 - Allow Home Assistant guided learning to use one device for runtime control
   and another device for learning.
+- Add a manual learning path where the user can enter values collected outside
+  Home Assistant, including from rtl_433.
 - Add an optional SDR learning receiver that decodes Proflame2 packets with a
   native rtl_433-style OOK pulse pipeline.
 - Keep YardStick TX, YardStick learning, LilyGO RX, and LilyGO TX unchanged by
@@ -36,6 +38,7 @@ Proflame2 SDR acquisition and decode path that ships to users.
 - Do not run SDR capture continuously by default.
 - Do not use rtl_433 as a production subprocess.
 - Do not copy rtl_433 source code into this project.
+- Do not require rtl_433 for ordinary guided learning or runtime operation.
 - Do not require GitHub or package-network access at runtime.
 
 ## Home Assistant Architecture
@@ -58,6 +61,7 @@ The existing `backend_type` remains the controller selection:
 Add a learning receiver selection that defaults to the selected controller:
 
 - `controller`: use the selected controller's normal learning path.
+- `manual`: skip RF capture and let the user enter decoded Proflame2 values.
 - `sdr`: use the native SDR learning-only receiver.
 
 If the learning receiver is omitted, use `controller`. This preserves current
@@ -99,6 +103,20 @@ SDR learning path:
 
 This is especially useful when YardStick TX works but YardStick RX acquisition
 does not decode a remote.
+
+Manual learning path:
+
+1. User selects YardStick or LilyGO as the controller.
+2. User selects manual learning.
+3. Home Assistant shows the required values and expected formats.
+4. User runs an external capture tool, such as rtl_433, outside this integration.
+5. User enters the decoded values.
+6. The integration validates the values with the existing Proflame2 profile and
+   frame rules.
+7. The resulting profile is saved as a normal controller-backed fireplace.
+
+This gives issue reporters a low-friction beta path without shipping rtl_433,
+SDR drivers, native bindings, or a new pulse decoder in the integration.
 
 ## SDR Interface Analysis
 
@@ -155,28 +173,120 @@ Disadvantages:
 - Continuous session streaming from stdout must be carefully managed.
 - Device support is limited to RTL-SDR class devices.
 
-Recommendation: use this as the first live sample source if a production-safe
-Python RTL-SDR binding is not acceptable for HACS.
+Recommendation: keep this as a fallback or diagnostic source. Prefer Source B
+for the live SDR path if optional dependency packaging is solved cleanly.
 
 ### Source B: Python RTL-SDR Binding
 
 Use an optional Python wrapper around librtlsdr to program the device and read
 IQ samples directly.
 
+Validated status as of 2026-07-30:
+
+- This project is licensed as GNU GPL v3.0. GitHub reports the repository as
+  GPL-3.0, and the local `LICENSE` file is the GNU GPL version 3 text.
+- `pyrtlsdr` is published as GPLv3 and wraps `librtlsdr`.
+- The upstream Osmocom `rtl-sdr` repository is GPL licensed and GitHub reports
+  it as GPL-2.0. Before bundling any binary, confirm whether the exact
+  `librtlsdr` artifact is GPL-2.0-only or GPL-2.0-or-later, because GPLv2-only
+  and GPLv3 are not generally treated as interchangeable.
+- `pyrtlsdrlib` is a helper package that distributes prebuilt `librtlsdr`
+  binaries for common platforms, including Linux x86_64 and aarch64.
+
 Advantages:
 
 - Cleaner lifecycle control than spawning `rtl_sdr`.
 - Can stream samples continuously across learning prompts.
 - Avoids subprocess buffering and process cleanup complexity.
+- Fits the project's GPLv3 licensing better than originally assumed if the
+  Python dependency is `pyrtlsdr` under GPLv3.
+- Gives us direct control over sample windowing, cancellation, device reset, and
+  diagnostics inside the learning session.
 
 Disadvantages:
 
 - Adds optional native-library dependency.
 - Home Assistant OS/container users may need manual host package installation.
 - Packaging and support burden is higher than a subprocess helper.
+- Directly declaring `pyrtlsdr` or `pyrtlsdr[lib]` in `manifest.json`
+  `requirements` would make every HACS install attempt to install SDR support,
+  including users with no SDR and systems where native USB access cannot work.
+- Bundled binary support needs a platform policy for x86_64, aarch64, armv7, and
+  Home Assistant OS/container environments.
+- The `pyrtlsdrlib` package is convenient, but it shifts trust and update
+  cadence to a third-party binary distribution. Treat it as optional until we
+  are comfortable with its provenance, supported platforms, and license notices.
 
-Recommendation: keep this as a second acquisition source behind the same
-internal `SDRSampleSource` interface.
+Recommendation: Source B is the preferred live SDR architecture if packaging is
+kept optional. Do not put SDR dependencies in the normal HACS manifest. Implement
+manual rtl_433-assisted learning first, then implement the native SDR code
+against an internal source interface that can use one of the dependency models
+below.
+
+#### Source B Dependency Models
+
+Model 1: one GPLv3 HACS package, optional user-installed dependency.
+
+- Keep the normal HACS integration exactly one package.
+- Do not list `pyrtlsdr` or `pyrtlsdrlib` in `manifest.json`.
+- Add YAML/config detection for `sdr_source: pyrtlsdr`.
+- Import `rtlsdr` lazily only when SDR learning starts.
+- If the import fails, show a clear setup error with the exact Python package and
+  system library requirements.
+- User installs the dependency in their HA environment if their platform allows
+  it.
+
+This avoids forcing SDR dependencies on ordinary users. It is the safest first
+Source B implementation for HACS, but support burden is higher because users may
+need to install OS libraries or Python packages manually.
+
+Model 2: two HACS repositories or release channels.
+
+- `HACS-Proflame2`: normal controller integration with no SDR Python
+  dependency.
+- `HACS-Proflame2-SDR`: same integration plus Source B requirements and SDR
+  docs.
+- Both stay GPLv3.
+- The SDR repository can pin `pyrtlsdr` and optionally `pyrtlsdrlib`.
+- The normal repository remains easy to install and has no native dependency
+  risk.
+
+This matches the "two kits" idea. It is operationally clear for users, but it
+creates maintenance overhead: every integration change must either be merged
+between repositories or generated from one source tree into two release outputs.
+If we choose this model, prefer one source branch and two release workflows
+rather than manually maintaining two diverging codebases.
+
+Model 3: one repository with generated release artifacts.
+
+- Keep one source tree.
+- Generate a standard HACS release artifact without SDR dependencies.
+- Generate an SDR beta artifact with `manifest.json` requirements amended to
+  include `pyrtlsdr` and possibly `pyrtlsdrlib`.
+- Publish the SDR artifact only as a beta/manual install channel.
+
+This reduces source divergence but may not fit normal HACS installation as well
+as separate repositories. It is useful for controlled issue #11 beta testing.
+
+Model 4: separate GPL helper process.
+
+- Ship or document a standalone GPL-compatible helper package that owns
+  `pyrtlsdr/librtlsdr` imports.
+- Home Assistant talks to it over a narrow local protocol that streams bounded
+  IQ buffers or already-sliced OOK pulse rows.
+- The main integration can keep SDR dependencies out of its HA process.
+
+This is clean architecturally and can isolate CPU/USB crashes, but it is larger
+than needed for the first beta and adds install/service management.
+
+Preferred path:
+
+1. Manual rtl_433-assisted learning in the main integration.
+2. Replay-file SDR decoder in the main integration with no native dependency.
+3. Source B live receiver behind lazy optional imports.
+4. Decide between user-installed dependency, SDR beta artifact, or separate SDR
+   repository after local hardware validation proves the native decoder is worth
+   carrying.
 
 ### Source C: Replay File Source
 
@@ -204,6 +314,256 @@ Use rtl_433 only outside production runtime:
 Do not make rtl_433 part of the shipped learning receiver. Do not require it in
 Home Assistant.
 
+### Source E: Manual rtl_433-Assisted Entry
+
+Manual entry is the lowest-risk beta path for issue #11 because it does not add
+runtime dependencies, native SDR libraries, subprocess capture, or a new pulse
+decoder. The integration only provides a place to enter validated Proflame2
+values; the user is responsible for running rtl_433 or another external decoder.
+
+The existing manual profile path already accepts:
+
+- `remote_id`
+- `c1`
+- `d1`
+- `c2`
+- `d2`
+
+rtl_433's local Proflame2 decoder emits:
+
+- `id`
+- `cmd1`
+- `cmd2`
+- `err1`
+- `err2`
+
+Therefore the manual-learning enhancement should support two input modes:
+
+- Direct profile mode: user enters `remote_id`, `c1`, `d1`, `c2`, and `d2`.
+- Sample-derived mode: user enters one or more rtl_433 rows containing `id`,
+  `cmd1`, `err1`, `cmd2`, and `err2`; the integration derives `c1/d1/c2/d2`
+  using the existing ECC derivation helpers.
+
+Sample-derived mode is friendlier for issue reporters because rtl_433 does not
+require them to understand C/D profile constants. It also preserves validation:
+all rows must share one remote id, and command/error pairs must converge to one
+stable C/D profile for both command bytes.
+
+Useful reporter commands:
+
+```text
+rtl_433 -f 315M -R 207 -M level -F json
+rtl_433 -f 314.973M -R 207 -M level -F json
+```
+
+Ask reporters to press several distinct remote buttons or settings so the
+command/error rows are less ambiguous. Power and temperature up/down are useful
+starting points.
+
+## Manual Learning Design
+
+Manual learning is a supported profile creation path, not a runtime backend. It
+does not receive RF, transmit RF, launch rtl_433, import rtl_433 code, or require
+SDR hardware. It converts user-provided decoded evidence into the same permanent
+profile values stored by the existing direct manual setup.
+
+### Manual Learning Modes
+
+Mode 1: direct profile entry.
+
+- Existing behavior.
+- User enters `remote_id`, `c1`, `d1`, `c2`, and `d2`.
+- Best for maintainers or users who already know their learned profile.
+- Keep this unchanged for backward compatibility.
+
+Mode 2: rtl_433 sample-derived entry.
+
+- New behavior.
+- User enters decoded rtl_433 Proflame2 rows.
+- Integration derives `remote_id`, `c1`, `d1`, `c2`, and `d2`.
+- Best for issue reporters because rtl_433 reports command/error bytes directly.
+
+Both modes then create an ordinary YardStick or LilyGO config entry.
+
+### Required rtl_433 Evidence
+
+Each sample row must describe one decoded Proflame2 frame:
+
+- `id`: 24-bit remote id.
+- `cmd1`: first command byte.
+- `cmd2`: second command byte.
+- `err1`: validation byte paired with `cmd1`.
+- `err2`: validation byte paired with `cmd2`.
+
+Accepted input formats should include:
+
+- one JSON object per line from `rtl_433 -F json`,
+- copied text containing `id=... cmd1=... cmd2=... err1=... err2=...`,
+- uppercase or lowercase field names,
+- values with or without `0x` prefixes.
+
+String values should be parsed as hexadecimal by default because rtl_433 formats
+these fields as hex-like protocol bytes. Numeric JSON values may be accepted as
+already-decoded integers.
+
+Example accepted rows:
+
+```text
+{"model":"Proflame2-Remote","id":"3b3f02","cmd1":"01","cmd2":"16","err1":"76","err2":"ef"}
+model=Proflame2-Remote id=3b3f02 cmd1=31 cmd2=26 err1=25 err2=bc
+```
+
+Reporter capture command:
+
+```text
+rtl_433 -f 315M -R 207 -M level -F json
+```
+
+If that produces no decode, ask them to retry at the Proflame2 reference:
+
+```text
+rtl_433 -f 314.973M -R 207 -M level -F json
+```
+
+The integration should not instruct users to install rtl_433 as a dependency.
+It can document rtl_433 as an external diagnostic tool.
+
+### Validation Rules
+
+Manual sample-derived validation must be strict:
+
+- At least one complete row is required.
+- Every row must include `id`, `cmd1`, `cmd2`, `err1`, and `err2`.
+- Every row must use the same `id`.
+- `id` must fit in 24 bits.
+- `cmd1`, `cmd2`, `err1`, and `err2` must fit in one byte.
+- Derive `c1/d1` from all `(cmd1, err1)` pairs.
+- Derive `c2/d2` from all `(cmd2, err2)` pairs.
+- Reject if any command/error set has no stable C/D candidate.
+- Reject if any command/error set remains ambiguous.
+- Do not guess, average, or accept partial profile data.
+
+Current ECC helpers already support the core derivation:
+
+- `derive_ecc_profile(cmd1_samples, cmd2_samples)`
+- `derive_stable_cd(samples)`
+- `split_cd(cd_value)`
+
+The manual path should wrap those helpers instead of adding a second ECC
+implementation.
+
+### Config Flow Design
+
+The top-level setup menu should offer:
+
+- `learn`: guided RF learning from the selected controller.
+- `manual_rtl433`: paste rtl_433 decoded rows and derive the profile.
+- `manual`: enter the final profile values directly.
+
+The failed-learning menu should offer:
+
+- `retry_learn`
+- `manual_rtl433`
+- `manual`
+
+The `manual_rtl433` form should collect:
+
+- fireplace display name,
+- fireplace short display name,
+- controller type,
+- pasted rtl_433 decoded rows,
+- feature flags.
+
+If the selected controller is LilyGO, reuse the existing ESPHome config-entry
+selection step after successful sample validation. This preserves current LilyGO
+configuration semantics and avoids any LilyGO RX/TX changes.
+
+The created config entry should store the same data shape as direct manual
+entry:
+
+- `backend_type`
+- `remote_id`
+- `c1`
+- `d1`
+- `c2`
+- `d2`
+- optional `esphome_entry_id`
+
+Options should store the same feature flags and debug/listening options as the
+existing manual/guided paths.
+
+Diagnostic metadata may include:
+
+- `learned_with_receiver: manual_rtl433`
+- `manual_source: rtl_433`
+- `manual_sample_count`
+- `manual_distinct_cmd1_count`
+- `manual_distinct_cmd2_count`
+
+Do not store raw pasted rtl_433 rows in the config entry by default. They are
+support evidence and may include environmental metadata from rtl_433 output. If
+needed, store them only in packet-debug artifacts when explicit debug logging is
+enabled.
+
+### User-Facing Errors
+
+Errors should be actionable and not expose internal exceptions:
+
+- `invalid_rtl433_samples`: rows are missing required fields or values are not
+  valid hex/integer values.
+- `rtl433_remote_id_mismatch`: rows contain more than one remote id.
+- `rtl433_profile_derivation_failed`: rows are contradictory or do not prove one
+  stable profile.
+
+For `rtl433_profile_derivation_failed`, tell the user to capture more distinct
+button presses or recapture the data. Do not imply that the remote is unsupported
+until rtl_433 evidence and YardStick evidence have both been reviewed.
+
+### Manual Learning Implementation Guide
+
+Suggested code changes:
+
+- Add `CONF_RTL433_SAMPLES = "rtl433_samples"` in `const.py`.
+- Add profile helpers in `profile.py`:
+  - `parse_rtl433_samples(text)`,
+  - `normalize_manual_rtl433_profile_input(user_input)`.
+- Accept JSON lines and key/value text lines in the parser.
+- Reuse `derive_ecc_profile()` from `protocol/ecc.py`.
+- Add `async_step_manual_rtl433()` in `config_flow.py`.
+- Add `_manual_rtl433_profile_schema()` with a multiline text selector.
+- Add `manual_rtl433` to the top-level setup menu and failed-learning menu.
+- Reuse `_async_create_profile_entry()` for final entry creation.
+- Reuse `async_step_manual_esphome()` for LilyGO controller linking.
+- Add translations for the new menu option, form, field, and errors.
+
+Focused tests:
+
+- parser accepts rtl_433 JSON lines,
+- parser accepts copied key/value text,
+- parser rejects missing fields,
+- sample-derived normalization derives expected `remote_id/c1/d1/c2/d2`,
+- mixed remote ids are rejected,
+- contradictory rows are rejected,
+- config flow exposes the new menu option,
+- config flow creates a YardStick runtime entry from pasted rows,
+- config flow still creates LilyGO entries through the existing ESPHome link
+  step,
+- failed guided learning offers rtl_433-assisted manual fallback,
+- existing direct manual entry tests remain unchanged.
+
+### Release Positioning
+
+Manual rtl_433-assisted learning can be released before native SDR support.
+
+Recommended beta message:
+
+- YardStick/LilyGO guided learning remains the normal path.
+- Users whose remote decodes in rtl_433 but not YardStick learning can paste the
+  rtl_433 rows into manual learning.
+- The integration does not install, run, or depend on rtl_433.
+- This path helps distinguish YardStick acquisition failures from Proflame2
+  protocol variants.
+
 ## Generic Versus Device-Specific Support
 
 The first production support matrix should be specific:
@@ -223,9 +583,186 @@ class SDRSampleSource(Protocol):
     async def close(self) -> None: ...
 ```
 
-The first live source can be `RTLSDRCommandSampleSource` using `rtl_sdr`.
-Future sources can include a direct librtlsdr source or a SoapySDR source
-without changing the Proflame2 decoder.
+The first preferred live source is `RTLSDRPythonSampleSource` using `pyrtlsdr`
+behind lazy optional imports. `RTLSDRCommandSampleSource` can remain a fallback
+or diagnostic source, and future sources can include SoapySDR without changing
+the Proflame2 decoder.
+
+## Source B Implementation Design
+
+Source B means using a Python RTL-SDR binding, preferably `pyrtlsdr`, as the live
+IQ source. It should be treated as an optional learning-only capability.
+
+This is not legal advice. The engineering conclusion is:
+
+- GPLv3 is not a blocker for `pyrtlsdr` because this project is already GPLv3.
+- The exact `librtlsdr` license text and binary provenance still matter before
+  bundling libraries.
+- HACS install behavior is the larger practical risk: normal users should not
+  receive or build native SDR dependencies unless they explicitly choose SDR
+  learning.
+
+### Recommended Dependency Strategy
+
+Use one source tree and keep the default HACS artifact dependency-free:
+
+- Standard release:
+  - no `pyrtlsdr` in `manifest.json`,
+  - no `pyrtlsdrlib` in `manifest.json`,
+  - manual rtl_433-assisted learning available,
+  - SDR replay tests available for maintainers.
+- SDR beta release:
+  - either still no manifest requirement, with user-installed dependency, or
+  - generated beta artifact that adds `pyrtlsdr` to `manifest.json`.
+- Separate SDR kit:
+  - only if HACS/manual install limitations make generated artifacts too awkward.
+
+Do not maintain two hand-edited codebases. If two kits are used, generate them
+from one branch:
+
+- common source package,
+- standard manifest template,
+- SDR manifest template,
+- release workflow that builds both artifacts,
+- shared tests against both manifests.
+
+### Runtime Import Policy
+
+The main integration must import without SDR dependencies installed.
+
+Rules:
+
+- Never import `rtlsdr` at module import time.
+- Import inside `RTLSDRPythonSampleSource.open()`.
+- Convert `ImportError`, missing shared library errors, and USB open failures
+  into a structured `SDRBackendUnavailableError`.
+- Include setup diagnostics:
+  - selected source,
+  - Python package import result,
+  - `librtlsdr` load result,
+  - device index/serial,
+  - platform machine,
+  - Home Assistant container/OS hint if detectable.
+
+### Source Interface
+
+Implement Source B behind the same source interface as replay and command-mode
+sources:
+
+```python
+class SDRSampleSource(Protocol):
+    async def open(self) -> SDRSourceInfo: ...
+    async def read_samples(self, sample_count: int, timeout: float) -> bytes: ...
+    async def close(self) -> None: ...
+```
+
+`RTLSDRPythonSampleSource` responsibilities:
+
+- lazy import `rtlsdr.RtlSdr`,
+- open device by index or serial where supported,
+- set center frequency,
+- set sample rate,
+- set gain or auto gain,
+- set frequency correction PPM,
+- reset/read buffers if the binding exposes a safe operation,
+- read bounded sample windows,
+- return unsigned 8-bit interleaved IQ bytes or a clearly documented converted
+  internal representation,
+- cancel async reads and close USB handles in `finally`.
+
+Avoid letting the SDR source decode Proflame2. It should only return IQ samples
+plus source metadata.
+
+### Platform Policy
+
+Initial supported platforms:
+
+- Linux x86_64 with user-installed `librtlsdr`.
+- Linux aarch64 with user-installed `librtlsdr`.
+- Replay files on every platform.
+
+Conditional/beta platforms:
+
+- Linux x86_64/aarch64 using `pyrtlsdrlib` wheels.
+- Home Assistant Container when the USB device is passed through and libraries
+  are installed in the container environment.
+- Home Assistant OS only if dependency installation is proven practical and
+  supportable.
+
+Do not claim support for:
+
+- generic SDR devices,
+- SoapySDR devices,
+- Windows or macOS Home Assistant deployments,
+- armv7 until a real install path is validated.
+
+### Configuration
+
+Hidden YAML for Source B:
+
+```yaml
+proflame2:
+  learning_receiver: sdr
+  sdr_source: pyrtlsdr
+  sdr_device: "0"
+  sdr_frequency_hz: 315000000
+  sdr_sample_rate: 250000
+  sdr_gain: auto
+  sdr_ppm: 0
+  sdr_window_seconds: 1.0
+```
+
+Production defaults:
+
+- `learning_receiver: controller`
+- no SDR source opened at startup,
+- Source B unavailable unless explicitly selected,
+- missing Source B dependencies reported only when selected.
+
+### Failure Handling
+
+Expected failures should be actionable:
+
+- missing Python package,
+- missing shared library,
+- unsupported platform,
+- no RTL-SDR devices found,
+- USB permission denied,
+- device busy,
+- sample timeout,
+- capture contained no RF energy,
+- capture contained RF energy but no Proflame2 candidates.
+
+Do not fall back silently from `pyrtlsdr` to another source. Silent fallback makes
+issue #11 evidence harder to interpret. If fallback is useful, make it explicit
+in configuration.
+
+### Tests
+
+Unit tests:
+
+- import absence is handled without failing integration import,
+- fake `rtlsdr` module receives expected frequency/rate/gain/ppm settings,
+- read windows are bounded by sample count and timeout,
+- close is idempotent,
+- USB/device errors normalize to user-facing unavailable reasons,
+- `learning_receiver=controller` never imports `rtlsdr`.
+
+Integration tests:
+
+- SDR replay source can complete learning from known IQ fixtures,
+- Source B selection fails cleanly when dependency is absent,
+- Source B decoded packets feed the same learning/ECC path as controller
+  learning,
+- YardStick TX remains the runtime controller after SDR learning.
+
+Release tests:
+
+- standard manifest does not include `pyrtlsdr` or `pyrtlsdrlib`,
+- SDR beta manifest includes only the intentionally selected SDR dependencies,
+- both artifacts report GPLv3 licensing consistently,
+- package metadata includes notices for third-party GPL dependencies when the SDR
+  kit includes them.
 
 ## Receiver Lifecycle And CPU Control
 
@@ -679,8 +1216,8 @@ proflame2:
 
 Possible values:
 
-- `learning_receiver`: `controller`, `sdr`
-- `sdr_source`: `rtl_sdr_command`, `replay_file`
+- `learning_receiver`: `controller`, `manual`, `sdr`
+- `sdr_source`: `rtl_sdr_command`, `pyrtlsdr`, `replay_file`
 - `sdr_device`: RTL-SDR index or serial supported by the selected source
 - `sdr_gain`: `auto` or numeric dB string
 - `sdr_debug_level`: `summary`, `pulse`, `protocol`, `trace`
@@ -690,7 +1227,9 @@ Future UI:
 
 - Add "Learning receiver" to the guided-learning setup form.
 - Default to "Selected controller".
+- Show "Manual values" as the conservative fallback when RF learning fails.
 - Show "SDR receiver" only when enabled by YAML or advanced/dev option.
+- Keep manual rtl_433-assisted entry available without enabling SDR.
 - Store the selected runtime controller as `backend_type`.
 - Store learning receiver only as diagnostic metadata unless the user wants it
   as their default for future re-learning.
@@ -768,9 +1307,33 @@ User-facing timeout diagnostics should include:
 - Change guided learning internals to consume the receive-only protocol.
 - Keep public behavior identical when `learning_receiver=controller`.
 - Tests:
-  - current YardStick guided learning still uses YardStick by default,
-  - current LilyGO guided learning still uses LilyGO by default,
-  - existing fake learning tests still pass.
+	  - current YardStick guided learning still uses YardStick by default,
+	  - current LilyGO guided learning still uses LilyGO by default,
+	  - existing fake learning tests still pass.
+
+### Phase 1A: Manual rtl_433-Assisted Learning
+
+- Keep the existing manual direct-profile setup path.
+- Add a manual sample-derived path that accepts rtl_433-style decoded rows:
+  `id`, `cmd1`, `err1`, `cmd2`, and `err2`.
+- Parse rtl_433 text values as hexadecimal by default; accept JSON numeric
+  values as already-decoded integers.
+- Validate that all rows share the same 24-bit remote id.
+- Use existing ECC helpers to derive `c1/d1` from `cmd1/err1` samples and
+  `c2/d2` from `cmd2/err2` samples.
+- Reject ambiguous input with a message asking for more distinct button presses.
+- Reject contradictory input with a message asking the user to recapture.
+- Save the resulting entry through the same profile creation path as current
+  manual setup.
+- Store diagnostic metadata such as `learned_with_receiver: manual` and
+  `manual_source: rtl_433`.
+- Tests:
+  - direct manual profile entry remains unchanged,
+  - one ambiguous sample asks for more samples,
+  - multiple compatible rtl_433 rows derive the expected C/D profile,
+  - mixed remote ids are rejected,
+  - contradictory command/error rows are rejected,
+  - YardStick and LilyGO runtime controller choices still create normal entries.
 
 ### Phase 2: Replay-First Native Decoder
 
@@ -800,15 +1363,24 @@ User-facing timeout diagnostics should include:
 
 ### Phase 4: Live RTL-SDR Sample Source
 
-- Add `RTLSDRCommandSampleSource` using `rtl_sdr`.
+- Decide the Source B dependency model:
+  - standard HACS package with lazy optional `pyrtlsdr` imports,
+  - separate SDR beta artifact,
+  - separate SDR HACS repository,
+  - or separate helper process.
+- Add `RTLSDRPythonSampleSource` using `pyrtlsdr` if Source B is selected.
+- Add `RTLSDRCommandSampleSource` using `rtl_sdr` only if Source A remains useful
+  as a fallback or diagnostic source.
 - Configure frequency, sample rate, gain, ppm, device selector.
 - Capture bounded sample windows.
-- Read stderr for diagnostics.
-- Ensure clean process termination.
+- For Python binding mode, ensure cancellation calls the appropriate async read
+  cancellation/close path and releases the USB handle.
+- For subprocess mode, read stderr for diagnostics and ensure clean process
+  termination.
 - Tests:
-  - command args are constructed safely,
-  - no shell is used,
-  - process failure maps to clean unavailable error,
+  - optional dependency absence maps to clean unavailable error,
+  - device-open failure maps to clean unavailable error,
+  - frequency/sample-rate/gain/ppm settings are applied,
   - sample windows are bounded.
 
 ### Phase 5: SDR Learning Receiver
