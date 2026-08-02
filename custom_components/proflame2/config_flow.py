@@ -224,6 +224,7 @@ EXTRA_LEARN_PROMPT = (
 )
 
 RTL433_MANUAL_PROMPTS: tuple[tuple[str, str], ...] = (
+    ("power_on", "Press Power once to turn the fireplace on, then paste the rtl_433 decoded line for that press."),
     ("temp_down", "Press Temp Down once, then paste the rtl_433 decoded line for that press."),
     ("temp_up", "Press Temp Up once, then paste the rtl_433 decoded line for that press."),
     ("temp_down_again", "Press Temp Down once more, then paste the rtl_433 decoded line for that press."),

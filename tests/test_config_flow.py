@@ -308,7 +308,7 @@ async def test_manual_entry_form_schema_is_ui_serializable(hass) -> None:
     assert serialized
 
 
-async def test_manual_rtl433_learning_cycles_temp_prompts_then_power_off(hass) -> None:
+async def test_manual_rtl433_learning_captures_power_then_cycles_temp_prompts(hass) -> None:
     """rtl_433 manual learning should collect pasted rows before feature setup."""
 
     result = await hass.config_entries.flow.async_init(
@@ -334,8 +334,7 @@ async def test_manual_rtl433_learning_cycles_temp_prompts_then_power_off(hass) -
     )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "manual_rtl433_prompt"
-    assert "Temp Down" in result["description_placeholders"]["instruction"]
-    assert "Power" not in result["description_placeholders"]["instruction"]
+    assert "Power" in result["description_placeholders"]["instruction"]
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -343,7 +342,7 @@ async def test_manual_rtl433_learning_cycles_temp_prompts_then_power_off(hass) -
     )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "manual_rtl433_prompt"
-    assert "Temp Up" in result["description_placeholders"]["instruction"]
+    assert "Temp Down" in result["description_placeholders"]["instruction"]
     assert result["description_placeholders"]["sample_count"] == "1"
 
     result = await hass.config_entries.flow.async_configure(
@@ -352,7 +351,7 @@ async def test_manual_rtl433_learning_cycles_temp_prompts_then_power_off(hass) -
     )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "manual_rtl433_prompt"
-    assert "Temp Down" in result["description_placeholders"]["instruction"]
+    assert "Temp Up" in result["description_placeholders"]["instruction"]
     assert result["description_placeholders"]["sample_count"] == "2"
 
     result = await hass.config_entries.flow.async_configure(
@@ -420,7 +419,7 @@ async def test_manual_rtl433_learning_rejects_invalid_paste_without_advancing(ha
     assert result["step_id"] == "manual_rtl433_prompt"
     assert result["errors"] == {CONF_RTL433_SAMPLES: "invalid_rtl433_samples"}
     assert result["description_placeholders"]["sample_count"] == "0"
-    assert "Temp Down" in result["description_placeholders"]["instruction"]
+    assert "Power" in result["description_placeholders"]["instruction"]
 
 
 async def test_manual_entry_form_exposes_only_hardware_backends_by_default(hass) -> None:

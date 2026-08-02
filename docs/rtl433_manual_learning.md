@@ -104,12 +104,6 @@ Run this command:
 rtl_433 -f 315M -R 207 -M level -F json
 ```
 
-If a maintainer asks you to test the Proflame reference frequency exactly, use:
-
-```bash
-rtl_433 -f 314.973M -R 207 -M level -F json
-```
-
 Leave this terminal open while you complete Home Assistant setup.
 
 ## Start Manual Learning In Home Assistant
@@ -129,9 +123,10 @@ After this, Home Assistant will ask for one remote button press at a time.
 
 ## What To Press
 
-Follow the prompt shown by Home Assistant. The prompts normally use `Temp Down`
-and `Temp Up` first because those are low-impact controls and avoid repeatedly
-turning the fireplace on and off.
+Follow the prompt shown by Home Assistant. The prompts will have you power on
+the fireplace and then select `Temp Down` and `Temp Up`, possibly more than
+once. These commands are chosen because temperature changes are low-impact and
+avoid repeatedly turning the fireplace on and off.
 
 When Home Assistant has enough valid evidence, it will ask you to press `Power`
 once. That final power press is only to leave the fireplace off before setup
@@ -142,7 +137,7 @@ continues.
 After each prompted button press, look at the rtl_433 terminal. Paste the
 decoded Proflame2 line for that press into the Home Assistant text box.
 
-With `-F json`, the line usually looks like this:
+The line usually looks like this:
 
 ```json
 {"time":"2026-08-02 10:15:22","model":"Proflame2-Remote","id":"3b3f02","cmd1":"01","cmd2":"16","err1":"76","err2":"ef"}
@@ -156,13 +151,6 @@ The integration uses these values:
 - `cmd2`
 - `err1`
 - `err2`
-
-The paste box can also accept copied key/value text if your rtl_433 output is
-not JSON, for example:
-
-```text
-model=Proflame2-Remote id=3b3f02 cmd1=01 cmd2=16 err1=76 err2=ef
-```
 
 Do not paste unrelated output from other devices. If rtl_433 prints multiple
 lines for one button press, paste the Proflame2 line that contains `id`,
@@ -186,7 +174,7 @@ do not need to keep the SDR or rtl_433 running after setup.
 If Home Assistant says the paste is invalid:
 
 - Confirm the pasted line includes `id`, `cmd1`, `cmd2`, `err1`, and `err2`.
-- Confirm rtl_433 was run with `-R 207`.
+- Confirm rtl_433 was run with `-R 207` and `-F json`.
 - Press the prompted button again and paste the new decoded line.
 
 If Home Assistant says the remote IDs do not match:
@@ -194,13 +182,27 @@ If Home Assistant says the remote IDs do not match:
 - Make sure only one Proflame2 remote is being used during setup.
 - Do not paste lines from a neighbor's fireplace or another remote.
 
-If rtl_433 does not print anything:
+Each time you press a button on the fireplace remote, rtl_433 should output a
+line. If it does not:
 
-- Move the original remote closer to the SDR antenna.
-- Try `rtl_433 -f 314.973M -R 207 -M level -F json`.
+- Verify the remote did turn on the fireplace.
+- Verify the `Temp Down` and `Temp Up` buttons are changing the fireplace.
+- Ensure the fireplace remote is less than 3 feet away, or about 1 meter, from
+  the SDR antenna.
 - Confirm the SDR is visible with `rtl_433 -d help`.
 - Confirm no other program is using the SDR.
 
 If rtl_433 decodes the remote but Home Assistant cannot derive a profile, save
 the rtl_433 output and open a GitHub issue with the pasted rows and your remote
 model number.
+
+If rtl_433 decodes the remote and Home Assistant learns the profile but the
+fireplace still does not respond to Home Assistant commands, run this raw
+capture command while pressing the same remote buttons again:
+
+```bash
+rtl_433 -f 315M -R 207 -M level -F json -S all
+```
+
+Attach the generated `.cu8` files to the GitHub issue along with the JSON lines
+from rtl_433 and your remote model number.

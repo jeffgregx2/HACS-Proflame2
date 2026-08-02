@@ -35,7 +35,7 @@
       },
       "manual_rtl433": {
         "title": "Learn from rtl_433 output",
-        "description": "Start rtl_433 outside Home Assistant before continuing. Use: rtl_433 -f 315M -R 207 -M level -F json\n\nThe prompts prefer Temp Down and Temp Up so setup does not repeatedly power-cycle the fireplace.",
+        "description": "Start rtl_433 outside Home Assistant before continuing. Use: rtl_433 -f 315M -R 207 -M level -F json\n\nThe prompts capture Power On first, then use Temp Down and Temp Up so setup does not repeatedly power-cycle the fireplace.",
         "data": {
           "name": "Fireplace name",
           "fireplace_short_name": "Display short name",

@@ -353,12 +353,11 @@ Useful reporter commands:
 
 ```text
 rtl_433 -f 315M -R 207 -M level -F json
-rtl_433 -f 314.973M -R 207 -M level -F json
 ```
 
-Ask reporters to press several distinct low-impact remote buttons or settings so
-the command/error rows are less ambiguous. Prefer Temp Down and Temp Up during
-evidence collection to avoid repeated fireplace power cycling. Once enough
+Ask reporters to press Power once so the first capture turns the fireplace on,
+then use Temp Down and Temp Up for additional captures so the command/error rows
+are less ambiguous without repeated fireplace power cycling. Once enough
 evidence has been accepted, ask the user to press Power once to leave the
 fireplace off before setup continues.
 
@@ -382,7 +381,7 @@ Mode 2: guided rtl_433 sample-derived entry.
 
 - New behavior.
 - User starts rtl_433 externally.
-- Home Assistant prompts for one low-impact remote action at a time, primarily
+- Home Assistant prompts for one remote action at a time: Power On first, then
   Temp Down and Temp Up.
 - User pastes decoded rtl_433 Proflame2 rows for that prompted action.
 - Integration derives `remote_id`, `c1`, `d1`, `c2`, and `d2`.
@@ -481,7 +480,8 @@ The `manual_rtl433` setup form should collect:
 
 The `manual_rtl433_prompt` form should repeat as needed and collect:
 
-- pasted rtl_433 decoded rows for the current prompted Temp Down/Temp Up action.
+- pasted rtl_433 decoded rows for the current prompted Power On, Temp Down, or
+  Temp Up action.
 
 The `manual_rtl433_power_off` form should appear after enough evidence has been
 accepted:
@@ -568,7 +568,8 @@ Focused tests:
 - mixed remote ids are rejected,
 - contradictory rows are rejected,
 - config flow exposes the new menu option,
-- config flow prompts with Temp Down/Temp Up before asking for Power,
+- config flow captures Power On first, then cycles Temp Down/Temp Up before
+  asking for final Power Off,
 - config flow creates a YardStick runtime entry from prompted pasted rows,
 - config flow still creates LilyGO entries through the existing ESPHome link
   step,
