@@ -224,12 +224,13 @@ EXTRA_LEARN_PROMPT = (
 )
 
 RTL433_MANUAL_PROMPTS: tuple[tuple[str, str], ...] = (
-    ("power_on", "Press Power once to turn the fireplace on, then paste the rtl_433 decoded line for that press."),
-    ("temp_down", "Press Temp Down once, then paste the rtl_433 decoded line for that press."),
-    ("temp_up", "Press Temp Up once, then paste the rtl_433 decoded line for that press."),
-    ("temp_down_again", "Press Temp Down once more, then paste the rtl_433 decoded line for that press."),
-    ("temp_up_again", "Press Temp Up once more, then paste the rtl_433 decoded line for that press."),
+    ("power_on", "Press **Power** once, then paste the rtl_433 decoded line for that press."),
+    ("temp_down", "Press **Temp Down** once, then paste the rtl_433 decoded line for that press."),
+    ("temp_up", "Press **Temp Up** once, then paste the rtl_433 decoded line for that press."),
+    ("temp_down_again", "Press **Temp Down** once more, then paste the rtl_433 decoded line for that press."),
+    ("temp_up_again", "Press **Temp Up** once more, then paste the rtl_433 decoded line for that press."),
 )
+RTL433_MANUAL_COMMAND = "rtl_433 -f 315M -R 207 -M level -F json"
 
 
 class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -409,12 +410,13 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "instruction": instruction,
                 "prompt_label": prompt_label,
+                "rtl433_command": RTL433_MANUAL_COMMAND,
                 "sample_count": str(len(self._manual_rtl433_samples)),
             },
         )
 
     async def async_step_manual_rtl433_power_off(self, user_input: dict[str, Any] | None = None):
-        """Ask the user to power off after manual rtl_433 evidence is complete."""
+        """Confirm manual rtl_433 learning is complete."""
 
         if self._learn_result is None or not self._learn_result.success:
             return await self.async_step_manual_rtl433_prompt()

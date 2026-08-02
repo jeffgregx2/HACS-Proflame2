@@ -35,7 +35,7 @@
       },
       "manual_rtl433": {
         "title": "Learn from rtl_433 output",
-        "description": "Start rtl_433 outside Home Assistant before continuing. Use: rtl_433 -f 315M -R 207 -M level -F json\n\nThe prompts capture Power On first, then use Temp Down and Temp Up so setup does not repeatedly power-cycle the fireplace.",
+        "description": "Start rtl_433 outside Home Assistant before continuing. Run this command:\n\n    rtl_433 -f 315M -R 207 -M level -F json\n\nOnce the rtl_433 command is fully running, fill in the remaining fields on this form and select Submit.",
         "data": {
           "name": "Fireplace name",
           "fireplace_short_name": "Display short name",
@@ -51,14 +51,14 @@
       },
       "manual_rtl433_prompt": {
         "title": "Paste rtl_433 decoded row",
-        "description": "**Do this now:**\n{instruction}\n\nPaste the rtl_433 decoded output for this press. The integration has accepted {sample_count} sample(s) so far.",
+        "description": "Ensure that the following command is running:\n`{rtl433_command}`\n\n**Do this now:**\n{instruction}\n\nPaste the newest rtl_433 JSON line that appears after this button press. Ignore duplicate lines from earlier button presses. See the [rtl_433-assisted manual learning guide](https://github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/rtl433_manual_learning.md) for details.\n\nThe integration has accepted {sample_count} sample(s) so far.",
         "data": {
           "rtl433_samples": "rtl_433 output"
         }
       },
       "manual_rtl433_power_off": {
-        "title": "Power off fireplace",
-        "description": "The pasted rtl_433 rows prove a stable remote profile.\n\nPress Power once to turn the fireplace off, then continue.",
+        "title": "Remote learned",
+        "description": "Congratulations, the rtl_433 output allowed Home Assistant to learn your remote.\n\nSelect Submit to continue.",
         "data": {}
       },
       "manual_esphome": {

@@ -358,8 +358,13 @@ rtl_433 -f 315M -R 207 -M level -F json
 Ask reporters to press Power once so the first capture turns the fireplace on,
 then use Temp Down and Temp Up for additional captures so the command/error rows
 are less ambiguous without repeated fireplace power cycling. Once enough
-evidence has been accepted, ask the user to press Power once to leave the
-fireplace off before setup continues.
+evidence has been accepted, show a confirmation screen and continue to feature
+selection without asking for another power press.
+
+Warn users that rtl_433 may emit delayed duplicate rows for a previous remote
+press. In testing, the delayed repeat appeared about 5 seconds later. For each
+prompt, users should paste the newest JSON row that appears after the requested
+button press and ignore older repeated rows.
 
 ## Manual Learning Design
 
@@ -386,8 +391,8 @@ Mode 2: guided rtl_433 sample-derived entry.
 - User pastes decoded rtl_433 Proflame2 rows for that prompted action.
 - Integration derives `remote_id`, `c1`, `d1`, `c2`, and `d2`.
 - Best for issue reporters because rtl_433 reports command/error bytes directly.
-- After profile derivation succeeds, Home Assistant asks the user to press Power
-  once to leave the fireplace off, then proceeds to feature selection.
+- After profile derivation succeeds, Home Assistant confirms that the remote was
+  learned, then proceeds to feature selection.
 
 Both modes then create an ordinary YardStick or LilyGO config entry.
 
@@ -482,11 +487,13 @@ The `manual_rtl433_prompt` form should repeat as needed and collect:
 
 - pasted rtl_433 decoded rows for the current prompted Power On, Temp Down, or
   Temp Up action.
+- a user-facing reminder to paste the newest JSON row after the requested
+  button press and ignore duplicate rows from earlier presses.
 
 The `manual_rtl433_power_off` form should appear after enough evidence has been
 accepted:
 
-- user presses Power once to leave the fireplace off,
+- user sees that rtl_433 output allowed Home Assistant to learn the remote,
 - no additional rtl_433 evidence is required,
 - continuing advances to the existing feature-selection form.
 
@@ -547,8 +554,8 @@ Suggested code changes:
 - Reuse `derive_ecc_profile()` from `protocol/ecc.py`.
 - Add `async_step_manual_rtl433()` in `config_flow.py`.
 - Add `async_step_manual_rtl433_prompt()` for the prompted paste loop.
-- Add `async_step_manual_rtl433_power_off()` for the final power-off safety
-  prompt.
+- Add `async_step_manual_rtl433_power_off()` for the learning-complete
+  confirmation prompt.
 - Add `_manual_rtl433_profile_schema()` for setup and
   `_manual_rtl433_prompt_schema()` with a multiline text selector.
 - Add `manual_rtl433` to the top-level setup menu and failed-learning menu.
@@ -569,7 +576,7 @@ Focused tests:
 - contradictory rows are rejected,
 - config flow exposes the new menu option,
 - config flow captures Power On first, then cycles Temp Down/Temp Up before
-  asking for final Power Off,
+  showing the learning-complete confirmation,
 - config flow creates a YardStick runtime entry from prompted pasted rows,
 - config flow still creates LilyGO entries through the existing ESPHome link
   step,

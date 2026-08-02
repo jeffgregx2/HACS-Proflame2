@@ -22,7 +22,7 @@ controlled by your selected Proflame2 controller, either LilyGO or YardStick.
 
 The easiest SDR choice is usually an RTL-SDR compatible USB dongle. A known
 working, inexpensive example is the
-[RTL-SDR Blog V4 dongle with antenna kit](https://www.amazon.com/RTL-SDR-Blog-RTL2832U-Software-Defined/dp/B0CD7558GT).
+[RTL-SDR compatible USB dongle](https://www.amazon.com/dp/B008S7AVTC).
 rtl_433 also supports other SDR inputs through SoapySDR, but those setups are
 more advanced.
 
@@ -131,14 +131,14 @@ the fireplace and then select `Temp Down` and `Temp Up`, possibly more than
 once. These commands are chosen because temperature changes are low-impact and
 avoid repeatedly turning the fireplace on and off.
 
-When Home Assistant has enough valid evidence, it will ask you to press `Power`
-once. That final power press is only to leave the fireplace off before setup
-continues.
+When Home Assistant has enough valid evidence, it will show a confirmation
+screen and continue to feature selection.
 
 ## What To Paste
 
-After each prompted button press, look at the rtl_433 terminal. Paste the
-decoded Proflame2 line for that press into the Home Assistant text box.
+After each prompted button press, look at the rtl_433 terminal. Paste the newest
+decoded Proflame2 JSON line that appears after that button press into the Home
+Assistant text box.
 
 The line usually looks like this:
 
@@ -155,16 +155,25 @@ The integration uses these values:
 - `err1`
 - `err2`
 
-Do not paste unrelated output from other devices. If rtl_433 prints multiple
-lines for one button press, paste the Proflame2 line that contains `id`,
-`cmd1`, `cmd2`, `err1`, and `err2`.
+Do not paste unrelated output from other devices. Also ignore duplicate
+Proflame2 lines from earlier button presses. Some fireplaces or remotes may
+repeat the previous command after a delay. In testing, that delayed repeat
+appeared about 5 seconds later, and it can appear near the time you are
+preparing for the next prompt.
+
+If rtl_433 prints multiple lines, use the newest Proflame2 JSON line that:
+
+- appeared after the button press Home Assistant requested,
+- contains `id`, `cmd1`, `cmd2`, `err1`, and `err2`,
+- matches the button you just pressed when the JSON fields make that obvious,
+  such as `power` or `flame`.
 
 ## Finishing Setup
 
 Home Assistant accepts each valid pasted row and keeps prompting until it can
 derive a stable remote profile. When enough evidence is collected:
 
-1. Home Assistant asks you to press `Power` once.
+1. Home Assistant confirms that it learned the remote.
 2. Select `Submit`.
 3. Choose the fireplace features your installation supports.
 4. Validate basic controls from Home Assistant.
@@ -195,11 +204,11 @@ line. If it does not:
 - Confirm the SDR is visible with `rtl_433 -d help`.
 - Confirm no other program is using the SDR.
 
-If rtl_433 decodes the remote but Home Assistant cannot derive a profile, save
+If rtl_433 decodes the remote but Home Assistant cannot learn the remote, save
 the rtl_433 output and open a GitHub issue with the pasted rows and your remote
 model number.
 
-If rtl_433 decodes the remote and Home Assistant learns the profile but the
+If rtl_433 decodes the remote and Home Assistant learns the remote but the
 fireplace still does not respond to Home Assistant commands, run this raw
 capture command while pressing the same remote buttons again:
 

@@ -1154,58 +1154,61 @@ class YardStickWorkerSupervisor:
             self._diagnostics.consecutive_failures += 1
 
     def _terminate_worker(self, *, reason: str) -> None:
-        if self._process is None:
+        process = self._process
+        if process is None:
             return
+        pid = process.pid
+        generation = self._diagnostics.worker_generation
         _LOGGER.warning(
             "Yard Stick worker terminate requested pid=%s generation=%s reason=%s",
-            self._process.pid,
-            self._diagnostics.worker_generation,
+            pid,
+            generation,
             reason,
         )
         self._log_debug(
             "supervisor: worker terminate requested pid=%s generation=%s reason=%s",
-            self._process.pid,
-            self._diagnostics.worker_generation,
+            pid,
+            generation,
             reason,
         )
-        if self._process.is_alive():
-            self._process.terminate()
-            self._process.join(timeout=self._stop_timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=self._stop_timeout_seconds)
             _LOGGER.warning(
                 "Yard Stick worker terminate result pid=%s generation=%s alive=%s",
-                self._process.pid,
-                self._diagnostics.worker_generation,
-                self._process.is_alive(),
+                pid,
+                generation,
+                process.is_alive(),
             )
-            if self._process.is_alive():
+            if process.is_alive():
                 _LOGGER.warning(
                     "Yard Stick worker kill requested pid=%s generation=%s",
-                    self._process.pid,
-                    self._diagnostics.worker_generation,
+                    pid,
+                    generation,
                 )
                 try:
-                    os.kill(self._process.pid, signal.SIGKILL)
+                    os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-                self._process.join(timeout=self._stop_timeout_seconds)
+                process.join(timeout=self._stop_timeout_seconds)
                 _LOGGER.warning(
                     "Yard Stick worker kill result pid=%s generation=%s alive=%s",
-                    self._process.pid,
-                    self._diagnostics.worker_generation,
-                    self._process.is_alive(),
+                    pid,
+                    generation,
+                    process.is_alive(),
                 )
-        exitcode = self._process.exitcode
+        exitcode = process.exitcode
         _LOGGER.warning(
             "Yard Stick worker terminated pid=%s generation=%s exitcode=%s reason=%s",
-            self._process.pid,
-            self._diagnostics.worker_generation,
+            pid,
+            generation,
             exitcode,
             reason,
         )
         self._log_debug(
             "supervisor: worker terminated pid=%s generation=%s exitcode=%s reason=%s",
-            self._process.pid,
-            self._diagnostics.worker_generation,
+            pid,
+            generation,
             exitcode,
             reason,
         )
@@ -1214,7 +1217,8 @@ class YardStickWorkerSupervisor:
         self._diagnostics.last_restart_reason = reason
         self._diagnostics.final_exit_code = exitcode
         self._next_allowed_start_monotonic = time.monotonic() + self._cooldown_seconds
-        self._cleanup_process_handles()
+        if self._process is process:
+            self._cleanup_process_handles()
 
     def _cleanup_process_handles(self) -> None:
         if self._conn is not None:

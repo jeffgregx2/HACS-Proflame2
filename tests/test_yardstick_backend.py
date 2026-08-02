@@ -279,6 +279,16 @@ class _FakeProcess:
         self.join_calls.append(timeout or 0.0)
 
 
+class _ClearingTerminateProcess(_FakeProcess):
+    def __init__(self, supervisor: YardStickWorkerSupervisor) -> None:
+        super().__init__()
+        self._supervisor = supervisor
+
+    def terminate(self) -> None:
+        self._supervisor._process = None
+        super().terminate()
+
+
 def test_connect_uses_executor_for_radio_open_and_configuration(monkeypatch) -> None:
     """RfCat construction and radio setup should stay off the HA event loop."""
 
@@ -411,6 +421,20 @@ def test_worker_supervisor_stop_sends_graceful_stop_and_records_reason() -> None
     assert supervisor.diagnostics.last_shutdown_reason == "config_entry_unload"
     assert supervisor.diagnostics.final_exit_code == -15
     assert supervisor.diagnostics.worker_alive is False
+
+
+def test_worker_supervisor_terminate_tolerates_concurrent_process_cleanup() -> None:
+    """Concurrent shutdown paths should not fail if process handles are cleared."""
+
+    supervisor = YardStickWorkerSupervisor(mock_mode=True)
+    supervisor._process = _ClearingTerminateProcess(supervisor)
+    supervisor._conn = _FakeConn()
+
+    supervisor._terminate_worker(reason="config_entry_unload")
+
+    assert supervisor.diagnostics.final_exit_code == -15
+    assert supervisor.diagnostics.worker_alive is False
+    assert supervisor.diagnostics.last_restart_reason == "config_entry_unload"
 
 
 def test_worker_supervisor_rejects_new_requests_during_shutdown() -> None:
