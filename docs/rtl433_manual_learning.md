@@ -32,15 +32,55 @@ into the Home Assistant setup form.
 Follow the rtl_433 project installation instructions for your operating system:
 https://github.com/merbanan/rtl_433
 
-Common install commands:
+### Linux / Ubuntu
+
+On Debian or Ubuntu, install the packaged command-line tool:
 
 ```bash
 sudo apt install rtl-433
 ```
 
+On other Linux distributions, install `rtl_433` from your distribution's
+package manager when available.
+
+### macOS
+
+macOS does not include Homebrew or rtl_433 by default. If Homebrew is not
+installed yet, install Homebrew first:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Then install rtl_433:
+
 ```bash
 brew install rtl_433
 ```
+
+### Windows
+
+rtl_433 can run on Windows. The simplest path is to use the Windows ZIP file
+from the rtl_433 GitHub releases page:
+https://github.com/merbanan/rtl_433/releases
+
+1. Download the latest Windows ZIP asset. For most modern Windows systems, use
+   the `rtl_433-win-msvc-x64-...zip` file.
+2. Extract the ZIP file to a folder such as `C:\rtl_433`.
+3. Open Command Prompt or PowerShell in that folder.
+4. Run `rtl_433.exe -V`.
+
+For RTL-SDR USB dongles, Windows may also need the WinUSB driver installed for
+the SDR. The usual tool for this is Zadig:
+https://zadig.akeo.ie/
+
+When using Zadig, select the RTL-SDR device interface, commonly shown as
+`Bulk-In, Interface (Interface 0)`, and install the `WinUSB` driver. Do not
+change drivers for unrelated USB devices.
+
+Windows users can also build rtl_433 from source, but that is more advanced.
+The upstream build notes describe Visual Studio and MinGW options:
+https://github.com/merbanan/rtl_433/blob/master/docs/BUILDING.md
 
 Confirm rtl_433 starts and can see your SDR:
 
