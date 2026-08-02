@@ -20,8 +20,11 @@ controlled by your selected Proflame2 controller, either LilyGO or YardStick.
 - The `rtl_433` command-line program installed on a computer where the SDR is
   connected.
 
-The easiest SDR choice is usually an RTL-SDR compatible USB dongle. rtl_433 also
-supports other SDR inputs through SoapySDR, but those setups are more advanced.
+The easiest SDR choice is usually an RTL-SDR compatible USB dongle. A known
+working, inexpensive example is the
+[RTL-SDR Blog V4 dongle with antenna kit](https://www.amazon.com/RTL-SDR-Blog-RTL2832U-Software-Defined/dp/B0CD7558GT).
+rtl_433 also supports other SDR inputs through SoapySDR, but those setups are
+more advanced.
 
 Home Assistant does not install, run, or manage rtl_433 for this learning mode.
 You run rtl_433 yourself in a terminal and paste its decoded Proflame2 output
