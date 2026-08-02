@@ -231,6 +231,10 @@ RTL433_MANUAL_PROMPTS: tuple[tuple[str, str], ...] = (
     ("temp_up_again", "Press **Temp Up** once more, then paste the rtl_433 decoded line for that press."),
 )
 RTL433_MANUAL_COMMAND = "rtl_433 -f 315M -R 207 -M level -F json"
+RTL433_MANUAL_LEARNING_GUIDE = (
+    "[rtl_433-assisted manual learning guide]"
+    "(https://github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/rtl433_manual_learning.md)"
+)
 
 
 class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -411,6 +415,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "instruction": instruction,
                 "prompt_label": prompt_label,
                 "rtl433_command": RTL433_MANUAL_COMMAND,
+                "rtl433_manual_learning_guide": RTL433_MANUAL_LEARNING_GUIDE,
                 "sample_count": str(len(self._manual_rtl433_samples)),
             },
         )

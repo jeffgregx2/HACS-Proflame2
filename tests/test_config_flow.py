@@ -336,6 +336,9 @@ async def test_manual_rtl433_learning_captures_buttons_then_confirms_remote_lear
     assert result["step_id"] == "manual_rtl433_prompt"
     assert "**Power**" in result["description_placeholders"]["instruction"]
     assert result["description_placeholders"]["rtl433_command"] == "rtl_433 -f 315M -R 207 -M level -F json"
+    assert "rtl_433-assisted manual learning guide" in result["description_placeholders"][
+        "rtl433_manual_learning_guide"
+    ]
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -430,6 +433,8 @@ def test_manual_rtl433_prompt_translation_warns_about_duplicate_output() -> None
 
     assert "Paste the newest rtl_433 JSON line" in translations
     assert "Ignore duplicate lines from earlier button presses" in translations
+    assert "{rtl433_manual_learning_guide}" in translations
+    assert "github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/rtl433_manual_learning.md" not in translations
 
 
 async def test_manual_entry_form_exposes_only_hardware_backends_by_default(hass) -> None:

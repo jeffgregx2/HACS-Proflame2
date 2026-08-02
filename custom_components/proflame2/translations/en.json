@@ -51,7 +51,7 @@
       },
       "manual_rtl433_prompt": {
         "title": "Paste rtl_433 decoded row",
-        "description": "Ensure that the following command is running:\n`{rtl433_command}`\n\n**Do this now:**\n{instruction}\n\nPaste the newest rtl_433 JSON line that appears after this button press. Ignore duplicate lines from earlier button presses. See the [rtl_433-assisted manual learning guide](https://github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/rtl433_manual_learning.md) for details.\n\nThe integration has accepted {sample_count} sample(s) so far.",
+        "description": "Ensure that the following command is running:\n`{rtl433_command}`\n\n**Do this now:**\n{instruction}\n\nPaste the newest rtl_433 JSON line that appears after this button press. Ignore duplicate lines from earlier button presses. See the {rtl433_manual_learning_guide} for details.\n\nThe integration has accepted {sample_count} sample(s) so far.",
         "data": {
           "rtl433_samples": "rtl_433 output"
         }
