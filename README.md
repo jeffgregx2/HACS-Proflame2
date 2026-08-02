@@ -98,6 +98,11 @@ Once the Proflame2 integration is installed in Home Assistant, it is easy to add
 
 During setup, learning mode asks you to press specific buttons on your original fireplace remote.  This is used to learn the proper control codes used to establish communications.   You must have a functioning original remote in order to set up this integration.
 
+If normal guided learning cannot decode your remote, you can use
+[rtl_433-assisted manual learning](docs/rtl433_manual_learning.md) with a
+separate SDR receiver. This is an advanced setup path; LilyGO and YardStick
+remain the controllers used after learning.
+
 Remember: If you are using a LilyGO controller, you must install it first before adding the fireplace.
 
 ## Range
@@ -182,6 +187,7 @@ At this time, one controller can only control one fireplace.
 
 - [LilyGO CC1101 controller guide](docs/lilygo_cc1101_controller.md)
 - [YardStick controller guide](docs/yardstick_controller.md)
+- [rtl_433-assisted manual learning](docs/rtl433_manual_learning.md)
 
 ## Relationship To SmartFire
 
