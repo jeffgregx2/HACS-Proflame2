@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -28,6 +29,7 @@ from .const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    CONF_RTL433_SAMPLES,
     DEFAULT_DEBUG_LOGGING,
     DEFAULT_FEATURE_OPTIONS,
     DEFAULT_FIREPLACE_SHORT_NAME,
@@ -36,12 +38,25 @@ from .const import (
     available_backend_types,
 )
 from .control import StateValidationError, build_requested_state
+from .protocol.ecc import derive_ecc_profile
 from .protocol.models import FireplaceFeatures
 from .rf.registry import normalize_controller_id
 
 
 class InvalidRemoteIdError(ValueError):
     """Raised when a remote ID does not represent a 24-bit hex value."""
+
+
+class InvalidRtl433SamplesError(ValueError):
+    """Raised when pasted rtl_433 samples cannot be parsed."""
+
+
+class Rtl433RemoteIdMismatchError(ValueError):
+    """Raised when rtl_433 samples contain multiple remote IDs."""
+
+
+class Rtl433ProfileDerivationError(ValueError):
+    """Raised when rtl_433 samples do not prove one stable C/D profile."""
 
 
 class InvalidNibbleError(ValueError):
@@ -72,6 +87,25 @@ class ManualProfileInput:
     options: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Rtl433Sample:
+    """One decoded rtl_433 Proflame2 sample row."""
+
+    remote_id: int
+    cmd1: int
+    err1: int
+    cmd2: int
+    err2: int
+
+
+@dataclass(frozen=True)
+class Rtl433ManualProfileInput:
+    """Normalized profile and sample evidence from rtl_433 manual learning."""
+
+    profile: ManualProfileInput
+    samples: tuple[Rtl433Sample, ...]
+
+
 def parse_remote_id(value: str | int) -> int:
     """Parse a remote ID as a normalized 24-bit integer."""
 
@@ -90,6 +124,62 @@ def parse_remote_id(value: str | int) -> int:
     if not 0 <= remote_id <= 0xFFFFFF:
         raise InvalidRemoteIdError("Remote ID must fit in 24 bits.")
     return remote_id
+
+
+def _parse_rtl433_hex_field(value: Any, *, field_name: str, max_value: int) -> int:
+    """Parse rtl_433 protocol fields as hex strings or JSON integers."""
+
+    if isinstance(value, int):
+        parsed = value
+    else:
+        text = str(value).strip().lower()
+        if text.startswith("0x"):
+            text = text[2:]
+        if not text or any(character not in "0123456789abcdef" for character in text):
+            raise InvalidRtl433SamplesError(f"{field_name} must be a hexadecimal value.")
+        parsed = int(text, 16)
+    if not 0 <= parsed <= max_value:
+        raise InvalidRtl433SamplesError(f"{field_name} is outside the valid range.")
+    return parsed
+
+
+_RTL433_FIELD_RE = re.compile(r"\b(id|cmd1|cmd2|err1|err2)\s*[:=]\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+)\b", re.I)
+
+
+def _parse_rtl433_sample_line(line: str) -> Rtl433Sample:
+    """Parse one rtl_433 JSON or key/value text output line."""
+
+    payload: dict[str, Any]
+    try:
+        decoded = json.loads(line)
+    except json.JSONDecodeError:
+        payload = {key.lower(): value for key, value in _RTL433_FIELD_RE.findall(line)}
+    else:
+        if not isinstance(decoded, dict):
+            raise InvalidRtl433SamplesError("Each rtl_433 JSON sample must be an object.")
+        payload = {str(key).lower(): value for key, value in decoded.items()}
+
+    required_fields = ("id", "cmd1", "cmd2", "err1", "err2")
+    missing = [field for field in required_fields if field not in payload]
+    if missing:
+        raise InvalidRtl433SamplesError(f"rtl_433 sample is missing fields: {', '.join(missing)}.")
+
+    return Rtl433Sample(
+        remote_id=_parse_rtl433_hex_field(payload["id"], field_name="id", max_value=0xFFFFFF),
+        cmd1=_parse_rtl433_hex_field(payload["cmd1"], field_name="cmd1", max_value=0xFF),
+        cmd2=_parse_rtl433_hex_field(payload["cmd2"], field_name="cmd2", max_value=0xFF),
+        err1=_parse_rtl433_hex_field(payload["err1"], field_name="err1", max_value=0xFF),
+        err2=_parse_rtl433_hex_field(payload["err2"], field_name="err2", max_value=0xFF),
+    )
+
+
+def parse_rtl433_samples(value: str) -> tuple[Rtl433Sample, ...]:
+    """Parse pasted rtl_433 Proflame2 sample rows."""
+
+    lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+    if not lines:
+        raise InvalidRtl433SamplesError("At least one rtl_433 sample row is required.")
+    return tuple(_parse_rtl433_sample_line(line) for line in lines)
 
 
 def parse_nibble(value: str | int) -> int:
@@ -196,6 +286,47 @@ def normalize_manual_profile_input(user_input: dict[str, Any]) -> ManualProfileI
     return ManualProfileInput(
         data=data,
         options=normalize_entry_options(user_input),
+    )
+
+
+def normalize_manual_rtl433_profile_input(user_input: dict[str, Any]) -> Rtl433ManualProfileInput:
+    """Normalize rtl_433 rows into the standard manual profile shape."""
+
+    samples = parse_rtl433_samples(user_input[CONF_RTL433_SAMPLES])
+    return normalize_manual_rtl433_profile_samples(user_input, samples)
+
+
+def normalize_manual_rtl433_profile_samples(
+    user_input: dict[str, Any],
+    samples: tuple[Rtl433Sample, ...],
+) -> Rtl433ManualProfileInput:
+    """Normalize already-parsed rtl_433 samples into the standard profile shape."""
+
+    if not samples:
+        raise InvalidRtl433SamplesError("At least one rtl_433 sample row is required.")
+    remote_ids = {sample.remote_id for sample in samples}
+    if len(remote_ids) != 1:
+        raise Rtl433RemoteIdMismatchError("All rtl_433 samples must have the same remote id.")
+
+    try:
+        ecc = derive_ecc_profile(
+            ((sample.cmd1, sample.err1) for sample in samples),
+            ((sample.cmd2, sample.err2) for sample in samples),
+        )
+    except ValueError as exc:
+        raise Rtl433ProfileDerivationError(str(exc)) from exc
+
+    derived_input = {
+        **user_input,
+        CONF_REMOTE_ID: next(iter(remote_ids)),
+        CONF_C1: ecc.c1,
+        CONF_D1: ecc.d1,
+        CONF_C2: ecc.c2,
+        CONF_D2: ecc.d2,
+    }
+    return Rtl433ManualProfileInput(
+        profile=normalize_manual_profile_input(derived_input),
+        samples=samples,
     )
 
 

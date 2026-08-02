@@ -6,10 +6,12 @@
         "title": "Add fireplace profile",
         "menu_options": {
           "learn": "Learn from remote",
+          "manual_rtl433": "Learn from rtl_433 output",
           "manual": "Manual entry"
         },
         "menu_option_descriptions": {
           "learn": "Listen for handheld remote packets and derive the permanent remote profile automatically.",
+          "manual_rtl433": "Run rtl_433 yourself, follow prompted remote button presses, and paste decoded rows.",
           "manual": "Enter the permanent remote ID and learned C/D values directly."
         }
       },
@@ -30,6 +32,34 @@
           "aux": "Aux supported",
           "cpi": "CPI supported"
         }
+      },
+      "manual_rtl433": {
+        "title": "Learn from rtl_433 output",
+        "description": "Start rtl_433 outside Home Assistant before continuing. Use: rtl_433 -f 315M -R 207 -M level -F json\n\nThe prompts prefer Temp Down and Temp Up so setup does not repeatedly power-cycle the fireplace.",
+        "data": {
+          "name": "Fireplace name",
+          "fireplace_short_name": "Display short name",
+          "backend_type": "Controller Type"
+        }
+      },
+      "manual_rtl433_esphome": {
+        "title": "Choose LilyGO ESPHome device",
+        "description": "{setup_text}",
+        "data": {
+          "esphome_entry_id": "LilyGO ESPHome device"
+        }
+      },
+      "manual_rtl433_prompt": {
+        "title": "Paste rtl_433 decoded row",
+        "description": "**Do this now:**\n{instruction}\n\nPaste the rtl_433 decoded output for this press. The integration has accepted {sample_count} sample(s) so far.",
+        "data": {
+          "rtl433_samples": "rtl_433 output"
+        }
+      },
+      "manual_rtl433_power_off": {
+        "title": "Power off fireplace",
+        "description": "The pasted rtl_433 rows prove a stable remote profile.\n\nPress Power once to turn the fireplace off, then continue.",
+        "data": {}
       },
       "manual_esphome": {
         "title": "Choose LilyGO ESPHome device",
@@ -71,10 +101,12 @@
         "description": "Guided learning could not produce a trustworthy remote profile.\n\nReason: {error}",
         "menu_options": {
           "retry_learn": "Retry learning",
+          "manual_rtl433": "Learn from rtl_433 output",
           "manual": "Manual entry"
         },
         "menu_option_descriptions": {
           "retry_learn": "Start guided learning again with the same backend.",
+          "manual_rtl433": "Run rtl_433 yourself, follow prompted remote button presses, and paste decoded rows.",
           "manual": "Enter the permanent remote profile yourself instead."
         }
       }
@@ -90,7 +122,10 @@
       "duplicate_profile_id": "A saved profile with that name already exists.",
       "unknown_profile": "Choose an existing saved profile.",
       "required": "This field is required.",
-      "invalid_esphome_entry": "Select a valid ESPHome device."
+      "invalid_esphome_entry": "Select a valid ESPHome device.",
+      "invalid_rtl433_samples": "Paste rtl_433 Proflame2 output containing id, cmd1, cmd2, err1, and err2.",
+      "rtl433_remote_id_mismatch": "All accepted rtl_433 rows must have the same remote ID.",
+      "rtl433_profile_derivation_failed": "Those rtl_433 rows contradict each other. Recapture the last button press and paste the decoded row again."
     },
     "abort": {
       "already_configured": "A fireplace with this remote ID is already configured for this controller."

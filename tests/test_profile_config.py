@@ -29,6 +29,7 @@ from custom_components.proflame2.const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    CONF_RTL433_SAMPLES,
     available_backend_types,
     available_learning_backend_types,
 )
@@ -36,16 +37,22 @@ from custom_components.proflame2.profile import (
     InvalidBackendError,
     InvalidNibbleError,
     InvalidRemoteIdError,
+    InvalidRtl433SamplesError,
     InvalidSavedProfileError,
+    Rtl433ProfileDerivationError,
+    Rtl433RemoteIdMismatchError,
+    Rtl433Sample,
     build_profile_id,
     default_entry_options,
     default_feature_options,
     normalize_entry_options,
     normalize_feature_options,
     normalize_manual_profile_input,
+    normalize_manual_rtl433_profile_input,
     normalize_saved_profile_input,
     parse_nibble,
     parse_remote_id,
+    parse_rtl433_samples,
     sanitize_fireplace_short_name,
 )
 from custom_components.proflame2.protocol.models import FireplaceFeatures
@@ -162,6 +169,91 @@ def test_normalize_manual_profile_input_uses_concrete_controller_id() -> None:
     )
 
     assert normalized.data[CONF_BACKEND_TYPE] == BACKEND_ESPHOME
+
+
+def test_parse_rtl433_samples_accepts_json_and_text_rows() -> None:
+    """rtl_433 manual samples should parse from common copied output formats."""
+
+    samples = parse_rtl433_samples(
+        "\n".join(
+            (
+                '{"model":"Proflame2-Remote","id":"3b3f02","cmd1":"01","cmd2":"16","err1":"76","err2":"ef"}',
+                "model=Proflame2-Remote id=3b3f02 cmd1=31 cmd2=26 err1=25 err2=bc",
+            )
+        )
+    )
+
+    assert samples == (
+        Rtl433Sample(remote_id=0x3B3F02, cmd1=0x01, cmd2=0x16, err1=0x76, err2=0xEF),
+        Rtl433Sample(remote_id=0x3B3F02, cmd1=0x31, cmd2=0x26, err1=0x25, err2=0xBC),
+    )
+
+
+def test_parse_rtl433_samples_rejects_missing_fields() -> None:
+    """Rows must contain the complete Proflame2 command/error evidence."""
+
+    with pytest.raises(InvalidRtl433SamplesError, match="missing fields"):
+        parse_rtl433_samples("id=3b3f02 cmd1=01 cmd2=16 err1=76")
+
+
+def test_normalize_manual_rtl433_profile_input_derives_profile_values() -> None:
+    """rtl_433 command/error rows should derive the stored profile shape."""
+
+    normalized = normalize_manual_rtl433_profile_input(
+        {
+            CONF_NAME: "Living Room Fireplace",
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+            CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=01 cmd2=16 err1=76 err2=ef",
+            CONF_FIREPLACE_SHORT_NAME: " living ",
+        }
+    )
+
+    assert normalized.profile.data == {
+        CONF_NAME: "Living Room Fireplace",
+        CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+        CONF_REMOTE_ID: 0x3B3F02,
+        CONF_C1: 5,
+        CONF_D1: 7,
+        CONF_C2: 1,
+        CONF_D2: 8,
+    }
+    assert normalized.profile.options[CONF_FIREPLACE_SHORT_NAME] == "LIVING"
+
+
+def test_normalize_manual_rtl433_profile_input_rejects_mixed_remote_ids() -> None:
+    """A pasted sample set must describe one remote."""
+
+    with pytest.raises(Rtl433RemoteIdMismatchError):
+        normalize_manual_rtl433_profile_input(
+            {
+                CONF_NAME: "Living Room Fireplace",
+                CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+                CONF_RTL433_SAMPLES: "\n".join(
+                    (
+                        "id=3b3f02 cmd1=01 cmd2=16 err1=76 err2=ef",
+                        "id=3b3f03 cmd1=01 cmd2=16 err1=76 err2=ef",
+                    )
+                ),
+            }
+        )
+
+
+def test_normalize_manual_rtl433_profile_input_rejects_contradictory_rows() -> None:
+    """Contradictory command/error rows should not guess a profile."""
+
+    with pytest.raises(Rtl433ProfileDerivationError):
+        normalize_manual_rtl433_profile_input(
+            {
+                CONF_NAME: "Living Room Fireplace",
+                CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+                CONF_RTL433_SAMPLES: "\n".join(
+                    (
+                        "id=3b3f02 cmd1=01 cmd2=16 err1=76 err2=ef",
+                        "id=3b3f02 cmd1=01 cmd2=16 err1=77 err2=ee",
+                    )
+                ),
+            }
+        )
 
 
 def test_controller_id_normalization_rejects_invalid_values() -> None:

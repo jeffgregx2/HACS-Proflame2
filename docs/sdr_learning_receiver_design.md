@@ -356,9 +356,11 @@ rtl_433 -f 315M -R 207 -M level -F json
 rtl_433 -f 314.973M -R 207 -M level -F json
 ```
 
-Ask reporters to press several distinct remote buttons or settings so the
-command/error rows are less ambiguous. Power and temperature up/down are useful
-starting points.
+Ask reporters to press several distinct low-impact remote buttons or settings so
+the command/error rows are less ambiguous. Prefer Temp Down and Temp Up during
+evidence collection to avoid repeated fireplace power cycling. Once enough
+evidence has been accepted, ask the user to press Power once to leave the
+fireplace off before setup continues.
 
 ## Manual Learning Design
 
@@ -376,12 +378,17 @@ Mode 1: direct profile entry.
 - Best for maintainers or users who already know their learned profile.
 - Keep this unchanged for backward compatibility.
 
-Mode 2: rtl_433 sample-derived entry.
+Mode 2: guided rtl_433 sample-derived entry.
 
 - New behavior.
-- User enters decoded rtl_433 Proflame2 rows.
+- User starts rtl_433 externally.
+- Home Assistant prompts for one low-impact remote action at a time, primarily
+  Temp Down and Temp Up.
+- User pastes decoded rtl_433 Proflame2 rows for that prompted action.
 - Integration derives `remote_id`, `c1`, `d1`, `c2`, and `d2`.
 - Best for issue reporters because rtl_433 reports command/error bytes directly.
+- After profile derivation succeeds, Home Assistant asks the user to press Power
+  once to leave the fireplace off, then proceeds to feature selection.
 
 Both modes then create an ordinary YardStick or LilyGO config entry.
 
@@ -466,16 +473,25 @@ The failed-learning menu should offer:
 - `manual_rtl433`
 - `manual`
 
-The `manual_rtl433` form should collect:
+The `manual_rtl433` setup form should collect:
 
 - fireplace display name,
 - fireplace short display name,
-- controller type,
-- pasted rtl_433 decoded rows,
-- feature flags.
+- controller type.
 
-If the selected controller is LilyGO, reuse the existing ESPHome config-entry
-selection step after successful sample validation. This preserves current LilyGO
+The `manual_rtl433_prompt` form should repeat as needed and collect:
+
+- pasted rtl_433 decoded rows for the current prompted Temp Down/Temp Up action.
+
+The `manual_rtl433_power_off` form should appear after enough evidence has been
+accepted:
+
+- user presses Power once to leave the fireplace off,
+- no additional rtl_433 evidence is required,
+- continuing advances to the existing feature-selection form.
+
+If the selected controller is LilyGO, collect the existing ESPHome config-entry
+link before the rtl_433 sample prompts. This preserves current LilyGO
 configuration semantics and avoids any LilyGO RX/TX changes.
 
 The created config entry should store the same data shape as direct manual
@@ -530,9 +546,16 @@ Suggested code changes:
 - Accept JSON lines and key/value text lines in the parser.
 - Reuse `derive_ecc_profile()` from `protocol/ecc.py`.
 - Add `async_step_manual_rtl433()` in `config_flow.py`.
-- Add `_manual_rtl433_profile_schema()` with a multiline text selector.
+- Add `async_step_manual_rtl433_prompt()` for the prompted paste loop.
+- Add `async_step_manual_rtl433_power_off()` for the final power-off safety
+  prompt.
+- Add `_manual_rtl433_profile_schema()` for setup and
+  `_manual_rtl433_prompt_schema()` with a multiline text selector.
 - Add `manual_rtl433` to the top-level setup menu and failed-learning menu.
-- Reuse `_async_create_profile_entry()` for final entry creation.
+- Accumulate samples until the same confidence thresholds as guided learning are
+  met.
+- Populate a successful `LearnResult` and reuse the existing `learn_features`
+  step for final entry creation.
 - Reuse `async_step_manual_esphome()` for LilyGO controller linking.
 - Add translations for the new menu option, form, field, and errors.
 
@@ -545,7 +568,8 @@ Focused tests:
 - mixed remote ids are rejected,
 - contradictory rows are rejected,
 - config flow exposes the new menu option,
-- config flow creates a YardStick runtime entry from pasted rows,
+- config flow prompts with Temp Down/Temp Up before asking for Power,
+- config flow creates a YardStick runtime entry from prompted pasted rows,
 - config flow still creates LilyGO entries through the existing ESPHome link
   step,
 - failed guided learning offers rtl_433-assisted manual fallback,

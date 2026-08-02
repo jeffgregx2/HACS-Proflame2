@@ -14,6 +14,8 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
 )
 
 from .const import (
@@ -41,6 +43,7 @@ from .const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    CONF_RTL433_SAMPLES,
     DATA_LEARNING_DEBUG_LOGGING,
     DATA_LEARNING_RECEIVE_TIMEOUT,
     DATA_LEARNING_TIMEOUT,
@@ -57,6 +60,9 @@ from .learning import (
     DEFAULT_LEARN_TIMEOUT_SECONDS,
     DEFAULT_RECEIVE_TIMEOUT_SECONDS,
     ERROR_BACKEND_UNAVAILABLE,
+    MIN_UNIQUE_CMD1_SAMPLES,
+    MIN_UNIQUE_CMD2_SAMPLES,
+    MIN_VALID_PACKETS,
     LearnResult,
     LearnSession,
     async_capture_next_learning_packet,
@@ -70,18 +76,24 @@ from .profile import (
     InvalidNibbleError,
     InvalidProfileNameError,
     InvalidRemoteIdError,
+    InvalidRtl433SamplesError,
     InvalidSavedProfileError,
+    Rtl433ProfileDerivationError,
+    Rtl433RemoteIdMismatchError,
+    Rtl433Sample,
     default_feature_options,
     fireplace_features_from_options,
     normalize_entry_options,
     normalize_feature_options,
     normalize_manual_profile_input,
+    normalize_manual_rtl433_profile_samples,
     normalize_saved_profile_input,
     parse_remote_id,
+    parse_rtl433_samples,
     remote_id_as_hex,
     sanitize_fireplace_short_name,
 )
-from .protocol.packet import ProflamePacket
+from .protocol.packet import ProflameFrame, ProflamePacket
 from .rf.registry import get_backend_definition, normalize_controller_id
 from .rf.yardstick import YardStickBackendUnavailableError
 
@@ -146,6 +158,31 @@ def _manual_profile_schema() -> vol.Schema:
     )
 
 
+def _manual_rtl433_profile_schema() -> vol.Schema:
+    """Build the rtl_433-assisted manual-learning setup schema."""
+
+    return vol.Schema(
+        {
+            vol.Required(CONF_NAME): str,
+            vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
+            vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _backend_selector(),
+        }
+    )
+
+
+def _manual_rtl433_prompt_schema() -> vol.Schema:
+    """Build the per-prompt rtl_433 sample paste schema."""
+
+    return vol.Schema(
+        {
+            vol.Required(CONF_RTL433_SAMPLES): TextSelector(TextSelectorConfig(multiline=True)),
+        }
+    )
+
+
+MANUAL_RTL433_POWER_OFF_SCHEMA = vol.Schema({})
+
+
 def _learn_setup_schema() -> vol.Schema:
     """Build the learn-entry schema for the active build."""
 
@@ -186,6 +223,13 @@ EXTRA_LEARN_PROMPT = (
     "Press Flame Down or Flame Up once more so the integration can collect an additional Cmd2-changing packet if needed.",
 )
 
+RTL433_MANUAL_PROMPTS: tuple[tuple[str, str], ...] = (
+    ("temp_down", "Press Temp Down once, then paste the rtl_433 decoded line for that press."),
+    ("temp_up", "Press Temp Up once, then paste the rtl_433 decoded line for that press."),
+    ("temp_down_again", "Press Temp Down once more, then paste the rtl_433 decoded line for that press."),
+    ("temp_up_again", "Press Temp Up once more, then paste the rtl_433 decoded line for that press."),
+)
+
 
 class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Proflame2."""
@@ -199,6 +243,14 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _learn_prompt_index: int = 0
     _manual_pending_data: dict[str, Any] | None = None
     _manual_pending_options: dict[str, Any] | None = None
+    _manual_rtl433_input: dict[str, Any] | None = None
+    _manual_rtl433_samples: list[Rtl433Sample]
+    _manual_rtl433_prompt_index: int = 0
+
+    def __init__(self) -> None:
+        """Initialize per-flow manual learning state."""
+
+        self._manual_rtl433_samples = []
 
     @staticmethod
     @callback
@@ -233,7 +285,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_menu(
             step_id="user",
-            menu_options=["learn", "manual"],
+            menu_options=["learn", "manual_rtl433", "manual"],
         )
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None):
@@ -270,6 +322,106 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="manual",
             data_schema=self.add_suggested_values_to_schema(_manual_profile_schema(), user_input or suggested_values),
             errors=errors,
+        )
+
+    async def async_step_manual_rtl433(self, user_input: dict[str, Any] | None = None):
+        """Collect setup details for rtl_433-assisted manual learning."""
+
+        if user_input is None:
+            suggested_values = self._manual_rtl433_suggested_values()
+            return self.async_show_form(
+                step_id="manual_rtl433",
+                data_schema=self.add_suggested_values_to_schema(
+                    _manual_rtl433_profile_schema(),
+                    suggested_values,
+                ),
+            )
+
+        self._manual_rtl433_input = {
+            CONF_NAME: str(user_input[CONF_NAME]).strip(),
+            CONF_BACKEND_TYPE: normalize_controller_id(user_input[CONF_BACKEND_TYPE]),
+            CONF_FIREPLACE_SHORT_NAME: sanitize_fireplace_short_name(
+                user_input.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
+            ),
+        }
+        self._manual_rtl433_samples = []
+        self._manual_rtl433_prompt_index = 0
+        if self._backend_requires_esphome_entry(self._manual_rtl433_input[CONF_BACKEND_TYPE]):
+            return await self.async_step_manual_rtl433_esphome()
+        return await self.async_step_manual_rtl433_prompt()
+
+    async def async_step_manual_rtl433_esphome(self, user_input: dict[str, Any] | None = None):
+        """Collect the ESPHome device link for rtl_433-assisted LilyGO setup."""
+
+        if self._manual_rtl433_input is None:
+            return await self.async_step_manual_rtl433()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._manual_rtl433_input[CONF_ESPHOME_ENTRY_ID] = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
+            esphome_entry_error = self._validate_manual_esphome_link(self._manual_rtl433_input)
+            if esphome_entry_error is None:
+                return await self.async_step_manual_rtl433_prompt()
+            errors[CONF_ESPHOME_ENTRY_ID] = esphome_entry_error
+
+        return self.async_show_form(
+            step_id="manual_rtl433_esphome",
+            data_schema=self._esphome_link_schema(),
+            errors=errors,
+            description_placeholders={"setup_text": LILYGO_ESPHOME_LINK_HELP},
+        )
+
+    async def async_step_manual_rtl433_prompt(self, user_input: dict[str, Any] | None = None):
+        """Collect one prompted rtl_433 decoded sample batch."""
+
+        if self._manual_rtl433_input is None:
+            return await self.async_step_manual_rtl433()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                parsed_samples = parse_rtl433_samples(user_input[CONF_RTL433_SAMPLES])
+                updated_samples = [*self._manual_rtl433_samples, *parsed_samples]
+                self._validate_manual_rtl433_samples(updated_samples)
+            except InvalidRtl433SamplesError:
+                errors[CONF_RTL433_SAMPLES] = "invalid_rtl433_samples"
+            except Rtl433RemoteIdMismatchError:
+                errors[CONF_RTL433_SAMPLES] = "rtl433_remote_id_mismatch"
+            except Rtl433ProfileDerivationError:
+                errors[CONF_RTL433_SAMPLES] = "rtl433_profile_derivation_failed"
+            else:
+                self._manual_rtl433_samples = updated_samples
+                maybe_result = self._try_build_manual_rtl433_learn_result()
+                if maybe_result is not None:
+                    self._learn_result = maybe_result
+                    return await self.async_step_manual_rtl433_power_off()
+                self._manual_rtl433_prompt_index += 1
+
+        prompt_label, instruction = self._current_manual_rtl433_prompt()
+        return self.async_show_form(
+            step_id="manual_rtl433_prompt",
+            data_schema=self.add_suggested_values_to_schema(
+                _manual_rtl433_prompt_schema(),
+                {CONF_RTL433_SAMPLES: ""},
+            ),
+            errors=errors,
+            description_placeholders={
+                "instruction": instruction,
+                "prompt_label": prompt_label,
+                "sample_count": str(len(self._manual_rtl433_samples)),
+            },
+        )
+
+    async def async_step_manual_rtl433_power_off(self, user_input: dict[str, Any] | None = None):
+        """Ask the user to power off after manual rtl_433 evidence is complete."""
+
+        if self._learn_result is None or not self._learn_result.success:
+            return await self.async_step_manual_rtl433_prompt()
+        if user_input is not None:
+            return await self.async_step_learn_features()
+        return self.async_show_form(
+            step_id="manual_rtl433_power_off",
+            data_schema=MANUAL_RTL433_POWER_OFF_SCHEMA,
         )
 
     async def async_step_manual_esphome(self, user_input: dict[str, Any] | None = None):
@@ -477,7 +629,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         return self.async_show_menu(
             step_id="learn_failed",
-            menu_options=["retry_learn", "manual"],
+            menu_options=["retry_learn", "manual_rtl433", "manual"],
             description_placeholders=description_placeholders,
         )
 
@@ -543,6 +695,80 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             suggested[CONF_REMOTE_ID] = remote_id_as_hex(self._learn_result.remote_id)
 
         return suggested
+
+    def _manual_rtl433_suggested_values(self) -> dict[str, Any]:
+        """Build suggested values for rtl_433-assisted manual learning."""
+
+        suggested = self._manual_suggested_values()
+        suggested[CONF_RTL433_SAMPLES] = ""
+        for key in (CONF_REMOTE_ID, CONF_C1, CONF_D1, CONF_C2, CONF_D2):
+            suggested.pop(key, None)
+        return suggested
+
+    def _current_manual_rtl433_prompt(self) -> tuple[str, str]:
+        """Return the current manual rtl_433 prompt, cycling as needed."""
+
+        return RTL433_MANUAL_PROMPTS[self._manual_rtl433_prompt_index % len(RTL433_MANUAL_PROMPTS)]
+
+    def _validate_manual_rtl433_samples(self, samples: list[Rtl433Sample]) -> None:
+        """Validate accumulated rtl_433 evidence without requiring success yet."""
+
+        if self._manual_rtl433_input is None:
+            raise InvalidRtl433SamplesError("Manual rtl_433 setup has not started.")
+        normalize_manual_rtl433_profile_samples(
+            self._manual_rtl433_input,
+            tuple(samples),
+        )
+
+    def _try_build_manual_rtl433_learn_result(self) -> LearnResult | None:
+        """Return a learned profile once pasted rtl_433 rows prove enough evidence."""
+
+        if self._manual_rtl433_input is None:
+            return None
+        samples = tuple(self._manual_rtl433_samples)
+        if len(samples) < MIN_VALID_PACKETS:
+            return None
+
+        cmd1_samples = {(sample.cmd1, sample.err1) for sample in samples}
+        cmd2_samples = {(sample.cmd2, sample.err2) for sample in samples}
+        if len(cmd1_samples) < MIN_UNIQUE_CMD1_SAMPLES or len(cmd2_samples) < MIN_UNIQUE_CMD2_SAMPLES:
+            return None
+
+        normalized = normalize_manual_rtl433_profile_samples(self._manual_rtl433_input, samples)
+        self._learn_input = {
+            CONF_NAME: normalized.profile.data[CONF_NAME],
+            CONF_BACKEND_TYPE: normalized.profile.data[CONF_BACKEND_TYPE],
+            CONF_FIREPLACE_SHORT_NAME: normalized.profile.options.get(
+                CONF_FIREPLACE_SHORT_NAME,
+                DEFAULT_FIREPLACE_SHORT_NAME,
+            ),
+            CONF_DEBUG_LOGGING: normalized.profile.options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING),
+        }
+        if CONF_ESPHOME_ENTRY_ID in normalized.profile.data:
+            self._learn_input[CONF_ESPHOME_ENTRY_ID] = normalized.profile.data[CONF_ESPHOME_ENTRY_ID]
+
+        final_sample = samples[-1]
+        final_packet = ProflamePacket.from_frame(
+            ProflameFrame(
+                serial_id=final_sample.remote_id,
+                cmd1=final_sample.cmd1,
+                err1=final_sample.err1,
+                cmd2=final_sample.cmd2,
+                err2=final_sample.err2,
+            ),
+            source="rtl433_manual",
+        )
+        return LearnResult(
+            success=True,
+            remote_id=normalized.profile.data[CONF_REMOTE_ID],
+            c1=normalized.profile.data[CONF_C1],
+            d1=normalized.profile.data[CONF_D1],
+            c2=normalized.profile.data[CONF_C2],
+            d2=normalized.profile.data[CONF_D2],
+            packets_seen=len(samples),
+            valid_packets=len(samples),
+            final_packet=final_packet,
+        )
 
     def _esphome_link_schema(self) -> vol.Schema:
         """Build an explicit ESPHome entry dropdown for LilyGO setup."""
