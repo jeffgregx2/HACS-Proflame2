@@ -6,7 +6,7 @@ import os
 
 REPOSITORY_URL = "https://github.com/jeffgregx2/HACS-Proflame2"
 DOCUMENTATION_REF_ENV = "PROFLAME2_DOCUMENTATION_REF"
-DEFAULT_DOCUMENTATION_REF = "issue-11-sdr-learning-receiver"
+DEFAULT_DOCUMENTATION_REF = "dev"
 
 ADD_FIREPLACE_PROFILE_DOC = "docs/add_fireplace_profile.md"
 ADD_FIREPLACE_PROFILE_OPTIONS_ANCHOR = "add-fireplace-profile-options"
