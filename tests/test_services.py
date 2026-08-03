@@ -131,7 +131,7 @@ async def test_set_state_emits_presend_diagnostic(hass, caplog) -> None:
     entry = _add_entry(hass, title="Living Room", remote_id=0x3B3F02)
     assert await hass.config_entries.async_setup(entry.entry_id)
 
-    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
 
     await hass.services.async_call(
         DOMAIN,

@@ -53,6 +53,7 @@ from custom_components.proflame2.runtime import (
     _runtime_store,
     async_get_runtime_entries,
     async_set_runtime_current_state,
+    runtime_current_state,
 )
 
 
@@ -504,6 +505,81 @@ async def test_power_on_after_power_off_preserves_prior_feature_values(hass) -> 
     assert packet.state.front is True
 
 
+async def test_light_change_while_off_is_used_on_next_power_on(hass) -> None:
+    """Changing light while off should update the retained value for power on."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0.0
+
+    entry = _add_entry(
+        hass,
+        options={
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+        },
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    backend = runtime_entry.backend
+    assert isinstance(backend, FakeRFBackend)
+    await async_set_runtime_current_state(
+        hass,
+        runtime_entry,
+        FireplaceState(power=False, flame=5, fan=0, light=2),
+        source="observed_packet",
+        confidence=STATE_CONFIDENCE_OBSERVED,
+        packet=ProflamePacket.from_frame(
+            ProflameFrame(
+                serial_id=0x3B3F02,
+                cmd1=0x20,
+                err1=0x00,
+                cmd2=0x05,
+                err2=0x00,
+            ),
+            source="observed_packet",
+        ),
+    )
+    backend.sent_packets.clear()
+
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": _number_entity_id(entry.title, "Light"), "value": 4},
+        blocking=True,
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+
+    light = hass.states.get(_number_entity_id(entry.title, "Light"))
+    primary = hass.states.get(_sensor_entity_id(entry.title))
+    assert light is not None and light.state == "4"
+    assert primary is not None
+    assert primary.state == "Off"
+    assert primary.attributes["light"] == "Level 4"
+    assert primary.attributes["operational_status"] == "ready"
+    assert primary.attributes["pending_state"] is None
+    assert len(backend.sent_packets) == 0
+
+    assert runtime_current_state(runtime_entry) == FireplaceState(power=False, flame=5, fan=0, light=4)
+
+    await hass.services.async_call(
+        "switch",
+        "turn_on",
+        {"entity_id": _switch_entity_id(entry.title, "Power")},
+        blocking=True,
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+
+    packet = backend.sent_packets[-1]
+    assert packet.state.power is True
+    assert packet.state.flame == 5
+    assert packet.state.light == 4
+
+
 async def test_tx_failure_rolls_back_pending_controls(hass, monkeypatch) -> None:
     """A failed debounced TX should clear pending state and revert controls."""
 
@@ -802,7 +878,7 @@ async def test_debounced_send_logs_terminal_success(hass, caplog) -> None:
     entry = _add_entry(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
 
-    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
 
     await hass.services.async_call(
         "number",
@@ -837,7 +913,7 @@ async def test_send_does_not_start_confirmation_for_backend_without_receive(hass
 
     monkeypatch.setattr(backend, "capabilities", fake_capabilities)
     monkeypatch.setattr(backend, "receive", fail_receive)
-    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
 
     await hass.services.async_call(
         "number",
@@ -879,7 +955,7 @@ async def test_send_starts_confirmation_for_backend_with_receive(hass, monkeypat
 
     monkeypatch.setattr(backend, "capabilities", fake_capabilities)
     backend.queue_packets(None)
-    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
 
     await hass.services.async_call(
         "number",
@@ -904,7 +980,7 @@ async def test_restarting_pre_send_debounce_logs_timer_cancel_without_terminal_c
     entry = _add_entry(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
 
-    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
 
     await hass.services.async_call(
         "number",
@@ -938,7 +1014,7 @@ async def test_power_off_from_on_state_transmits_without_cancellation(hass, capl
     backend = runtime_entry.backend
     assert isinstance(backend, FakeRFBackend)
 
-    caplog.set_level(logging.WARNING, logger="custom_components.proflame2.services")
+    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
 
     await hass.services.async_call(
         "switch",
@@ -1138,6 +1214,58 @@ async def test_post_tx_confirmation_updates_state_confidence_to_observed(hass) -
     assert primary is not None
     assert primary.attributes["state_confidence"] == STATE_CONFIDENCE_OBSERVED
     assert primary.attributes["operational_status"] == "ready"
+
+
+async def test_post_tx_confirmation_ignores_mismatched_state_echo(hass, caplog) -> None:
+    """A stale same-remote packet should not roll back a successful send."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0.05
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS] = 0.01
+
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    backend = runtime_entry.backend
+    assert isinstance(backend, FakeRFBackend)
+    await async_set_runtime_current_state(
+        hass,
+        runtime_entry,
+        FireplaceState(power=False, flame=0),
+        source="test_setup",
+        confidence=STATE_CONFIDENCE_OBSERVED,
+    )
+    backend.queue_packets(
+        ProflamePacket.from_frame(
+            ProflameFrame(
+                serial_id=0x3B3F02,
+                cmd1=0x00,
+                err1=0x57,
+                cmd2=0x01,
+                err2=0x39,
+            ),
+            source="observed_packet",
+        )
+    )
+    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
+
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 1},
+        blocking=True,
+    )
+    await asyncio.sleep(0.08)
+    await hass.async_block_till_done()
+
+    primary = hass.states.get(_sensor_entity_id(entry.title))
+    assert primary is not None
+    assert primary.state == "On · Flame 1"
+    assert primary.attributes["flame"] == "Level 1"
+    assert primary.attributes["state_confidence"] == STATE_CONFIDENCE_REQUESTED
+    assert primary.attributes["operational_status"] == "ready"
+    assert "post-TX confirmation observed state=Off match=no" in caplog.text
+    assert "post-TX confirmation ignored mismatched state observed=Off expected=On" in caplog.text
 
 
 async def test_active_listening_updates_current_state_when_forced_in_tests(hass) -> None:

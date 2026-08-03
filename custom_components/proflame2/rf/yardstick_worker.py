@@ -1062,7 +1062,7 @@ class YardStickWorkerSupervisor:
                 self._diagnostics.outstanding_request_id = None
                 self._diagnostics.outstanding_command = None
         elif outstanding_request_id is not None:
-            _LOGGER.warning(
+            _LOGGER.info(
                 "Yard Stick worker shutdown skipping graceful STOP because request is in flight pid=%s generation=%s request_id=%s command=%s",
                 process.pid,
                 self._diagnostics.worker_generation,
@@ -1159,7 +1159,7 @@ class YardStickWorkerSupervisor:
             return
         pid = process.pid
         generation = self._diagnostics.worker_generation
-        _LOGGER.warning(
+        _LOGGER.info(
             "Yard Stick worker terminate requested pid=%s generation=%s reason=%s",
             pid,
             generation,
@@ -1174,7 +1174,7 @@ class YardStickWorkerSupervisor:
         if process.is_alive():
             process.terminate()
             process.join(timeout=self._stop_timeout_seconds)
-            _LOGGER.warning(
+            _LOGGER.info(
                 "Yard Stick worker terminate result pid=%s generation=%s alive=%s",
                 pid,
                 generation,
@@ -1198,7 +1198,7 @@ class YardStickWorkerSupervisor:
                     process.is_alive(),
                 )
         exitcode = process.exitcode
-        _LOGGER.warning(
+        _LOGGER.info(
             "Yard Stick worker terminated pid=%s generation=%s exitcode=%s reason=%s",
             pid,
             generation,

@@ -98,15 +98,15 @@ def build_staged_state(
         if flame > 0:
             power = True
 
-    if CONF_FAN in changes and features.fan and power:
+    if CONF_FAN in changes and features.fan:
         fan = int(changes[CONF_FAN])
-    if CONF_LIGHT in changes and features.light and power:
+    if CONF_LIGHT in changes and features.light:
         light = int(changes[CONF_LIGHT])
-    if CONF_FRONT in changes and features.front and power:
+    if CONF_FRONT in changes and features.front:
         front = bool(changes[CONF_FRONT])
-    if CONF_AUX in changes and features.aux and power:
+    if CONF_AUX in changes and features.aux:
         aux = bool(changes[CONF_AUX])
-    if CONF_CPI in changes and features.cpi and power:
+    if CONF_CPI in changes and features.cpi:
         cpi = bool(changes[CONF_CPI])
 
     if power:

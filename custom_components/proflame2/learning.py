@@ -234,7 +234,7 @@ async def async_start_learning_session(
 ) -> LearnSession:
     """Create a backend and wrap it in a guided-learning session."""
 
-    _LOGGER.warning(
+    _LOGGER.info(
         "Proflame2 learning debug logging is %s for backend=%s",
         "ENABLED" if debug_logging else "DISABLED",
         backend_type,
@@ -292,7 +292,7 @@ async def async_close_learning_session(session: LearnSession | None) -> None:
     """Close a guided-learning session backend if it exists."""
 
     if session is not None:
-        _LOGGER.warning(
+        _LOGGER.info(
             "Proflame2 closing learning session for backend=%s debug_logging=%s",
             getattr(session.backend, "name", session.backend.__class__.__name__),
             session.debug_logging_enabled,
@@ -316,7 +316,7 @@ async def async_close_learning_session(session: LearnSession | None) -> None:
             if session.debug_logging_enabled and session.hass is not None:
                 get_packet_debug_logger().info("Closed packet debug learning session")
                 await async_disable_packet_debug_logging(session.hass)
-            _LOGGER.warning(
+            _LOGGER.info(
                 "Proflame2 learning session closed for backend=%s",
                 getattr(session.backend, "name", session.backend.__class__.__name__),
             )
