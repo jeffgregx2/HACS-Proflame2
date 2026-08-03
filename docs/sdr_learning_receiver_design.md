@@ -1,5 +1,24 @@
 # SDR Learning Receiver Design
 
+## Current Status
+
+This is a future-design document, not the implementation shipped in
+v0.5.4-beta3.
+
+The current product direction is to ship rtl_433-assisted manual learning first.
+In that mode, Home Assistant does not control an SDR, run rtl_433, import
+rtl_433 code, or receive IQ samples. The user runs rtl_433 outside Home
+Assistant with their own SDR, follows the Home Assistant prompts, and pastes the
+decoded Proflame2 JSON rows into the setup flow. Home Assistant then derives the
+same remote profile values used by the existing LilyGO or YardStick controller.
+
+If rtl_433-assisted manual learning proves to be needed often, the project may
+consider a tighter learning-only SDR integration so users only need to provide
+compatible SDR hardware and the integration handles capture, demodulation, and
+Proflame2 decoding. This document describes that possible future integrated SDR
+path and the constraints that would apply. It should not be read as a release
+commitment or as evidence that native SDR receive support exists today.
+
 This document defines a native SDR learning-only receive path for Proflame2
 guided learning. It is intended to support cases such as GitHub issue #11,
 where YardStick guided learning receives RF bytes but cannot decode a remote
