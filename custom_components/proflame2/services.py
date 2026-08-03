@@ -65,6 +65,7 @@ from .runtime import (
 
 _LOGGER = logging.getLogger(__name__)
 BACKEND_SEND_TIMEOUT_SECONDS = 30.0
+_RETAINED_OFF_CONTROL_KEYS = frozenset({CONF_FAN, CONF_LIGHT, CONF_FRONT, CONF_AUX, CONF_CPI})
 
 
 @dataclass(frozen=True)
@@ -213,7 +214,7 @@ def _log_control_event(
     runtime_entry: Proflame2RuntimeEntry,
     message: str,
     *args: object,
-    level: int = logging.WARNING,
+    level: int = logging.INFO,
 ) -> None:
     """Log one control/service/runtime event to normal logs and packet debug when enabled."""
 
@@ -223,6 +224,21 @@ def _log_control_event(
     _LOGGER.log(level, "Proflame2 control: " + prefixed_message, *args)
     if runtime_entry.debug_logging_enabled:
         get_packet_debug_logger().log(level, "control: " + prefixed_message, *args)
+
+
+def _is_retained_off_control_edit(
+    current_state: Any,
+    desired_state: Any,
+    changes: dict[str, Any],
+) -> bool:
+    """Return whether an OFF-state feature edit should be retained without TX."""
+
+    return (
+        current_state is not None
+        and not current_state.power
+        and not desired_state.power
+        and set(changes).issubset(_RETAINED_OFF_CONTROL_KEYS)
+    )
 
 
 def _transmit_failure_message(
@@ -338,6 +354,36 @@ async def async_stage_control_change(
             _state_summary(current_state),
         )
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
+        return
+
+    if _is_retained_off_control_edit(current_state, desired_state, changes):
+        runtime_entry.desired_state = None
+        runtime_entry.operational_status = OPERATIONAL_STATUS_READY
+        _cancel_runtime_task(
+            runtime_entry,
+            runtime_entry.debounce_task,
+            reason="retained_off_control_edit",
+            kind="debounce",
+        )
+        runtime_entry.debounce_task = None
+        _log_control_event(
+            runtime_entry,
+            "off-state control edit retained without transmit state=%s",
+            _state_summary(desired_state),
+        )
+        await async_set_runtime_current_state(
+            hass,
+            runtime_entry,
+            desired_state,
+            source="retained_control",
+            confidence=STATE_CONFIDENCE_REQUESTED,
+            packet=encode_packet(
+                desired_state,
+                runtime_entry.remote_profile,
+                source="retained_control",
+                allow_power_off_flame=True,
+            ),
+        )
         return
 
     runtime_entry.desired_state = desired_state
@@ -659,6 +705,14 @@ async def _async_confirmation_task(
                 _state_summary(packet.state),
                 "yes" if packet.state == requested_packet.state else "no",
             )
+            if packet.state != requested_packet.state:
+                _log_control_event(
+                    runtime_entry,
+                    "post-TX confirmation ignored mismatched state observed=%s expected=%s",
+                    _state_summary(packet.state),
+                    _state_summary(requested_packet.state),
+                )
+                continue
             await async_apply_observed_packet(hass, runtime_entry, packet)
             return
 

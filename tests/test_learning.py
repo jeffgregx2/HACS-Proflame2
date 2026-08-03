@@ -14,6 +14,8 @@ from custom_components.proflame2.const import (
     BACKEND_ESPHOME,
     BACKEND_YARDSTICK,
     DATA_ESPHOME_TRANSPORT_FACTORY,
+    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
 )
 from custom_components.proflame2.learning import (
@@ -105,6 +107,69 @@ def test_learning_times_out_cleanly() -> None:
         assert result.remote_id is None
         assert result.packets_seen == 0
         assert result.valid_packets == 0
+
+    asyncio.run(_run())
+
+
+def test_guided_learning_timeout_logs_receive_status_summary(caplog) -> None:
+    """Prompt timeout should emit one compact diagnostic summary without packet debug."""
+
+    class _NoCandidateBackend(RFBackend):
+        name = "yardstick"
+
+        def __init__(self) -> None:
+            self.last_receive_status = None
+
+        async def connect(self) -> None:
+            return None
+
+        async def close(self, *, reason: str | None = None) -> None:
+            return None
+
+        async def send(self, packet):
+            raise NotImplementedError
+
+        async def receive(self, timeout: float | None = None):
+            if timeout:
+                await asyncio.sleep(timeout)
+            self.last_receive_status = ReceiveStatus(
+                outcome="payload_no_candidates",
+                reason="decoder_rejected",
+                active_frequency_hz=315000000,
+                payload_length_bytes=255,
+                candidate_count=0,
+            )
+            return None
+
+        async def learn(self, timeout: float | None = None):
+            raise NotImplementedError
+
+        async def capabilities(self) -> BackendCapabilities:
+            return BackendCapabilities(can_receive=True)
+
+    async def _run() -> None:
+        session = LearnSession(
+            backend=_NoCandidateBackend(),
+            step_timeout=0.02,
+            receive_timeout=0.01,
+            debug_logging_enabled=False,
+            prompt_index=0,
+            prompt_label="power_on",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = await async_capture_next_learning_packet(session)
+
+        assert result.success is False
+        assert result.error_code == ERROR_TIMEOUT
+        assert "guided learning prompt timed out" in caplog.text
+        assert "last_receive_outcome=payload_no_candidates" in caplog.text
+        assert "last_receive_reason=decoder_rejected" in caplog.text
+        assert "active_freq_hz=315000000" in caplog.text
+        assert "payload_length_bytes=255" in caplog.text
+        assert "candidate_count=0" in caplog.text
+        assert session.receive_outcome_counts["payload_no_candidates"] >= 1
+        assert session.receive_reason_counts["decoder_rejected"] >= 1
 
     asyncio.run(_run())
 
@@ -207,6 +272,37 @@ def test_yardstick_learning_backend_uses_proven_rx_defaults(monkeypatch) -> None
         assert backend._frequency_hz == YARDSTICK_RX_LEARNING_FREQUENCY_HZ
         assert backend._packet_length_bytes == YARDSTICK_RX_LEARNING_PACKET_BYTES
         assert backend._sweep_enabled is YARDSTICK_RX_LEARNING_SWEEP_ENABLED
+
+    asyncio.run(_run())
+
+
+def test_yardstick_learning_backend_uses_yaml_rx_tuning_overrides(monkeypatch) -> None:
+    """Support-only YAML tuning should flow into the YardStick learning backend."""
+
+    class _FakeHass:
+        def __init__(self) -> None:
+            self.data = {
+                DOMAIN: {
+                    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ: 314_973_000,
+                    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED: True,
+                }
+            }
+
+        async def async_add_executor_job(self, func, *args):
+            return func(*args)
+
+    async def _run() -> None:
+        async def fake_connect(self) -> None:
+            return None
+
+        monkeypatch.setattr(YardStickBackend, "connect", fake_connect)
+
+        backend = await async_create_learning_backend(_FakeHass(), BACKEND_YARDSTICK)
+
+        assert isinstance(backend, YardStickBackend)
+        assert backend._frequency_hz == 314_973_000
+        assert backend._packet_length_bytes == YARDSTICK_RX_LEARNING_PACKET_BYTES
+        assert backend._sweep_enabled is True
 
     asyncio.run(_run())
 

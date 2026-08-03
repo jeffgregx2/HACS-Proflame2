@@ -6,6 +6,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+import voluptuous as vol
+
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.const import Platform
@@ -20,7 +22,18 @@ try:
 except ImportError:  # pragma: no cover - older HA versions may not expose this name.
     DeviceIdentifierCollisionError = ValueError  # type: ignore[misc,assignment]
 
-from .const import BACKEND_ESPHOME, CONF_REMOTE_ID, DOMAIN
+from .const import (
+    BACKEND_ESPHOME,
+    CONF_LEARNING_DEBUG_LOGGING,
+    CONF_REMOTE_ID,
+    CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    CONF_YARDSTICK_LEARNING_SWEEP_ENABLED,
+    DATA_LEARNING_DEBUG_LOGGING,
+    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
+    DEFAULT_DEBUG_LOGGING,
+    DOMAIN,
+)
 from .identity import (
     fireplace_device_identifier,
     legacy_fireplace_device_identifier,
@@ -32,7 +45,24 @@ from .version import INTEGRATION_VERSION
 
 __version__ = INTEGRATION_VERSION
 
-CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Optional(DOMAIN): vol.Any(
+            None,
+            vol.Schema(
+                {
+                    vol.Optional(CONF_LEARNING_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): cv.boolean,
+                    vol.Optional(CONF_YARDSTICK_LEARNING_FREQUENCY_HZ): vol.All(
+                        cv.positive_int,
+                        vol.Range(min=314_000_000, max=316_000_000),
+                    ),
+                    vol.Optional(CONF_YARDSTICK_LEARNING_SWEEP_ENABLED): cv.boolean,
+                }
+            ),
+        ),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
 PLATFORMS: list[Platform] = ["sensor", "switch", "number", "button"]
 _LOGGER = logging.getLogger(__name__)
 _DISPLAY_SYNC_RETRY_DELAYS_SECONDS: tuple[float, ...] = (5.0, 15.0, 30.0)
@@ -137,7 +167,28 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     from .runtime import async_register_shutdown_listener
 
-    hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_config = config.get(DOMAIN) or {}
+    learning_debug_logging = bool(domain_config.get(CONF_LEARNING_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
+    domain_data[DATA_LEARNING_DEBUG_LOGGING] = learning_debug_logging
+    if learning_debug_logging:
+        _LOGGER.warning(
+            "Proflame2 YAML learning debug logging override is ENABLED; guided learning will write packet diagnostic files"
+        )
+    if CONF_YARDSTICK_LEARNING_FREQUENCY_HZ in domain_config:
+        frequency_hz = int(domain_config[CONF_YARDSTICK_LEARNING_FREQUENCY_HZ])
+        domain_data[DATA_YARDSTICK_LEARNING_FREQUENCY_HZ] = frequency_hz
+        _LOGGER.warning(
+            "Proflame2 YAML YardStick learning frequency override is ENABLED frequency_hz=%s",
+            frequency_hz,
+        )
+    if CONF_YARDSTICK_LEARNING_SWEEP_ENABLED in domain_config:
+        sweep_enabled = bool(domain_config[CONF_YARDSTICK_LEARNING_SWEEP_ENABLED])
+        domain_data[DATA_YARDSTICK_LEARNING_SWEEP_ENABLED] = sweep_enabled
+        _LOGGER.warning(
+            "Proflame2 YAML YardStick learning sweep override is ENABLED sweep_enabled=%s",
+            sweep_enabled,
+        )
     async_register_shutdown_listener(hass)
     return True
 

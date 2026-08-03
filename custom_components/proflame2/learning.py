@@ -131,6 +131,9 @@ class LearnSession:
     prompt_index: int = 0
     prompt_label: str = "unknown"
     prompt_instruction: str = ""
+    receive_outcome_counts: dict[str, int] = field(default_factory=dict)
+    receive_reason_counts: dict[str, int] = field(default_factory=dict)
+    last_receive_status_snapshot: dict[str, object | None] = field(default_factory=dict)
     _seen_frames: set[tuple[int, int, int, int, int]] = field(default_factory=set)
 
 
@@ -231,7 +234,7 @@ async def async_start_learning_session(
 ) -> LearnSession:
     """Create a backend and wrap it in a guided-learning session."""
 
-    _LOGGER.warning(
+    _LOGGER.info(
         "Proflame2 learning debug logging is %s for backend=%s",
         "ENABLED" if debug_logging else "DISABLED",
         backend_type,
@@ -289,7 +292,7 @@ async def async_close_learning_session(session: LearnSession | None) -> None:
     """Close a guided-learning session backend if it exists."""
 
     if session is not None:
-        _LOGGER.warning(
+        _LOGGER.info(
             "Proflame2 closing learning session for backend=%s debug_logging=%s",
             getattr(session.backend, "name", session.backend.__class__.__name__),
             session.debug_logging_enabled,
@@ -313,7 +316,7 @@ async def async_close_learning_session(session: LearnSession | None) -> None:
             if session.debug_logging_enabled and session.hass is not None:
                 get_packet_debug_logger().info("Closed packet debug learning session")
                 await async_disable_packet_debug_logging(session.hass)
-            _LOGGER.warning(
+            _LOGGER.info(
                 "Proflame2 learning session closed for backend=%s",
                 getattr(session.backend, "name", session.backend.__class__.__name__),
             )
@@ -588,6 +591,7 @@ async def _accept_distinct_learning_packet(
 
 
 async def _finish_learning_prompt_timeout(session: LearnSession) -> LearnResult:
+    _log_learning_prompt_timeout_summary(session)
     _session_debug(
         session,
         "prompt timed out after %.3fs packets_seen=%s valid_packets=%s distinct_packets=%s",
@@ -598,6 +602,31 @@ async def _finish_learning_prompt_timeout(session: LearnSession) -> LearnResult:
     )
     await _async_update_learning_prompt_status(session, "Timed out")
     return _build_prompt_timeout_result(session)
+
+
+def _log_learning_prompt_timeout_summary(session: LearnSession) -> None:
+    """Write one normal HA log line when one guided-learning prompt times out."""
+
+    status = session.last_receive_status_snapshot
+    _LOGGER.warning(
+        "Proflame2 guided learning prompt timed out prompt_index=%s prompt_label=%s "
+        "backend=%s packets_seen=%s valid_packets=%s distinct_packets=%s "
+        "last_receive_outcome=%s last_receive_reason=%s active_freq_hz=%s "
+        "payload_length_bytes=%s candidate_count=%s receive_outcomes=%s receive_reasons=%s",
+        session.prompt_index,
+        session.prompt_label,
+        getattr(session.backend, "name", session.backend.__class__.__name__),
+        session.packets_seen,
+        session.valid_packets,
+        len(session.packets),
+        status.get("outcome"),
+        status.get("reason"),
+        status.get("active_frequency_hz"),
+        status.get("payload_length_bytes"),
+        status.get("candidate_count"),
+        dict(sorted(session.receive_outcome_counts.items())),
+        dict(sorted(session.receive_reason_counts.items())),
+    )
 
 
 async def _async_update_learning_prompt_status(session: LearnSession, status: str) -> None:
@@ -894,10 +923,7 @@ def _log_learning_receive_heartbeat(
     error: str | None = None,
     exception_type: str | None = None,
 ) -> None:
-    """Log one compact heartbeat for each guided-learning receive window."""
-
-    if not session.debug_logging_enabled:
-        return
+    """Record and optionally log one compact guided-learning receive window."""
 
     status = getattr(session.backend, "last_receive_status", None)
     active_frequency_hz = getattr(status, "active_frequency_hz", None)
@@ -918,6 +944,24 @@ def _log_learning_receive_heartbeat(
         reason = reason or exception_type or status_exception_type or "exception"
 
     resolved_error = error or status_exception_message
+    resolved_outcome = getattr(status, "outcome", None) or outcome
+    resolved_reason = reason
+    session.receive_outcome_counts[resolved_outcome] = session.receive_outcome_counts.get(resolved_outcome, 0) + 1
+    if resolved_reason:
+        session.receive_reason_counts[resolved_reason] = session.receive_reason_counts.get(resolved_reason, 0) + 1
+    session.last_receive_status_snapshot = {
+        "outcome": resolved_outcome,
+        "reason": resolved_reason,
+        "active_frequency_hz": active_frequency_hz,
+        "payload_length_bytes": payload_length_bytes,
+        "candidate_count": candidate_count,
+        "repeat_count": getattr(status, "repeat_count", None),
+        "exception_type": status_exception_type or exception_type,
+        "exception_message": resolved_error,
+    }
+
+    if not session.debug_logging_enabled:
+        return
 
     get_packet_debug_logger().info(
         "learning: heartbeat prompt_index=%s prompt_label=%s outcome=%s receive_timeout=%.3fs "

@@ -87,7 +87,7 @@ Once the Proflame2 integration is installed in Home Assistant, it is easy to add
 1. Choose a controller: LilyGO T-Embed CC1101 or YardStick One.
 2. Follow the controller setup guide linked above.
 3. Add the `Proflame2` integration in Home Assistant.
-4. Select the controller type.
+4. Choose a setup option. Most users should choose `Learn from remote`.
 5. For LilyGO, select the matching ESPHome device when prompted.
 6. Start guided learning.
 7. Hold the original remote within about 3 feet of the controller during
@@ -97,6 +97,14 @@ Once the Proflame2 integration is installed in Home Assistant, it is easy to add
 10. Validate basic controls from Home Assistant.
 
 During setup, learning mode asks you to press specific buttons on your original fireplace remote.  This is used to learn the proper control codes used to establish communications.   You must have a functioning original remote in order to set up this integration.
+
+If normal guided learning cannot decode your remote, you can use
+[rtl_433-assisted manual learning](docs/rtl433_manual_learning.md) with a
+separate SDR receiver. This is an advanced setup path; LilyGO and YardStick
+remain the controllers used after learning.
+
+For more detail on the setup choices, see
+[Add fireplace profile](docs/add_fireplace_profile.md).
 
 Remember: If you are using a LilyGO controller, you must install it first before adding the fireplace.
 
@@ -182,6 +190,8 @@ At this time, one controller can only control one fireplace.
 
 - [LilyGO CC1101 controller guide](docs/lilygo_cc1101_controller.md)
 - [YardStick controller guide](docs/yardstick_controller.md)
+- [Add fireplace profile](docs/add_fireplace_profile.md)
+- [rtl_433-assisted manual learning](docs/rtl433_manual_learning.md)
 
 ## Relationship To SmartFire
 

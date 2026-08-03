@@ -19,6 +19,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import config_validation as cv
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.proflame2 import CONFIG_SCHEMA, async_setup
 from custom_components.proflame2.config_flow import LILYGO_ESPHOME_LINK_HELP
 from custom_components.proflame2.const import (
     BACKEND_ESPHOME,
@@ -37,18 +38,28 @@ from custom_components.proflame2.const import (
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
     CONF_FRONT,
+    CONF_INITIAL_FRAME,
+    CONF_INITIAL_PACKET_SOURCE,
+    CONF_LEARNING_DEBUG_LOGGING,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_REMOTE_ID,
+    CONF_RTL433_SAMPLES,
+    CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    CONF_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DATA_FAKE_LEARNING_DELAY,
     DATA_LEARNING_BACKEND_FACTORY,
+    DATA_LEARNING_DEBUG_LOGGING,
     DATA_LEARNING_RECEIVE_TIMEOUT,
     DATA_LEARNING_TIMEOUT,
+    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
+    DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
 )
+from custom_components.proflame2.learning import LearnSession
 from custom_components.proflame2.packet_debug import PacketDebugLogPaths
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.fake import FakeRFBackend
@@ -111,6 +122,49 @@ def _enable_fake_backend(monkeypatch) -> None:
 
     monkeypatch.setenv("PROFLAME2_BUILD", "dev")
     monkeypatch.setenv(ENABLE_FAKE_BACKEND_ENV, "true")
+
+
+def test_yaml_learning_debug_config_schema_accepts_hidden_override() -> None:
+    """Domain YAML should support the support-only guided-learning debug override."""
+
+    enabled = CONFIG_SCHEMA({DOMAIN: {CONF_LEARNING_DEBUG_LOGGING: "true"}})
+    empty = CONFIG_SCHEMA({DOMAIN: None})
+
+    assert enabled[DOMAIN][CONF_LEARNING_DEBUG_LOGGING] is True
+    assert empty[DOMAIN] is None
+
+
+def test_yaml_yardstick_learning_tuning_schema_accepts_hidden_overrides() -> None:
+    """Domain YAML should support support-only YardStick learning RX tuning."""
+
+    configured = CONFIG_SCHEMA(
+        {
+            DOMAIN: {
+                CONF_YARDSTICK_LEARNING_FREQUENCY_HZ: "314973000",
+                CONF_YARDSTICK_LEARNING_SWEEP_ENABLED: "true",
+            }
+        }
+    )
+
+    assert configured[DOMAIN][CONF_YARDSTICK_LEARNING_FREQUENCY_HZ] == 314_973_000
+    assert configured[DOMAIN][CONF_YARDSTICK_LEARNING_SWEEP_ENABLED] is True
+
+
+async def test_yaml_yardstick_learning_tuning_overrides_are_stored(hass) -> None:
+    """YardStick support tuning should be available before guided learning starts."""
+
+    assert await async_setup(
+        hass,
+        {
+            DOMAIN: {
+                CONF_YARDSTICK_LEARNING_FREQUENCY_HZ: 314_973_000,
+                CONF_YARDSTICK_LEARNING_SWEEP_ENABLED: True,
+            }
+        },
+    )
+
+    assert hass.data[DOMAIN][DATA_YARDSTICK_LEARNING_FREQUENCY_HZ] == 314_973_000
+    assert hass.data[DOMAIN][DATA_YARDSTICK_LEARNING_SWEEP_ENABLED] is True
 
 
 async def _advance_guided_learning(
@@ -254,6 +308,135 @@ async def test_manual_entry_form_schema_is_ui_serializable(hass) -> None:
     assert serialized
 
 
+async def test_manual_rtl433_learning_captures_buttons_then_confirms_remote_learned(hass) -> None:
+    """rtl_433 manual learning should collect pasted rows before feature setup."""
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_USER},
+    )
+    assert "manual_rtl433" in result["menu_options"]
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"next_step_id": "manual_rtl433"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual_rtl433"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_NAME: "Living Room Fireplace",
+            CONF_FIREPLACE_SHORT_NAME: "---",
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual_rtl433_prompt"
+    assert "**Power**" in result["description_placeholders"]["instruction"]
+    assert result["description_placeholders"]["rtl433_command"] == "rtl_433 -f 315M -R 207 -M level -F json"
+    assert "rtl_433-assisted manual learning guide" in result["description_placeholders"][
+        "rtl433_manual_learning_guide"
+    ]
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=01 cmd2=16 err1=76 err2=ef"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual_rtl433_prompt"
+    assert "**Temp Down**" in result["description_placeholders"]["instruction"]
+    assert result["description_placeholders"]["sample_count"] == "1"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=31 cmd2=26 err1=25 err2=bc"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual_rtl433_prompt"
+    assert "**Temp Up**" in result["description_placeholders"]["instruction"]
+    assert result["description_placeholders"]["sample_count"] == "2"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=51 cmd2=36 err1=83 err2=8d"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual_rtl433_power_off"
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "learn_features"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+            CONF_DEBUG_LOGGING: False,
+            CONF_ACTIVE_LISTENING: False,
+            CONF_FIREPLACE_SHORT_NAME: "---",
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_BACKEND_TYPE] == BACKEND_YARDSTICK
+    assert result["data"][CONF_REMOTE_ID] == 0x3B3F02
+    assert result["data"][CONF_C1] == 5
+    assert result["data"][CONF_D1] == 7
+    assert result["data"][CONF_C2] == 1
+    assert result["data"][CONF_D2] == 8
+    assert result["data"][CONF_INITIAL_PACKET_SOURCE] == "rtl433_manual"
+    assert result["data"][CONF_INITIAL_FRAME]["cmd1"] == 0x51
+    assert result["data"][CONF_INITIAL_FRAME]["cmd2"] == 0x36
+
+
+async def test_manual_rtl433_learning_rejects_invalid_paste_without_advancing(hass) -> None:
+    """Invalid rtl_433 rows should keep the user on the same prompt."""
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_USER},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"next_step_id": "manual_rtl433"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_NAME: "Living Room Fireplace",
+            CONF_FIREPLACE_SHORT_NAME: "---",
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+        },
+    )
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=01 cmd2=16 err1=76"},
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual_rtl433_prompt"
+    assert result["errors"] == {CONF_RTL433_SAMPLES: "invalid_rtl433_samples"}
+    assert result["description_placeholders"]["sample_count"] == "0"
+    assert "**Power**" in result["description_placeholders"]["instruction"]
+
+
+def test_manual_rtl433_prompt_translation_warns_about_duplicate_output() -> None:
+    """The user-facing paste prompt should warn about delayed duplicate rtl_433 rows."""
+
+    translations = Path("custom_components/proflame2/translations/en.json").read_text(encoding="utf-8")
+
+    assert "Paste the newest rtl_433 JSON line" in translations
+    assert "Ignore duplicate lines from earlier button presses" in translations
+    assert "{rtl433_manual_learning_guide}" in translations
+    assert "github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/rtl433_manual_learning.md" not in translations
+
+
 async def test_manual_entry_form_exposes_only_hardware_backends_by_default(hass) -> None:
     """Manual setup should not expose the Fake backend by default."""
 
@@ -299,6 +482,60 @@ async def test_learning_form_includes_only_hardware_backends_by_default(hass) ->
     assert option_values == {BACKEND_YARDSTICK, BACKEND_ESPHOME}
     assert not any(field["name"] == CONF_ESPHOME_ENTRY_ID for field in serialized)
     assert not any(field["name"] == CONF_DEBUG_LOGGING for field in serialized)
+
+
+async def test_yaml_learning_debug_override_enables_initial_guided_learning_debug(hass, monkeypatch) -> None:
+    """A hidden YAML override should enable packet diagnostics before an entry exists."""
+
+    captured_debug_flags: list[bool] = []
+
+    async def fake_start_learning_session(
+        hass,
+        backend_type: str,
+        *,
+        debug_logging: bool = False,
+        esphome_entry_id: str | None = None,
+        timeout: float,
+        receive_timeout: float,
+    ) -> LearnSession:
+        assert backend_type == BACKEND_YARDSTICK
+        assert esphome_entry_id is None
+        captured_debug_flags.append(debug_logging)
+        backend = FakeRFBackend()
+        await backend.connect()
+        backend.queue_packets(_packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x06, err2=0xDE))
+        return LearnSession(
+            backend=backend,
+            step_timeout=timeout,
+            receive_timeout=receive_timeout,
+            debug_logging_enabled=debug_logging,
+            hass=hass,
+        )
+
+    monkeypatch.setattr(
+        "custom_components.proflame2.config_flow.async_start_learning_session",
+        fake_start_learning_session,
+    )
+
+    assert await async_setup(hass, {DOMAIN: {CONF_LEARNING_DEBUG_LOGGING: True}})
+    assert hass.data[DOMAIN][DATA_LEARNING_DEBUG_LOGGING] is True
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"next_step_id": "learn"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_NAME: "Living Room Fireplace",
+            CONF_FIREPLACE_SHORT_NAME: "---",
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+        },
+    )
+
+    assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert captured_debug_flags == [True]
 
 
 async def test_learning_esphome_entry_requires_linked_esphome_config_entry(hass) -> None:

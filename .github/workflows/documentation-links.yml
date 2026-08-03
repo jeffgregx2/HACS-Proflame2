@@ -1,0 +1,65 @@
+name: Documentation Links
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch whose documentation links should be stamped
+        required: true
+
+jobs:
+  stamp-documentation-links:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve documentation ref
+        id: docs
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            docs_ref="${{ github.event.inputs.ref }}"
+          else
+            docs_ref="${{ github.ref_name }}"
+          fi
+
+          echo "ref=${docs_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.docs.outputs.ref }}
+
+      - name: Stamp documentation links
+        run: python3 scripts/stamp_docs_ref.py --ref "${{ steps.docs.outputs.ref }}"
+
+      - name: Commit stamped documentation links
+        env:
+          DOCS_REF: ${{ steps.docs.outputs.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/proflame2/manifest.json custom_components/proflame2/docs_urls.py
+          if git diff --cached --quiet; then
+            echo "Documentation links already point at ${DOCS_REF}."
+            exit 0
+          fi
+          git commit -m "chore: stamp documentation links for ${DOCS_REF}"
+          git push origin HEAD:${DOCS_REF}
+
+  validate-documentation-links:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Validate stamped documentation links
+        run: python3 scripts/stamp_docs_ref.py --check --ref "${{ github.head_ref }}"
