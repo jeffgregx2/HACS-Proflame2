@@ -73,6 +73,7 @@
         "description": "Choose the controller type to use for guided learning. After this step, listening starts automatically. The fireplace does not need to start in any specific state. The integration will guide you through a small sequence of button presses so it can confirm one stable remote profile.",
         "data": {
           "name": "Fireplace name",
+          "fireplace_short_name": "Display short name",
           "backend_type": "Controller Type"
         }
       },
@@ -93,7 +94,8 @@
           "aux": "Aux supported",
           "cpi": "CPI supported",
           "debug_logging": "Enable packet debug log",
-          "active_listening": "Enable active listening"
+          "active_listening": "Enable active listening",
+          "fireplace_short_name": "Display short name"
         }
       },
       "learn_failed": {
