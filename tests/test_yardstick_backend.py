@@ -29,6 +29,7 @@ from custom_components.proflame2.rf.yardstick import (
     YARDSTICK_TX_STRATEGY_SOFTWARE_REPEAT,
     YardStickBackend,
     _should_suppress_verbose_failure,
+    _yardstick_register_snapshot,
     normalize_yardstick_backend_error,
 )
 from custom_components.proflame2.rf.yardstick_worker import (
@@ -69,6 +70,15 @@ class _FakeRadio:
 
     def peek(self, address: int) -> int:
         return self.registers.get(address, 0x00)
+
+    def getBuildInfo(self) -> bytes:
+        return b"FakeYardStick r123"
+
+    def getCompilerInfo(self) -> bytes:
+        return b"sdcc fake"
+
+    def reprHardwareConfig(self) -> str:
+        return "Dongle:              FakeYardStick\nFirmware rev:        123"
 
     def makePktFLEN(self, value: int) -> None:
         self.calls.append(("makePktFLEN", value))
@@ -269,6 +279,16 @@ class _FakeProcess:
         self.join_calls.append(timeout or 0.0)
 
 
+class _ClearingTerminateProcess(_FakeProcess):
+    def __init__(self, supervisor: YardStickWorkerSupervisor) -> None:
+        super().__init__()
+        self._supervisor = supervisor
+
+    def terminate(self) -> None:
+        self._supervisor._process = None
+        super().terminate()
+
+
 def test_connect_uses_executor_for_radio_open_and_configuration(monkeypatch) -> None:
     """RfCat construction and radio setup should stay off the HA event loop."""
 
@@ -327,6 +347,10 @@ def test_worker_supervisor_mock_mode_start_send_ping_stop() -> None:
     try:
         open_response = supervisor.request(COMMAND_OPEN, timeout=5.0)
         assert open_response["success"] is True
+        startup_metadata = open_response["payload"]["startup_metadata"]
+        assert startup_metadata["getBuildInfo"]["value"] == "MockRfCat r0"
+        assert startup_metadata["getCompilerInfo"]["value"] == "mock-compiler"
+        assert "MockRfCat" in startup_metadata["reprHardwareConfig"]["value"]
         ping_response = supervisor.request(COMMAND_PING, timeout=5.0)
         assert ping_response["kind"] == "STATUS"
         send_response = supervisor.request(
@@ -399,6 +423,20 @@ def test_worker_supervisor_stop_sends_graceful_stop_and_records_reason() -> None
     assert supervisor.diagnostics.worker_alive is False
 
 
+def test_worker_supervisor_terminate_tolerates_concurrent_process_cleanup() -> None:
+    """Concurrent shutdown paths should not fail if process handles are cleared."""
+
+    supervisor = YardStickWorkerSupervisor(mock_mode=True)
+    supervisor._process = _ClearingTerminateProcess(supervisor)
+    supervisor._conn = _FakeConn()
+
+    supervisor._terminate_worker(reason="config_entry_unload")
+
+    assert supervisor.diagnostics.final_exit_code == -15
+    assert supervisor.diagnostics.worker_alive is False
+    assert supervisor.diagnostics.last_restart_reason == "config_entry_unload"
+
+
 def test_worker_supervisor_rejects_new_requests_during_shutdown() -> None:
     """Requests should fail quickly once shutdown has begun."""
 
@@ -423,6 +461,21 @@ def test_yardstick_learning_profile_constants_match_hardware_results() -> None:
     assert YARDSTICK_RX_LEARNING_PACKET_BYTES == 255
     assert YARDSTICK_RX_LEARNING_SWEEP_ENABLED is False
     assert YARDSTICK_RX_LEARNING_FREQUENCY_HZ != PROFLAME2_FREQUENCY_HZ
+
+
+def test_yardstick_register_snapshot_tries_fallback_readers() -> None:
+    """Register diagnostics should continue past unsupported reader methods."""
+
+    class FallbackRadio:
+        def peek(self, _address: int) -> int:
+            raise RuntimeError("peek unavailable")
+
+        def getRFRegister(self, address: int) -> int:
+            return 0x55 if address == 0x08 else 0x00
+
+    snapshot = _yardstick_register_snapshot(FallbackRadio())
+
+    assert snapshot["PKTCTRL0"] == "0x55"
 
 
 def test_default_frequency_scan_includes_smartfire_and_rtl433_centers() -> None:
@@ -545,6 +598,10 @@ def test_receive_settings_include_rfcat_register_snapshot() -> None:
         assert raw_registers["MDMCFG2"] == "0x30"
         assert raw_registers["AGCCTRL2"] == "0x03"
         assert raw_registers["FREND0"] == "0x10"
+        startup_metadata = settings["radio_settings"]["startup_metadata"]
+        assert startup_metadata["getBuildInfo"]["value"] == "FakeYardStick r123"
+        assert startup_metadata["getCompilerInfo"]["value"] == "sdcc fake"
+        assert "FakeYardStick" in startup_metadata["reprHardwareConfig"]["value"]
         assert settings["live_raw_registers"]["PKTCTRL0"] == "0x00"
 
     asyncio.run(_run())

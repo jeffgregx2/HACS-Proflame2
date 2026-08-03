@@ -100,6 +100,11 @@ that fireplace.
 YardStick receive is used for guided learning only. YardStick does not keep Home
 Assistant updated when the original remote is used after setup.
 
+If YardStick guided learning cannot decode your remote but rtl_433 can, use
+[rtl_433-assisted manual learning](rtl433_manual_learning.md). YardStick still
+controls the fireplace after setup; the SDR and rtl_433 are only used to collect
+learning values.
+
 ## Validation
 
 After setup, validate:

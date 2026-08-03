@@ -71,10 +71,10 @@ def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
     assert "`TxController` owns TX payload validation and transport-shape policy." in header
 
     assert "# LilyGO CC1101 Controller Developer Notes" in developer_notes
-    assert "## Architecture" in developer_notes
-    assert "## Receive Model" in developer_notes
-    assert "The legacy edge-interval ownership path was removed" in developer_notes
-    assert "TX is timing-sensitive" in developer_notes
+    assert "## TX Model" in developer_notes
+    assert "## RX Model" in developer_notes
+    assert "The abandoned RX path used GDO edge-interval capture" in developer_notes
+    assert "The timing-critical transmit loop is intentionally monolithic" in developer_notes
 
 
 def test_esphome_external_component_uses_codegen_schema_and_action() -> None:
@@ -94,13 +94,24 @@ def test_esphome_external_component_uses_codegen_schema_and_action() -> None:
     assert "lambda:" not in component
 
 
-def test_esphome_yaml_wires_local_external_component_and_tx_api() -> None:
+def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     example = _read("examples/lilygo_cc1101_overlay.yaml")
     base = _read("packages/proflame2_tembed_base.yaml")
+    validation = _read("validate_display_preset.yaml")
 
     assert "LilyGO T-Embed CC1101 Proflame2 ESPHome overlay" in example
-    assert "type: local" in base
-    assert "path: components" in base
+    assert (
+        "proflame2_tembed_base: "
+        "github://jeffgregx2/HACS-Proflame2/esphome/packages/proflame2_tembed_base.yaml@"
+        "${proflame2_package_ref}"
+    ) in example
+    assert "proflame2_tembed_base: !include packages/proflame2_tembed_base.yaml" in validation
+    assert "proflame2_tembed_display: !include packages/proflame2_tembed_display.yaml" in validation
+    assert "proflame2_asset_base_url: assets/icons" in validation
+    assert "type: git" in base
+    assert "url: https://github.com/jeffgregx2/HACS-Proflame2" in base
+    assert "ref: ${proflame2_package_ref}" in base
+    assert "path: esphome/components" in base
     assert "components: [proflame2_tembed]" in base
     assert "platform: wifi_signal" in base
     assert "on_connect:" in base
@@ -381,9 +392,9 @@ def test_esphome_display_package_uses_lvgl_mipi_spi_and_deferred_refresh() -> No
     assert "lvgl:" in display_lvgl
     assert "rotation: 270" in display_lvgl
     assert 'proflame2_display_short_name: "---"' in display
-    assert "file: mdi:battery-outline" in display
-    assert "file: mdi:wifi" in display
-    assert "file: mdi:home-assistant" in display
+    assert "file: ${proflame2_asset_base_url}/battery-outline.svg" in display
+    assert "file: ${proflame2_asset_base_url}/wifi.svg" in display
+    assert "file: ${proflame2_asset_base_url}/home-assistant.svg" in display
     assert "id: proflame2_header_battery_icon" in display
     assert "pad_top: 3" in display_lvgl
     assert "proflame2_ui_header" in display_lvgl
