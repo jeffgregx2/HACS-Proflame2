@@ -89,3 +89,6 @@ jobs:
 
           print(f"Release {tag} is valid.")
           PY
+
+      - name: Validate release documentation links
+        run: python3 scripts/stamp_docs_ref.py --check --ref main

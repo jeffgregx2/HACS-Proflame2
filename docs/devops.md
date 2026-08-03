@@ -67,7 +67,26 @@ That target creates/uses `./.venv-esphome/bin/python` and installs
 Use this flow when promoting `dev` to `main` and creating a HACS/ESPHome release.
 The example below uses `v0.4.0`; replace it with the target version.
 
-### 1. Push `dev`
+### 1. Stamp Documentation Links For `dev`
+
+Before pushing a promoted branch, stamp repository documentation links to the
+branch that will contain the documentation:
+
+```bash
+./.venv/bin/python scripts/stamp_docs_ref.py --ref dev
+git diff -- custom_components/proflame2/manifest.json custom_components/proflame2/docs_urls.py
+```
+
+This keeps Home Assistant help links and config-flow guide links resolvable from
+the branch being tested. The links will resolve on GitHub after the stamped
+branch content is pushed.
+
+Pushes to any branch also run the **Documentation Links** workflow. The workflow
+stamps and commits the correct branch ref automatically if a push left the links
+pointing somewhere else. Pull requests validate that links point at the source
+branch, so branch docs can be tested before merging.
+
+### 2. Push `dev`
 
 ```bash
 git checkout dev
@@ -75,33 +94,39 @@ git status
 git push origin dev
 ```
 
-### 2. Stamp The Release Version
+### 3. Stamp The Release Version
 
 In GitHub, run the **Stamp Release Version** workflow manually:
 
 - `version`: `0.4.0`
 - `ref`: `dev`
 
-The workflow commits the release version back to `dev` by updating:
+The workflow commits the release version and branch documentation ref back to
+`dev` by updating:
 
 - `custom_components/proflame2/manifest.json`
 - `custom_components/proflame2/version.py`
+- `custom_components/proflame2/docs_urls.py`
 
-### 3. Pull The Stamped Commit
+The documentation URL still points at the branch being stamped. For a normal
+release, the final tag is created from `main`, and release validation requires
+the tag contents to point at `main`.
+
+### 4. Pull The Stamped Commit
 
 ```bash
 git checkout dev
 git pull origin dev
 ```
 
-### 4. Open A Pull Request
+### 5. Open A Pull Request
 
 Create a pull request from `dev` into `main`.
 
 Wait for GitHub Actions to pass before merging. This validates the integration
 and ESPHome firmware configuration before `main` is updated.
 
-### 5. Merge And Sync `main`
+### 6. Merge And Sync `main`
 
 After the PR is merged:
 
@@ -110,7 +135,14 @@ git checkout main
 git pull origin main
 ```
 
-### 6. Tag The Release
+Wait for the **Documentation Links** workflow on `main` to finish. If it stamped
+the documentation links to `main`, pull that commit before tagging:
+
+```bash
+git pull origin main
+```
+
+### 7. Tag The Release
 
 Create the tag from the merged, version-stamped `main` commit:
 

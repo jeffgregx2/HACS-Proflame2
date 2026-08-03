@@ -56,6 +56,7 @@ from .const import (
     available_learning_backend_labels,
     available_learning_backend_types,
 )
+from .docs_urls import lilygo_controller_url, rtl433_manual_learning_url
 from .learning import (
     DEFAULT_LEARN_TIMEOUT_SECONDS,
     DEFAULT_RECEIVE_TIMEOUT_SECONDS,
@@ -101,7 +102,7 @@ LILYGO_ESPHOME_LINK_HELP = (
     "Select the ESPHome device that runs the LilyGO T-Embed CC1101 Proflame2 firmware.\n\n"
     "If the device is not listed, create and flash the LilyGO ESPHome device first, then add it through "
     "Home Assistant's ESPHome integration and return to this setup flow.\n\n"
-    "Setup guide: https://github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/lilygo_cc1101_controller.md"
+    f"Setup guide: {lilygo_controller_url()}"
 )
 
 
@@ -232,8 +233,7 @@ RTL433_MANUAL_PROMPTS: tuple[tuple[str, str], ...] = (
 )
 RTL433_MANUAL_COMMAND = "rtl_433 -f 315M -R 207 -M level -F json"
 RTL433_MANUAL_LEARNING_GUIDE = (
-    "[rtl_433-assisted manual learning guide]"
-    "(https://github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/rtl433_manual_learning.md)"
+    f"[rtl_433-assisted manual learning guide]({rtl433_manual_learning_url()})"
 )
 
 

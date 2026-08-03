@@ -401,7 +401,7 @@ def test_build_metadata_defaults_to_current_beta_with_fake_disabled(monkeypatch)
     monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
     monkeypatch.delenv(ENABLE_FAKE_BACKEND_ENV, raising=False)
 
-    assert integration_version() == "0.5.4-beta2"
+    assert integration_version() == "0.5.4-beta3"
     assert build_flavor() == "dev"
     assert is_dev_build() is True
     assert fake_backend_enabled() is False
