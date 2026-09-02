@@ -11,7 +11,8 @@ Home Assistant owns profile storage, command policy, and Proflame2 packet
 construction. The firmware is responsible for:
 
 - Emitting the exact transmit bitstream supplied by Home Assistant.
-- Capturing CC1101 FIFO byte windows for guided learning.
+- Capturing GDO0/RMT PCM windows for guided learning, with FIFO available as a
+  rollback path.
 - Filtering active-listening packets against the learned serial/C/D profile.
 - Publishing only validated matching packets to Home Assistant.
 
@@ -109,19 +110,25 @@ waveform.
 
 ## RX Model
 
-The working RX path uses the CC1101 as an OOK slicer and FIFO byte source. The
-firmware drains raw FIFO bytes into a rolling memory window, then scans that
-window for Proflame2 candidates. Accepted active-listening packets must match
-the learned serial/C/D profile before they are sent to Home Assistant.
+The normal RX path configures the CC1101 for asynchronous OOK data on GDO0 and
+uses the ESP32 RMT peripheral to preserve timing. Firmware quantizes bounded
+GDO0 runs to 417 us PCM bits and Home Assistant validates the Proflame2 frame.
+This is the default for guided learning and active listening.
 
-The abandoned RX path used GDO edge-interval capture and attempted to infer
-packet ownership from repeated edge windows. It produced repeat/burst structure
-but did not produce stable packet-owned windows across fan and flame datasets.
-Do not resurrect that design as the normal RX strategy.
+The previous FIFO path remains available through `Active Listener RX Path:
+fifo` only as a fallback when RMT has compatibility problems. It drains raw
+FIFO bytes into a rolling window and scans offsets for candidates. Do not
+reintroduce the earlier edge-ownership design; it is neither the RMT PCM path
+nor the FIFO fallback path.
+
+The persistent first-boot path is controlled by
+`proflame2_active_listener_rx_path_default`, which is `rmt_pulse` in the base
+package. Selecting `fifo` through the config entity persists across reboots;
+changing the substitution later does not override a saved selection.
 
 ### RX CC1101 Register Settings
 
-The active FIFO capture/listener path uses this production register set for
+The optional FIFO capture/listener path uses this register set for
 `314973000` Hz and `2400` bps:
 
 | Register | Value | Purpose |
@@ -171,18 +178,23 @@ windows.
 
 ## Active Listening
 
-Active listening is enabled by default for LilyGO entries. The firmware performs
-enough decode work to reject noise and non-matching serial/C/D packets locally.
-This keeps Home Assistant from processing every FIFO window.
+Active listening is enabled by default for LilyGO entries. The default RMT path
+rejects short and invalid timing segments in firmware, then Home Assistant
+performs Proflame2 validation, learned-profile acceptance, and state policy.
+The FIFO rollback path retains its firmware-side learned-profile filtering.
 
 The production behavior is:
 
-- Maintain a rolling FIFO byte buffer.
-- Scan about every `1500` ms after the initial `6000` ms window is available.
-- Suppress repeated packets from the same transmission for `5000` ms.
-- Publish only decoded packets matching the learned profile.
-- Count dropped packets and expose additional debug counters/snapshots when
-  debug support is enabled.
+- RMT is armed continuously with a 30 ms idle completion threshold and bounded
+  256-symbol capture buffer.
+- Quantize valid high/low runs to 417 us PCM bits and discard short or invalid
+  segments before they reach Home Assistant.
+- Publish bounded PCM artifacts for Home Assistant semantic validation.
+- Let Home Assistant ignore nonmatching profiles and unchanged observed state.
+- Return an accepted observed state to the LilyGO display immediately.
+
+The FIFO rollback path instead maintains a rolling buffer and scans about every
+`1500` ms after the initial `6000` ms window is available.
 
 Idle/no-candidate RF noise should not be treated as a dropped Proflame2 packet.
 It may be logged at a suppressed diagnostic cadence, but it should not flood

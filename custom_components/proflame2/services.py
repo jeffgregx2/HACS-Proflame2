@@ -648,6 +648,9 @@ async def async_apply_observed_packet(
         confidence=STATE_CONFIDENCE_OBSERVED,
         packet=packet,
     )
+    # Remote activity must update the controller display immediately. The
+    # periodic sync below remains responsible for reconnect convergence.
+    await _async_push_runtime_display_state(runtime_entry)
 
 
 async def _async_stop_rx(runtime_entry: Proflame2RuntimeEntry) -> None:
@@ -853,6 +856,24 @@ async def async_sync_runtime_display_state(
     await async_sync_runtime_rx_policy(runtime_entry)
     if runtime_entry.active_listening_enabled:
         await async_start_active_listener(hass, runtime_entry)
+    await _async_push_runtime_display_state(
+        runtime_entry,
+        action_label=action_label,
+        force=force,
+    )
+
+
+async def _async_push_runtime_display_state(
+    runtime_entry: Proflame2RuntimeEntry,
+    *,
+    action_label: str | None = None,
+    force: bool = False,
+) -> None:
+    """Push current runtime state without changing receive policy."""
+
+    backend = runtime_entry.backend
+    if backend is None:
+        return
     update_display_state = getattr(backend, "update_display_state", None)
     if not callable(update_display_state):
         return

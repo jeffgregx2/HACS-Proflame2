@@ -18,7 +18,8 @@ from ..protocol.models import RemoteProfile
 from ..protocol.packet import ProflameFrame, ProflamePacket
 from .artifacts import ESPHomeAcceptedRXPacketMetadata, FifoDebugFailure, LilyGoFifoSemanticArtifact
 from .base import BackendCapabilities, CaptureResult, RFBackend, SendResult
-from .capture import CaptureSample, DecodeCandidate, find_proflame_candidates
+from .capture import CaptureSample, DecodeCandidate, find_proflame_candidates, frame_to_capture_sample
+from .pulse import find_proflame_pcm_candidates
 from .esphome.contract import (
     ESPHomeDisplayState,
     ESPHomeEndpointStatusReport,
@@ -40,7 +41,7 @@ ESPHOME_LEARN_MIN_UNIQUE_CMD2_SAMPLES = 2
 ESPHOME_FIFO_EVENT_WAIT_POLL_SECONDS = 0.75
 ESPHOME_FIFO_MAX_SCAN_PAYLOAD_BYTES = 16_384
 
-_FIFO_RX_EVENT_KINDS = {"fifo_capture", "rx_packet"}
+_FIFO_RX_EVENT_KINDS = {"fifo_capture", "pulse_capture", "rx_packet"}
 
 _LOGGER = logging.getLogger(__name__)
 _LearningReceiveEvent = Callable[..., Awaitable[ESPHomeRXEvent | None]]
@@ -739,6 +740,8 @@ class ESPHomeAPIBackend(RFBackend):
         return True
 
     def _scan_fifo_event(self, event: ESPHomeRXEvent) -> tuple[DecodeCandidate, ...]:
+        if event.capture_metadata.get("event_kind") == "pulse_capture":
+            return self._scan_pulse_event(event)
         if len(event.raw_payload) > ESPHOME_FIFO_MAX_SCAN_PAYLOAD_BYTES:
             self.last_fifo_debug_failure = {
                 "event_id": event.event_id,
@@ -762,6 +765,57 @@ class ESPHomeAPIBackend(RFBackend):
                 "reason": "no_valid_proflame_candidate",
                 "payload_length_bytes": len(event.raw_payload),
                 "raw_payload_hex": event.raw_payload_hex,
+                "capture_metadata": event.capture_metadata,
+            }
+        return tuple(candidates)
+
+    def _scan_pulse_event(self, event: ESPHomeRXEvent) -> tuple[DecodeCandidate, ...]:
+        """Decode the bounded GDO0/RMT PCM event without treating it as FIFO data."""
+
+        bit_length = _parse_decimal_event_int(event.capture_metadata.get("pcm_bit_length"))
+        if bit_length is None or bit_length <= 0 or bit_length > len(event.raw_payload) * 8:
+            self.last_fifo_debug_failure = {
+                "event_id": event.event_id,
+                "reason": "pulse_pcm_bit_length_invalid",
+                "payload_length_bytes": len(event.raw_payload),
+                "pcm_bit_length": event.capture_metadata.get("pcm_bit_length"),
+                "capture_metadata": event.capture_metadata,
+            }
+            return ()
+        bit_stream = "".join(f"{byte:08b}" for byte in event.raw_payload)[:bit_length]
+        pulse_candidates = find_proflame_pcm_candidates(bit_stream)
+        candidates: list[DecodeCandidate] = []
+        for pulse_candidate in pulse_candidates:
+            sample = frame_to_capture_sample(pulse_candidate.frame)
+            notes = [
+                "decode_path=cc1101_gdo0_rmt_pcm",
+                f"frame_format={pulse_candidate.frame_format}",
+                f"repeat_gap_bits={pulse_candidate.repeat_gap_bits}",
+            ]
+            if pulse_candidate.extension_words:
+                notes.append("extension_hex=" + bytes(pulse_candidate.extension_words).hex())
+            candidates.append(
+                DecodeCandidate(
+                    bit_offset=pulse_candidate.bit_offset % 8,
+                    symbol_offset=pulse_candidate.bit_offset // 2,
+                    absolute_bit_offset=pulse_candidate.bit_offset,
+                    raw_slice=event.raw_payload,
+                    sample=sample,
+                    frame=pulse_candidate.frame,
+                    packet=sample.as_packet(),
+                    confidence=120,
+                    trailing_guard_valid=True,
+                    trailing_guard_observed="0" * pulse_candidate.repeat_gap_bits,
+                    validation_notes=tuple(notes),
+                    occurrence_offsets=((pulse_candidate.bit_offset % 8, pulse_candidate.bit_offset // 2),),
+                )
+            )
+        if not candidates:
+            self.last_fifo_debug_failure = {
+                "event_id": event.event_id,
+                "reason": "no_valid_proflame_pulse_candidate",
+                "payload_length_bytes": len(event.raw_payload),
+                "pcm_bit_length": bit_length,
                 "capture_metadata": event.capture_metadata,
             }
         return tuple(candidates)
@@ -968,3 +1022,16 @@ def _parse_event_int(value: Any) -> int | None:
     if not text:
         return None
     return int(text[2:] if text.startswith("0x") else text, 16)
+
+
+def _parse_decimal_event_int(value: Any) -> int | None:
+    """Parse firmware counters and lengths, which are emitted as decimal text."""
+
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text or not text.isdecimal():
+        return None
+    return int(text, 10)

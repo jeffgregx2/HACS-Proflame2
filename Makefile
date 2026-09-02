@@ -38,7 +38,8 @@ esphome-stage:
 esphome-config: esphome-setup esphome-stage
 	cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" config $(ESPHOME_STAGE_EXAMPLE)
 
-esphome-compile: esphome-setup esphome-stage
+esphome-compile: esphome-config
+	find "$(ESPHOME_STAGE)/esphome/.esphome/external_components" -type d -path '*/esphome/components/proflame2_tembed' -prune -exec rm -rf {} \; -exec cp -R "$(ESPHOME_STAGE)/esphome/components/proflame2_tembed" {} \;
 	cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" compile $(ESPHOME_STAGE_EXAMPLE)
 
 esphome-validate: esphome-config esphome-compile

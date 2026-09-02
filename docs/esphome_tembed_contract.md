@@ -16,10 +16,12 @@ The endpoint must not own or infer:
 - thermostat policy
 - fireplace state authority
 
-The one exception is LilyGO FIFO RX filtering. During guided learning and active
-listening the endpoint may decode FIFO byte windows enough to validate candidate
-packets against the learned serial/profile. Home Assistant remains the owner of
-learning persistence, command generation, and fireplace state policy.
+The receive exception is limited to endpoint acquisition and learned-profile
+filtering. Guided learning and active listening use `rmt_pulse` by default;
+the endpoint exports bounded PCM captures and Home Assistant performs semantic
+validation. FIFO byte windows remain an explicit rollback/diagnostic path.
+Home Assistant remains the owner of learning persistence, command generation,
+and fireplace state policy.
 
 Home Assistant generates the final `TransmissionPlan`. The endpoint transmits
 the prepared raw air payload and reports status/results.
@@ -158,37 +160,33 @@ Fields:
 
 ## RX Event
 
-The validated LilyGO RX event is a CC1101 FIFO byte-window export. The endpoint
-uses the learned serial/profile to suppress nonmatching packets before Home
-Assistant sees them. For guided learning, Home Assistant scans accepted FIFO
-windows and persists the learned profile. For active listening, firmware
-publishes only decoded packets matching the learned profile.
+The default LilyGO RX event is a bounded GDO0/RMT PCM capture. FIFO byte-window
+events are retained only for the explicit `fifo` receive path and diagnostics.
+For guided learning, Home Assistant scans the selected event type and persists
+the learned profile. For active listening, only decoded packets matching the
+learned profile are accepted.
 
 Fields:
 
 - `event_id`
 - `timestamp_ms` or `device_tick_ms`
-- `fifo_payload_hex`
-- `bit_stream`
-- `rssi`
-- `lqi`
+- `event_kind`: `pulse_capture` or `fifo_capture`
+- `payload_hex`
+- `capture_mode`
+- `pcm_bit_length`, `symbol_count`, and `transition_count` for `pulse_capture`
+- FIFO radio metadata for `fifo_capture`
 - `frequency_hz`
 - `data_rate_bps`
-- `rx_fifo_profile`
 - `capture_metadata`
-- `candidate_scan_result`
-- `semantic_fifo_artifact`, if candidate scanning succeeds
 
 Rules:
 
-- Firmware may decode Proflame2 FIFO candidates only to validate learned-profile
-  matches and suppress noise/nonmatching remotes.
+- Firmware emits RMT PCM or FIFO artifacts; Home Assistant validates the
+  Proflame2 frame and applies learned-profile policy.
 - Home Assistant remains the semantic owner for learning persistence and
   fireplace state updates.
-- RX events are accepted FIFO/semantic packet events, not raw noise events.
-- Only host-selected `semantic_fifo_candidate` artifacts with
-  `semantic_comparable=true`, `decode_success=true`, and canonical semantic
-  witness agreement may be used as packet-owned RX data.
+- RMT events use `capture_mode=cc1101_gdo0_rmt_pcm` and must include a decimal
+  `pcm_bit_length`; raw noise and short segments are discarded in firmware.
 - Raw FIFO windows without a valid candidate remain diagnostic artifacts only.
 
 ## Display Update

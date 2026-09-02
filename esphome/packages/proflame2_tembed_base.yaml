@@ -1,7 +1,8 @@
 # LilyGO T-Embed CC1101 Proflame2 base package
 #
 # Base package for the LilyGO T-Embed CC1101 Proflame2 endpoint.
-# This file enables TX, guided FIFO learning, and FIFO active listening.
+# This file enables TX plus guided learning and active listening. RMT pulse
+# capture is the default receive path; FIFO is a persistent rollback option.
 # The CC1101 test-pattern action below is bench-only and is not fireplace
 # control behavior.
 #
@@ -25,7 +26,7 @@
 # Firmware remains a transport/display endpoint. Home Assistant owns learning,
 # profile storage, command encoding, profile policy, debounce, and thermostat
 # policy. The firmware may use the HA-provided learned serial/C-D profile to
-# filter active-listening FIFO windows so only matching Proflame2 packets are
+# filter active-listening receive events so only matching Proflame2 packets are
 # emitted to HA.
 
 substitutions:
@@ -38,6 +39,7 @@ substitutions:
   proflame2_pre_frame_low_us_override: "0"
   proflame2_diagnostic_repeat_count_override: "5"
   proflame2_async_tx_data_pin_override: "gdo0"
+  proflame2_active_listener_rx_path_default: "rmt_pulse"
   proflame2_display_debug_mode: "false"
 
 i2c:
@@ -54,6 +56,7 @@ esphome:
           id(proflame2_radio).set_display_dim_timeout_min(static_cast<uint32_t>(id(proflame2_display_dim_timeout_state)));
           id(proflame2_radio).set_display_wake_on_activity(id(proflame2_display_wake_on_activity_state));
           id(proflame2_radio).set_display_fireplace_name(id(proflame2_display_short_name_state));
+          id(proflame2_radio).set_active_listener_rx_path(id(proflame2_active_listener_rx_path_state));
 
 globals:
   - id: proflame2_display_dim_level_state
@@ -72,6 +75,10 @@ globals:
     type: std::string
     restore_value: yes
     initial_value: '"---"'
+  - id: proflame2_active_listener_rx_path_state
+    type: std::string
+    restore_value: yes
+    initial_value: '"${proflame2_active_listener_rx_path_default}"'
 
 wifi:
   on_connect:
@@ -382,6 +389,22 @@ switch:
           }
           id(proflame2_radio).set_display_wake_on_activity(false);
 select:
+  - platform: template
+    id: proflame2_active_listener_rx_path
+    name: Active Listener RX Path
+    entity_category: config
+    options:
+      - "fifo"
+      - "rmt_pulse"
+    lambda: |-
+      return id(proflame2_active_listener_rx_path_state);
+    set_action:
+      - lambda: |-
+          if (id(proflame2_active_listener_rx_path_state) != x) {
+            id(proflame2_active_listener_rx_path_state) = x;
+          }
+          id(proflame2_active_listener_rx_path).publish_state(x);
+          id(proflame2_radio).set_active_listener_rx_path(x);
   - platform: template
     id: proflame2_display_dim_timeout
     name: Display Dim Timeout

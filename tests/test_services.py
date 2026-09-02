@@ -43,6 +43,7 @@ from custom_components.proflame2.diagnostics import async_get_config_entry_diagn
 from custom_components.proflame2.rf.base import SendResult
 from custom_components.proflame2.rf.yardstick import YardStickBackend
 from custom_components.proflame2.runtime import async_get_runtime_entries
+from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 
 
 @pytest.fixture(autouse=True)
@@ -307,6 +308,43 @@ async def test_runtime_display_state_sync_pushes_current_known_state(hass) -> No
     assert display_state.front is False
     assert display_state.aux is False
     assert display_state.action_label == "Startup sync"
+
+
+async def test_observed_packet_immediately_updates_controller_display(hass) -> None:
+    """A remote command should not wait for periodic display reconciliation."""
+
+    from custom_components.proflame2.services import async_apply_observed_packet
+
+    entry = _add_entry(hass, title="Living Room", remote_id=0x3B3F02)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    received = {}
+
+    class _BackendStub:
+        async def update_display_state(self, display_state):
+            received["display_state"] = display_state
+
+        async def close(self, *, reason: str | None = None):
+            return None
+
+    runtime_entry.backend = _BackendStub()
+    packet = ProflamePacket.from_frame(
+        ProflameFrame(
+            serial_id=0x3B3F02,
+            cmd1=0x00,
+            err1=0x57,
+            cmd2=0x06,
+            err2=0xDE,
+        ),
+        source="remote_rmt",
+    )
+
+    await async_apply_observed_packet(hass, runtime_entry, packet)
+
+    display_state = received["display_state"]
+    assert display_state.power is False
+    assert display_state.flame == 6
+    assert display_state.action_label is None
 
 
 async def test_setup_entry_defers_display_sync_when_linked_esphome_not_ready(hass, monkeypatch) -> None:

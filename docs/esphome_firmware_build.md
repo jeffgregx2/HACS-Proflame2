@@ -28,6 +28,18 @@ Debug firmware can additionally include:
 The debug package exposes manual FIFO capture/profile controls and other
 low-level diagnostics. It is intentionally omitted from normal firmware.
 
+Normal firmware defaults its guided-learning and active-listening receive path
+to `rmt_pulse`. The persistent `Active Listener RX Path` entity can be set to
+`fifo` as a rollback. For an initial local-build default, add:
+
+```yaml
+substitutions:
+  proflame2_active_listener_rx_path_default: "fifo"
+```
+
+An already-flashed device retains its selected path, so change the entity once
+in Home Assistant when moving an existing device to FIFO.
+
 ## Release Pinning
 
 The overlay uses a release substitution:
@@ -89,3 +101,8 @@ Compile success is not RF validation. For release or hardware changes, validate:
 - Guided learning completes from the native remote.
 - Native remote or YardStick TX is reflected in Home Assistant through LilyGO
   active listening when active listening is enabled.
+
+The repository `make esphome-*` targets stage a copy below
+`/tmp/proflame2-esphome` and overlay its local external component after ESPHome
+resolves package metadata. That validation therefore builds the checkout's
+uncommitted C++ source; it does not alter the GitHub-based production package.

@@ -425,7 +425,7 @@ static char pwm_symbol_to_char_(PWMSymbol symbol) {
   }
 }
 
-static std::string
+[[maybe_unused]] static std::string
 native_group_repeat_symbol_list_(const std::array<NativePWMGroup, PROFLAME_NATIVE_GROUP_COUNT>& groups,
                                  size_t group_count) {
   std::string out;
@@ -441,7 +441,7 @@ native_group_repeat_symbol_list_(const std::array<NativePWMGroup, PROFLAME_NATIV
   return out;
 }
 
-static std::string pwm_bits_to_string_(const PWMSymbol* bits, size_t bit_count) {
+[[maybe_unused]] static std::string pwm_bits_to_string_(const PWMSymbol* bits, size_t bit_count) {
   std::string out;
   out.reserve(bit_count);
   for (size_t bit_index = 0; bit_index < bit_count; bit_index++) {
@@ -450,7 +450,7 @@ static std::string pwm_bits_to_string_(const PWMSymbol* bits, size_t bit_count) 
   return out;
 }
 
-static std::string native_group_original_word_string_(const NativePWMGroup& group) {
+[[maybe_unused]] static std::string native_group_original_word_string_(const NativePWMGroup& group) {
   std::string out;
   out.reserve(13);
   out.push_back('S');
@@ -463,7 +463,7 @@ static std::string native_group_original_word_string_(const NativePWMGroup& grou
   return out;
 }
 
-static std::string rtl433_style_code_expectation_(const PWMSymbol* bits, size_t bit_count) {
+[[maybe_unused]] static std::string rtl433_style_code_expectation_(const PWMSymbol* bits, size_t bit_count) {
   uint32_t value = 0;
   for (size_t bit_index = 0; bit_index < bit_count; bit_index++) {
     value <<= 1U;
@@ -474,7 +474,7 @@ static std::string rtl433_style_code_expectation_(const PWMSymbol* bits, size_t 
   const uint32_t left_shift = (4U - (bit_count % 4U)) % 4U;
   const uint32_t aligned = complemented << left_shift;
   char buffer[32];
-  snprintf(buffer, sizeof(buffer), "{%u}%x", static_cast<unsigned>(bit_count), aligned);
+  snprintf(buffer, sizeof(buffer), "{%u}%" PRIx32, static_cast<unsigned>(bit_count), aligned);
   return std::string(buffer);
 }
 
@@ -516,7 +516,7 @@ static bool native_group_air_bits_(const NativePWMGroup& group, std::string& air
   return true;
 }
 
-static std::string native_group_run_lengths_(const std::string& air_bits) {
+[[maybe_unused]] static std::string native_group_run_lengths_(const std::string& air_bits) {
   if (air_bits.empty()) {
     return "";
   }
@@ -544,7 +544,7 @@ static std::string native_group_run_lengths_(const std::string& air_bits) {
   return out;
 }
 
-static std::string rtl433_style_code_expectation_from_string_(const std::string& bits) {
+[[maybe_unused]] static std::string rtl433_style_code_expectation_from_string_(const std::string& bits) {
   std::array<PWMSymbol, PROFLAME_NATIVE_MAX_EMIT_BITS_PER_GROUP + 1U> symbols{};
   if (bits.size() > symbols.size()) {
     return "{invalid}";
@@ -561,14 +561,14 @@ static std::string rtl433_style_code_expectation_from_string_(const std::string&
   return rtl433_style_code_expectation_(symbols.data(), bits.size());
 }
 
-static std::string right_shift_bits_(const std::string& bits) {
+[[maybe_unused]] static std::string right_shift_bits_(const std::string& bits) {
   if (bits.empty()) {
     return bits;
   }
   return std::string("0") + bits.substr(0, bits.size() - 1U);
 }
 
-static std::string left_shift_bits_(const std::string& bits) {
+[[maybe_unused]] static std::string left_shift_bits_(const std::string& bits) {
   if (bits.empty()) {
     return bits;
   }
@@ -1897,8 +1897,10 @@ void RadioCC1101::log_bit_timing_trace_(const TXTimingDiagnostics& timing) {
   for (uint8_t i = 0; i < timing.bit_timing_trace_count; i++) {
     const auto& sample = timing.bit_timing_trace[i];
     ESP_LOGI(
-        TAG, "TX bit[%u] value=%u target_offset_us=%" PRId64 " actual_offset_us=%" PRId64 " timing_error_us=%" PRIu32,
-        sample.bit_index, sample.bit_value, sample.target_offset_us, sample.actual_offset_us, sample.timing_error_us);
+        TAG, "TX bit[%" PRIu32 "] value=%u target_offset_us=%" PRId64 " actual_offset_us=%" PRId64
+             " timing_error_us=%" PRIu32,
+        sample.bit_index, static_cast<unsigned>(sample.bit_value), sample.target_offset_us, sample.actual_offset_us,
+        sample.timing_error_us);
   }
 }
 
@@ -1981,8 +1983,10 @@ bool RadioCC1101::drain_debug_tx_diagnostics(const TXTimingDiagnostics& timing, 
     if (bit_index < timing.bit_timing_trace_count) {
       const auto& sample = timing.bit_timing_trace[bit_index++];
       ESP_LOGI(
-          TAG, "TX bit[%u] value=%u target_offset_us=%" PRId64 " actual_offset_us=%" PRId64 " timing_error_us=%" PRIu32,
-          sample.bit_index, sample.bit_value, sample.target_offset_us, sample.actual_offset_us, sample.timing_error_us);
+          TAG, "TX bit[%" PRIu32 "] value=%u target_offset_us=%" PRId64 " actual_offset_us=%" PRId64
+               " timing_error_us=%" PRIu32,
+          sample.bit_index, static_cast<unsigned>(sample.bit_value), sample.target_offset_us, sample.actual_offset_us,
+          sample.timing_error_us);
       return true;
     }
     phase = 5;

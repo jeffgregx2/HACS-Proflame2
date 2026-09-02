@@ -45,6 +45,8 @@ def test_esphome_firmware_tree_contains_expected_source_files() -> None:
         "components/proflame2_tembed/radio_cc1101.cpp",
         "components/proflame2_tembed/radio_cc1101_rx.cpp",
         "components/proflame2_tembed/radio_cc1101_tx.cpp",
+        "components/proflame2_tembed/rmt_ook_receiver.h",
+        "components/proflame2_tembed/rmt_ook_receiver.cpp",
         "components/proflame2_tembed/telemetry_publisher.h",
         "components/proflame2_tembed/telemetry_publisher.cpp",
         "components/proflame2_tembed/tx_controller.h",
@@ -73,7 +75,9 @@ def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
     assert "# LilyGO CC1101 Controller Developer Notes" in developer_notes
     assert "## TX Model" in developer_notes
     assert "## RX Model" in developer_notes
-    assert "The abandoned RX path used GDO edge-interval capture" in developer_notes
+    assert "The normal RX path configures the CC1101 for asynchronous OOK data on GDO0" in developer_notes
+    assert "`proflame2_active_listener_rx_path_default`, which is `rmt_pulse`" in developer_notes
+    assert "only as a fallback when RMT has compatibility problems" in developer_notes
     assert "The timing-critical transmit loop is intentionally monolithic" in developer_notes
 
 
@@ -143,11 +147,18 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "id: proflame2_display_dim_timeout_state" in base
     assert "id: proflame2_display_wake_on_activity_state" in base
     assert "id: proflame2_display_short_name_state" in base
+    assert "id: proflame2_active_listener_rx_path_state" in base
+    assert 'proflame2_active_listener_rx_path_default: "rmt_pulse"' in base
+    assert "initial_value: '\"${proflame2_active_listener_rx_path_default}\"'" in base
     assert "restore_value: yes" in base
     assert "min_value: 0" in base
     assert "max_value: 10" in base
     assert 'initial_value: "3"' in base
     assert "name: Display Dim Timeout" in base
+    assert "name: Active Listener RX Path" in base
+    assert '      - "rmt_pulse"' in base
+    assert "id(proflame2_radio).set_active_listener_rx_path(x);" in base
+    assert "id(proflame2_radio).set_active_listener_rx_path(id(proflame2_active_listener_rx_path_state));" in base
     assert 'initial_value: "1"' in base
     assert "select:" in base
     assert "platform: template" in base
@@ -204,8 +215,8 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "endpoint_status:" in base
     assert "last_tx_result:" in base
     assert "tx_success_count:" in base
-    assert "TX, guided FIFO learning, and FIFO active listening" in base
-    assert "FIFO active listening" in base
+    assert "RMT pulse" in base
+    assert "FIFO is a persistent rollback option" in base
     assert "homeassistant.event" not in base
     for removed_edge_control in (
         "proflame2_rx_polarity_mode",
@@ -573,6 +584,57 @@ def test_esphome_cpp_tx_path_stays_transport_only() -> None:
     )
     for forbidden in forbidden_protocol_authority_terms:
         assert forbidden not in combined
+
+
+def test_rmt_rx_failure_paths_restore_or_report_errors() -> None:
+    """Keep radio arbitration fail-closed when RMT is the selected RX path.
+
+    ESP-IDF RMT lifecycle calls require hardware/Builder validation, so this
+    source-contract test guards the two failure paths that must not silently
+    leave the default listener stopped or unarmed.
+    """
+
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    receiver = _read("components/proflame2_tembed/rmt_ook_receiver.cpp")
+
+    queue_failure_start = component.index("if (xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE)")
+    queue_failure_end = component.index("  this->tx_in_progress_ = true;", queue_failure_start)
+    queue_failure_block = component[queue_failure_start:queue_failure_end]
+    assert "this->restore_rx_after_tx_if_needed_();" in queue_failure_block
+    assert "this->refresh_status_text_();" in queue_failure_block
+
+    poll_start = receiver.index("bool RmtOokReceiver::poll(")
+    poll_end = receiver.index("bool RmtOokReceiver::on_receive_done_", poll_start)
+    poll_block = receiver[poll_start:poll_end]
+    assert "if (!this->arm_(arm_error)) {" in poll_block
+    assert "error = arm_error;" in poll_block
+    assert "!this->arm_(arm_error) && converted" not in poll_block
+
+
+def test_tx_completion_restores_rx_before_reporting_controller_ready() -> None:
+    """Prevent a native remote press from racing completion UI after HA TX."""
+
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    completion_start = component.index("void Proflame2TEmbedComponent::consume_radio_runtime_events_()")
+    completion_end = component.index("bool Proflame2TEmbedComponent::initialize_radio_", completion_start)
+    completion_block = component[completion_start:completion_end]
+
+    restore_index = completion_block.index("this->restore_rx_after_tx_if_needed_();")
+    assert restore_index < completion_block.index("if (!result.ok)")
+    assert restore_index < completion_block.index('this->update_display_runtime_state_("Sent OK"')
+    assert completion_block.count("this->restore_rx_after_tx_if_needed_();") == 1
+
+
+def test_tx_debug_format_strings_match_fixed_width_diagnostic_types() -> None:
+    """Keep optional timing diagnostics warning-free across ESP-IDF toolchains."""
+
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    radio_tx = _read("components/proflame2_tembed/radio_cc1101_tx.cpp")
+
+    assert "[[maybe_unused]] static const char* tx_mode_to_string_" in component
+    assert '"{%u}%" PRIx32' in radio_tx
+    assert radio_tx.count('"TX bit[%" PRIu32 "] value=%u') == 2
+    assert radio_tx.count("static_cast<unsigned>(sample.bit_value)") == 2
 
 
 def test_esphome_native_group_serializer_supports_variable_emit_lengths() -> None:

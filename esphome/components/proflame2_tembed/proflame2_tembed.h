@@ -2,7 +2,7 @@
 //
 // This firmware remains a transport/display endpoint. Home Assistant owns
 // profile/state authority and supplies prepared TX payloads. Active listening
-// may use HA-provided profile constants to filter FIFO RX windows before
+// may use HA-provided profile constants to filter receive events before
 // publishing packet events. The firmware must not become a second source of
 // fireplace state truth.
 
@@ -29,6 +29,7 @@
 #include "fifo_rx_controller.h"
 #include "proflame2_decoder.h"
 #include "radio_cc1101.h"
+#include "rmt_ook_receiver.h"
 #include "telemetry_publisher.h"
 #include "tx_controller.h"
 
@@ -68,17 +69,18 @@ enum class RadioRuntimeInitState : uint8_t {
 ///   the generated service/action entrypoints on the main loop.
 /// - Home Assistant owns semantic profile/state authority and sends prepared
 ///   TX bit payloads plus learned-profile constants.
-/// - This component owns board IO, display state, CC1101 runtime state, FIFO
-///   RX buffers, active-listener filtering, and telemetry publication.
+/// - This component owns board IO, display state, CC1101 runtime state, RX
+///   capture, active-listener filtering, and telemetry publication.
 ///
 /// RF invariants:
-/// - TX has priority over RX. Any active FIFO listener is paused for TX and
-///   restored afterward if it was previously requested.
-/// - Active listening publishes only decoded packets matching the configured
-///   learned serial/C/D profile. Nonmatching or undecodable FIFO windows are
-///   diagnostic counters/snapshots, not semantic HA state.
+/// - TX has priority over RX. The active FIFO or RMT listener is paused for TX
+///   and restored afterward if it was previously requested.
+/// - FIFO active listening performs learned-profile filtering in firmware. RMT
+///   active listening exports bounded PCM captures for Home Assistant to
+///   validate and apply learned-profile policy.
 /// - `PROFLAME2_TEMBED_DEBUG` gates deep manual FIFO diagnostics and raw-byte
-///   dump controls. Production builds keep the FIFO semantic RX and TX paths.
+///   dump controls. Production builds keep the selected semantic RX and TX
+///   paths.
 ///
 /// This class is intentionally the ESPHome integration shell. Domain mechanics
 /// live in small helpers:
@@ -476,12 +478,15 @@ public:
                                     bool thermostat_known);
   /// Set manual diagnostic capture mode. Production RX uses active listener config.
   void set_capture_mode(const std::string& value);
-  /// Configure strict FIFO active listening for one learned Proflame2 profile.
+  /// Select the persistent active-listener acquisition path. RMT is the base
+  /// package default; FIFO is the explicit rollback path.
+  void set_active_listener_rx_path(const std::string& value);
+  /// Configure active listening for one learned Proflame2 profile.
   ///
-  /// When enabled, FIFO capture is started and only decoded packets matching
-  /// `serial_id`, `c1/d1`, and `c2/d2` are published to HA. Disabling stops the
-  /// FIFO capture path. Calling this repeatedly with unchanged values is a
-  /// no-op except for preserving the requested active-listener state.
+  /// FIFO mode filters matching decoded packets in firmware. RMT mode exports
+  /// bounded PCM captures and Home Assistant applies semantic profile policy.
+  /// Disabling stops the configured active-listener path. Repeated calls with
+  /// unchanged values preserve the requested active-listener state.
   void configure_active_listener(bool enabled, uint32_t serial_id, uint8_t c1, uint8_t d1, uint8_t c2, uint8_t d2);
   /// Enable or disable bounded FIFO rolling capture.
   ///
@@ -536,6 +541,10 @@ protected:
   // shell configures CC1101, drains FIFO bytes, and hands windows to
   // active-listener policy.
   bool configure_rx_fifo_capture_mode_(std::string& error);
+  bool configure_rmt_pulse_capture_mode_(std::string& error);
+  void set_rmt_pulse_capture_enabled_(bool value);
+  void poll_rmt_pulse_capture_();
+  void publish_rmt_pulse_capture_(const RmtOokCapture& capture);
   void reset_rx_fifo_rolling_capture_(uint32_t enable_tick_ms);
   void poll_rx_fifo_capture_();
   void record_rx_fifo_byte_(uint8_t value, uint32_t tick_ms);
@@ -685,12 +694,18 @@ protected:
   bool display_dim_deferred_{false};
   uint32_t rx_fifo_probe_sequence_{0};
   bool rx_fifo_capture_enabled_{false};
+  bool rx_fifo_debug_export_enabled_{false};
+  bool rx_rmt_pulse_capture_enabled_{false};
+  bool rx_rmt_pulse_paused_for_tx_{false};
+  uint32_t rx_rmt_pulse_capture_sequence_{0};
+  RmtOokReceiver rmt_ook_receiver_{};
   bool rx_fifo_capture_export_busy_{false};
   bool rx_fifo_capture_configured_{false};
   bool rx_fifo_capture_finalize_in_progress_{false};
   bool rx_fifo_paused_for_tx_{false};
   bool rx_active_listener_requested_{false};
   bool rx_active_listener_filter_configured_{false};
+  bool rx_active_listener_use_rmt_{false};
   Proflame2DecodeProfile rx_active_listener_profile_{};
   ActiveListenerController active_listener_{};
 #if PROFLAME2_TEMBED_DEBUG

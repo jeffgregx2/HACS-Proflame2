@@ -52,7 +52,7 @@ static bool is_home_assistant_api_client_(const std::string& client_info) {
   return client_info.rfind("Home Assistant", 0) == 0;
 }
 
-static const char* tx_mode_to_string_(TXMode tx_mode) {
+[[maybe_unused]] static const char* tx_mode_to_string_(TXMode tx_mode) {
   switch (tx_mode) {
   case TXMode::CONTINUOUS_BURST:
     return "continuous_burst";
@@ -69,7 +69,7 @@ static const char* tx_mode_to_string_(TXMode tx_mode) {
   }
 }
 
-static const char* native_group_timing_profile_to_string_(NativeGroupTimingProfile profile) {
+[[maybe_unused]] static const char* native_group_timing_profile_to_string_(NativeGroupTimingProfile profile) {
   switch (profile) {
   case NativeGroupTimingProfile::YARDSTICK_COMPAT:
     return "yardstick_compat";
@@ -80,7 +80,7 @@ static const char* native_group_timing_profile_to_string_(NativeGroupTimingProfi
   }
 }
 
-static const char* native_group_repeat_boundary_mode_to_string_(NativeGroupRepeatBoundaryMode mode) {
+[[maybe_unused]] static const char* native_group_repeat_boundary_mode_to_string_(NativeGroupRepeatBoundaryMode mode) {
   switch (mode) {
   case NativeGroupRepeatBoundaryMode::CONTINUOUS_TX:
     return "continuous_tx";
@@ -115,7 +115,7 @@ static const char* runtime_state_to_string_(RadioRuntimeState state) {
   }
 }
 
-static const char* test_pattern_mode_to_string_(TestPatternMode mode) {
+[[maybe_unused]] static const char* test_pattern_mode_to_string_(TestPatternMode mode) {
   switch (mode) {
   case TestPatternMode::ALTERNATING_OOK:
     return "alternating_ook";
@@ -128,7 +128,7 @@ static const char* test_pattern_mode_to_string_(TestPatternMode mode) {
   }
 }
 
-static const char* async_tx_data_pin_to_string_(AsyncTxDataPin pin) {
+[[maybe_unused]] static const char* async_tx_data_pin_to_string_(AsyncTxDataPin pin) {
   switch (pin) {
   case AsyncTxDataPin::GDO0:
     return "gdo0";
@@ -496,7 +496,7 @@ void Proflame2TEmbedComponent::setup() {
   ESP_LOGCONFIG(TAG, "  pre-frame low: %" PRIu32 " us", this->pre_frame_low_us_);
   ESP_LOGCONFIG(TAG, "  diagnostic repeat override: %u", this->diagnostic_repeat_count_override_);
   ESP_LOGCONFIG(TAG, "  payload bit-length override: %" PRIu32, this->payload_bit_length_override_);
-  ESP_LOGCONFIG(TAG, "  RX path: CC1101 FIFO semantic capture");
+  ESP_LOGCONFIG(TAG, "  RX path: selectable RMT pulse capture (default) or FIFO fallback");
   ESP_LOGCONFIG(TAG, "  async TX data pin: %s", async_tx_data_pin_to_string_(this->async_tx_data_pin_));
   ESP_LOGCONFIG(TAG, "  CC1101 partnum/version: %s / %s", this->cc1101_partnum_.c_str(), this->cc1101_version_.c_str());
   ESP_LOGCONFIG(TAG, "  radio runtime: lazy start on first request");
@@ -532,6 +532,9 @@ void Proflame2TEmbedComponent::loop() {
     this->maybe_log_rx_fifo_capture_status_();
 #endif
   }
+  if (this->rx_rmt_pulse_capture_enabled_) {
+    this->poll_rmt_pulse_capture_();
+  }
   if (this->display_.active_operation && this->display_.active_operation_expires_millis > 0 &&
       millis() >= this->display_.active_operation_expires_millis) {
     this->display_.active_operation = false;
@@ -548,15 +551,43 @@ void Proflame2TEmbedComponent::loop() {
 }
 
 void Proflame2TEmbedComponent::set_capture_mode(const std::string& value) {
-  const std::string normalized = value == "fifo_trailing_window" ? value : std::string("off");
+  const std::string normalized = value == "fifo_trailing_window" || value == "rmt_pulse" ? value : std::string("off");
+  this->rx_fifo_debug_export_enabled_ = normalized == "fifo_trailing_window";
   this->rx_active_listener_requested_ = false;
   this->rx_active_listener_filter_configured_ = false;
   this->rx_active_listener_profile_ = Proflame2DecodeProfile{};
   if (normalized == "fifo_trailing_window") {
+    this->set_rmt_pulse_capture_enabled_(false);
     this->set_fifo_capture_enabled(true);
     return;
   }
+  if (normalized == "rmt_pulse") {
+    this->set_fifo_capture_enabled(false);
+    this->set_rmt_pulse_capture_enabled_(true);
+    return;
+  }
   this->set_fifo_capture_enabled(false);
+  this->set_rmt_pulse_capture_enabled_(false);
+}
+
+void Proflame2TEmbedComponent::set_active_listener_rx_path(const std::string& value) {
+  const bool use_rmt = value == "rmt_pulse";
+  if (this->rx_active_listener_use_rmt_ == use_rmt) {
+    return;
+  }
+  this->rx_active_listener_use_rmt_ = use_rmt;
+  if (!this->rx_active_listener_requested_) {
+    return;
+  }
+  if (use_rmt) {
+    this->set_fifo_capture_enabled(false);
+    this->set_rmt_pulse_capture_enabled_(true);
+    ESP_LOGI(TAG, "RX active listener path set to RMT pulse capture");
+    return;
+  }
+  this->set_rmt_pulse_capture_enabled_(false);
+  this->set_fifo_capture_enabled(true);
+  ESP_LOGI(TAG, "RX active listener path set to FIFO capture");
 }
 
 void Proflame2TEmbedComponent::configure_active_listener(bool enabled, uint32_t serial_id, uint8_t c1, uint8_t d1,
@@ -571,6 +602,9 @@ void Proflame2TEmbedComponent::configure_active_listener(bool enabled, uint32_t 
       ESP_LOGI(TAG, "RX active listener disabled");
     }
     this->set_fifo_capture_enabled(false);
+    if (this->rx_active_listener_use_rmt_) {
+      this->set_rmt_pulse_capture_enabled_(false);
+    }
     return;
   }
 
@@ -589,6 +623,21 @@ void Proflame2TEmbedComponent::configure_active_listener(bool enabled, uint32_t 
              "RX active listener enabled profile=%s serial_id=%06" PRIx32 " c1=%" PRIu8 " d1=%" PRIu8 " c2=%" PRIu8
              " d2=%" PRIu8,
              profile_valid ? "strict" : "raw_learning", static_cast<uint32_t>(serial_id & 0xFFFFFFU), c1, d1, c2, d2);
+  }
+  if (this->rx_active_listener_use_rmt_) {
+    const bool rmt_was_enabled = this->rx_rmt_pulse_capture_enabled_;
+    this->set_fifo_capture_enabled(false);
+    this->set_rmt_pulse_capture_enabled_(true);
+    if (changed || !rmt_was_enabled) {
+      ESP_LOGI(TAG, "RX active listener using configured RMT pulse capture");
+    }
+    return;
+  }
+  if (this->rx_rmt_pulse_capture_enabled_) {
+    if (changed) {
+      ESP_LOGI(TAG, "RX active listener retained manual RMT pulse capture");
+    }
+    return;
   }
   this->set_fifo_capture_enabled(true);
 }
@@ -864,6 +913,158 @@ bool Proflame2TEmbedComponent::configure_rx_fifo_capture_mode_(std::string& erro
   return true;
 }
 
+bool Proflame2TEmbedComponent::configure_rmt_pulse_capture_mode_(std::string& error) {
+  uint8_t mdmcfg4 = 0;
+  uint8_t mdmcfg3 = 0;
+  this->compute_drate_registers_(this->data_rate_bps_, mdmcfg4, mdmcfg3);
+  const uint32_t frequency_word = this->compute_frequency_word_(this->rx_frequency_hz_);
+
+  this->strobe_(CC1101_SIDLE);
+  this->strobe_(CC1101_SFRX);
+  this->strobe_(CC1101_SFTX);
+  this->write_register_(CC1101_IOCFG2, 0x2E);
+  this->write_register_(CC1101_IOCFG1, 0x2E);
+  // CC1101 asynchronous serial RX data is exposed on GDO0. The RMT channel
+  // samples this physical output rather than interpreting FIFO bytes.
+  this->write_register_(CC1101_IOCFG0, 0x0D);
+  this->write_register_(CC1101_FIFOTHR, 0x47);
+  this->write_register_(CC1101_SYNC1, 0x00);
+  this->write_register_(CC1101_SYNC0, 0x00);
+  this->write_register_(CC1101_PKTLEN, 0xFF);
+  this->write_register_(CC1101_PKTCTRL1, 0x00);
+  this->write_register_(CC1101_PKTCTRL0, 0x32);
+  this->write_register_(CC1101_FSCTRL1, 0x06);
+  this->write_register_(CC1101_FSCTRL0, 0x00);
+  this->write_register_(CC1101_FREQ2, static_cast<uint8_t>((frequency_word >> 16) & 0xFF));
+  this->write_register_(CC1101_FREQ1, static_cast<uint8_t>((frequency_word >> 8) & 0xFF));
+  this->write_register_(CC1101_FREQ0, static_cast<uint8_t>(frequency_word & 0xFF));
+  this->write_register_(CC1101_MDMCFG4, static_cast<uint8_t>((mdmcfg4 & 0x0F) | 0x50));
+  this->write_register_(CC1101_MDMCFG3, mdmcfg3);
+  this->write_register_(CC1101_MDMCFG2, 0x30);
+  this->write_register_(CC1101_MDMCFG1, 0x02);
+  this->write_register_(CC1101_MDMCFG0, 0xF8);
+  this->write_register_(CC1101_DEVIATN, 0x00);
+  this->write_register_(CC1101_MCSM1, 0x3F);
+  this->write_register_(CC1101_MCSM0, 0x18);
+  this->write_register_(CC1101_FOCCFG, 0x17);
+  this->write_register_(CC1101_BSCFG, 0x6C);
+  this->write_register_(CC1101_AGCCTRL2, 0x03);
+  this->write_register_(CC1101_AGCCTRL1, 0x40);
+  this->write_register_(CC1101_AGCCTRL0, 0x91);
+  this->write_register_(CC1101_FREND1, 0xB6);
+  this->write_register_(CC1101_FREND0, 0x10);
+  this->write_register_(CC1101_FSCAL3, 0xE9);
+  this->write_register_(CC1101_FSCAL2, 0x2A);
+  this->write_register_(CC1101_FSCAL1, 0x00);
+  this->write_register_(CC1101_FSCAL0, 0x1F);
+  this->write_register_(CC1101_TEST2, 0x88);
+  this->write_register_(CC1101_TEST1, 0x31);
+  this->write_register_(CC1101_TEST0, 0x09);
+  this->strobe_(CC1101_SCAL);
+  delay(1);
+  error.clear();
+  return true;
+}
+
+void Proflame2TEmbedComponent::set_rmt_pulse_capture_enabled_(bool value) {
+  if (this->rx_rmt_pulse_capture_enabled_ == value) {
+    return;
+  }
+  if (!value) {
+    this->rx_rmt_pulse_capture_enabled_ = false;
+    this->rmt_ook_receiver_.end();
+    this->strobe_(CC1101_SIDLE);
+    if (this->cc1101_gdo0_pin_ != nullptr) {
+      this->cc1101_gdo0_pin_->pin_mode(gpio::FLAG_OUTPUT);
+      this->cc1101_gdo0_pin_->digital_write(false);
+    }
+    std::string error;
+    this->apply_async_ook_registers_(error, false);
+    ESP_LOGI(TAG, "RX RMT pulse capture disabled");
+    this->refresh_status_text_();
+    return;
+  }
+  if (this->cc1101_gdo0_pin_ == nullptr) {
+    ESP_LOGW(TAG, "RX RMT pulse capture enable failed reason=gdo0_pin_unavailable");
+    return;
+  }
+  if (!this->cc1101_gdo0_pin_->is_internal()) {
+    ESP_LOGW(TAG, "RX RMT pulse capture enable failed reason=gdo0_pin_not_internal");
+    return;
+  }
+  auto *gdo0_pin = static_cast<InternalGPIOPin *>(this->cc1101_gdo0_pin_);
+  const int gdo0_gpio = gdo0_pin->get_pin();
+  std::string error;
+  if (!this->is_radio_initialized() && !this->initialize_radio_(&error)) {
+    ESP_LOGW(TAG, "RX RMT pulse capture enable failed reason=%s", error.empty() ? "radio_init_failed" : error.c_str());
+    return;
+  }
+  if (!this->configure_rmt_pulse_capture_mode_(error)) {
+    ESP_LOGW(TAG, "RX RMT pulse capture enable failed reason=%s", error.empty() ? "rmt_radio_config_failed" : error.c_str());
+    return;
+  }
+  this->cc1101_gdo0_pin_->pin_mode(gpio::FLAG_INPUT);
+  if (!this->rmt_ook_receiver_.begin(gdo0_gpio, error)) {
+    ESP_LOGW(TAG, "RX RMT pulse capture enable failed reason=%s", error.empty() ? "rmt_begin_failed" : error.c_str());
+    this->cc1101_gdo0_pin_->pin_mode(gpio::FLAG_OUTPUT);
+    this->cc1101_gdo0_pin_->digital_write(false);
+    std::string restore_error;
+    this->apply_async_ook_registers_(restore_error, false);
+    return;
+  }
+  this->strobe_(CC1101_SRX);
+  this->rx_rmt_pulse_capture_enabled_ = true;
+  ESP_LOGI(TAG, "RX RMT pulse capture enabled gpio=%d resolution_hz=%" PRIu32 " idle_end_ms=%u",
+           gdo0_gpio, RmtOokReceiver::RESOLUTION_HZ,
+           static_cast<unsigned>(RmtOokReceiver::IDLE_END_NS / 1000000U));
+  this->refresh_status_text_();
+}
+
+void Proflame2TEmbedComponent::poll_rmt_pulse_capture_() {
+  if (this->tx_in_progress_ || this->radio_runtime_state_ == RadioRuntimeState::TX_ACTIVE) {
+    return;
+  }
+  RmtOokCapture capture{};
+  std::string error;
+  if (!this->rmt_ook_receiver_.poll(capture, error)) {
+    if (!error.empty()) {
+      ESP_LOGD(TAG, "RX RMT pulse capture discarded reason=%s", error.c_str());
+    }
+    return;
+  }
+  this->publish_rmt_pulse_capture_(capture);
+}
+
+void Proflame2TEmbedComponent::publish_rmt_pulse_capture_(const RmtOokCapture& capture) {
+  const uint32_t export_id = ++this->rx_rmt_pulse_capture_sequence_;
+  const uint16_t byte_count = static_cast<uint16_t>((capture.pcm_bit_count + 7U) / 8U);
+  std::string payload_hex;
+  payload_hex.reserve(static_cast<size_t>(byte_count) * 2U);
+  for (uint16_t index = 0; index < byte_count; index++) {
+    append_hex_byte_(payload_hex, capture.pcm_bytes[index]);
+  }
+  ESP_LOGD(TAG,
+           "RX RMT pulse capture schema=2 capture_id=%" PRIu32
+           " pcm_bits=%u symbols=%u transitions=%u pcm_hex=%s",
+           export_id, capture.pcm_bit_count, capture.symbol_count, capture.transition_count, payload_hex.c_str());
+  this->fire_homeassistant_event("esphome.proflame2_rx_packet",
+                                 {
+                                     {"schema_version", "2"},
+                                     {"protocol", "proflame2"},
+                                     {"event_kind", "pulse_capture"},
+                                     {"artifact_class", "raw_ook_pulse_window"},
+                                     {"source", "lilygo_cc1101_gdo0_rmt"},
+                                     {"payload_hex", payload_hex},
+                                     {"packet_count", std::to_string(export_id)},
+                                     {"freq_hz", std::to_string(this->rx_frequency_hz_)},
+                                     {"device_tick_ms", std::to_string(millis())},
+                                     {"capture_mode", "cc1101_gdo0_rmt_pcm"},
+                                     {"pcm_bit_length", std::to_string(capture.pcm_bit_count)},
+                                     {"symbol_count", std::to_string(capture.symbol_count)},
+                                     {"transition_count", std::to_string(capture.transition_count)},
+                                 });
+}
+
 void Proflame2TEmbedComponent::reset_rx_fifo_rolling_capture_(uint32_t enable_tick_ms) {
   this->rx_fifo_capture_export_busy_ = false;
   this->rx_fifo_.reset(enable_tick_ms);
@@ -1004,13 +1205,15 @@ bool Proflame2TEmbedComponent::dump_rx_fifo_rolling_capture_(const char* reason)
   const bool strict_active_listener = this->rx_active_listener_filter_configured_;
 
 #if PROFLAME2_TEMBED_DEBUG
-  ESP_LOGD(TAG,
-           "RX fifo probe begin schema=2 probe_id=%" PRIu32
-           " artifact_class=experimental_fifo_probe source=cc1101_rx_fifo"
-           " capture_mode=rolling_fifo_trailing_window profile=%s frequency_hz=%" PRIu32 " data_rate_bps=%" PRIu32
-           " requested_duration_ms=%" PRIu32,
-           export_id, this->rx_fifo_profile_name_(), this->rx_frequency_hz_, this->data_rate_bps_,
-           RX_FIFO_ROLLING_EXPORT_WINDOW_MS);
+  if (this->rx_fifo_debug_export_enabled_) {
+    ESP_LOGD(TAG,
+             "RX fifo probe begin schema=2 probe_id=%" PRIu32
+             " artifact_class=experimental_fifo_probe source=cc1101_rx_fifo"
+             " capture_mode=rolling_fifo_trailing_window profile=%s frequency_hz=%" PRIu32 " data_rate_bps=%" PRIu32
+             " requested_duration_ms=%" PRIu32,
+             export_id, this->rx_fifo_profile_name_(), this->rx_frequency_hz_, this->data_rate_bps_,
+             RX_FIFO_ROLLING_EXPORT_WINDOW_MS);
+  }
 #endif
 
 #if PROFLAME2_TEMBED_DEBUG
@@ -1027,14 +1230,16 @@ bool Proflame2TEmbedComponent::dump_rx_fifo_rolling_capture_(const char* reason)
     char byte_hex[3];
     snprintf(byte_hex, sizeof(byte_hex), "%02X", selected_bytes[index]);
 #if PROFLAME2_TEMBED_DEBUG
-    hex += byte_hex;
+    if (this->rx_fifo_debug_export_enabled_) {
+      hex += byte_hex;
+    }
 #endif
     if (!strict_active_listener) {
       event_payload_hex += byte_hex;
     }
 #if PROFLAME2_TEMBED_DEBUG
     const uint16_t emitted_count = static_cast<uint16_t>(index + 1U);
-    if ((emitted_count % FIFO_EXPORT_CHUNK_BYTES) == 0U) {
+    if (this->rx_fifo_debug_export_enabled_ && (emitted_count % FIFO_EXPORT_CHUNK_BYTES) == 0U) {
       ESP_LOGD(TAG, "RX fifo probe chunk schema=2 probe_id=%" PRIu32 " chunk=%u offset=%u count=%u hex=%s", export_id,
                chunk_index++, chunk_offset, static_cast<unsigned>(FIFO_EXPORT_CHUNK_BYTES), hex.c_str());
       chunk_offset = emitted_count;
@@ -1043,7 +1248,7 @@ bool Proflame2TEmbedComponent::dump_rx_fifo_rolling_capture_(const char* reason)
 #endif
   }
 #if PROFLAME2_TEMBED_DEBUG
-  if (!hex.empty()) {
+  if (this->rx_fifo_debug_export_enabled_ && !hex.empty()) {
     ESP_LOGD(TAG, "RX fifo probe chunk schema=2 probe_id=%" PRIu32 " chunk=%u offset=%u count=%u hex=%s", export_id,
              chunk_index, chunk_offset, static_cast<unsigned>(selected_count - chunk_offset), hex.c_str());
   }
@@ -1082,6 +1287,7 @@ bool Proflame2TEmbedComponent::dump_rx_fifo_rolling_capture_(const char* reason)
   }
 
 #if PROFLAME2_TEMBED_DEBUG
+  if (this->rx_fifo_debug_export_enabled_) {
   ESP_LOGD(TAG,
            "RX fifo probe meta window schema=2 probe_id=%" PRIu32 " export_window_ms=%" PRIu32
            " export_window_start_tick_ms=%" PRIu32 " export_window_end_tick_ms=%" PRIu32
@@ -1131,6 +1337,7 @@ bool Proflame2TEmbedComponent::dump_rx_fifo_rolling_capture_(const char* reason)
            "RX fifo probe end schema=2 probe_id=%" PRIu32
            " ok=YES failure_reason=none byte_count=%u buffer_full=NO rx_fifo_overflow=%s",
            export_id, selected_count, YESNO(this->rx_fifo_.hardware_overflow()));
+  }
 #endif
   this->fire_homeassistant_event("esphome.proflame2_rx_packet",
                                  {
@@ -1341,6 +1548,11 @@ void Proflame2TEmbedComponent::increment_rx_transport_unavailable_() {
 }
 
 void Proflame2TEmbedComponent::restore_rx_after_tx_if_needed_() {
+  if (this->rx_rmt_pulse_paused_for_tx_) {
+    this->rx_rmt_pulse_paused_for_tx_ = false;
+    this->set_rmt_pulse_capture_enabled_(true);
+    return;
+  }
   if (!this->rx_fifo_paused_for_tx_) {
     return;
   }
@@ -2370,6 +2582,12 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
     this->publish_telemetry_();
     return false;
   }
+  if (this->rx_rmt_pulse_capture_enabled_) {
+    this->rx_rmt_pulse_paused_for_tx_ = true;
+    this->increment_rx_suppressed_for_tx_();
+    ESP_LOGI(TAG, "TX request pauses RMT pulse capture");
+    this->set_rmt_pulse_capture_enabled_(false);
+  }
   if (this->rx_fifo_capture_enabled_) {
     this->rx_fifo_paused_for_tx_ = true;
     this->rx_fifo_capture_configured_ = false;
@@ -2415,6 +2633,8 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
     this->last_error_ = "tx_busy";
     this->last_tx_result_ = "error:tx_busy";
     ESP_LOGW(TAG, "TX rejected request_id=%s reason=tx_busy queue_full", request_id.c_str());
+    this->restore_rx_after_tx_if_needed_();
+    this->refresh_status_text_();
     this->publish_telemetry_();
     return false;
   }
@@ -2598,6 +2818,9 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
   this->cc1101_version_ = format_hex_byte_(result.cc1101_version);
   this->last_marcstate_before_tx_ = format_hex_byte_(result.marcstate_before_tx);
   this->last_marcstate_after_tx_ = format_hex_byte_(result.marcstate_after_tx);
+  // The radio worker has completed. Restore the selected listener before any
+  // completion UI/logging exposes the controller as ready for remote input.
+  this->restore_rx_after_tx_if_needed_();
 
   if (!result.ok) {
     this->tx_failure_count_++;
@@ -2615,7 +2838,6 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
     this->mark_display_activity_(this->display_wake_on_activity_);
     ESP_LOGE(TAG, "TX failed request_id=%s elapsed_ms=%" PRIu32 " error=%s",
              string_from_buffer_(result.request_id).c_str(), this->last_tx_elapsed_ms_, this->last_error_.c_str());
-    this->restore_rx_after_tx_if_needed_();
     this->refresh_status_text_();
     this->publish_telemetry_();
     return;
@@ -2668,7 +2890,6 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
              this->last_marcstate_after_tx_.c_str(), this->cc1101_partnum_.c_str(), this->cc1101_version_.c_str());
   }
   this->store_deferred_debug_trace_(result.timing, result.tx_mode);
-  this->restore_rx_after_tx_if_needed_();
   this->publish_telemetry_();
 }
 

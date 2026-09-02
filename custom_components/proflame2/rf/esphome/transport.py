@@ -118,7 +118,7 @@ ESPHOME_RX_TRANSPORT_UNAVAILABLE_COUNT_ENTITY_OBJECT_ID = "proflame2_rx_transpor
 ESPHOME_RX_LAST_REJECTION_SNAPSHOT_ENTITY_OBJECT_ID = "proflame2_rx_last_rejection_snapshot"
 ESPHOME_RX_EVENT_TYPE = "esphome.proflame2_rx_packet"
 _SUPPORTED_RX_SCHEMA_VERSIONS = {"1", "2"}
-_SUPPORTED_RX_EVENT_KINDS = {"rx_packet", "rx_debug_sample", "fifo_capture"}
+_SUPPORTED_RX_EVENT_KINDS = {"rx_packet", "rx_debug_sample", "fifo_capture", "pulse_capture"}
 _RX_CAPTURE_METADATA_STRING_KEYS = (
     "schema_version",
     "protocol",
@@ -142,6 +142,8 @@ _RX_CAPTURE_METADATA_VALUE_KEYS = (
     "rolling_history_overflow",
     "dropped_required_window_byte",
     "post_last_byte_quiet_ms",
+    "pcm_bit_length",
+    "symbol_count",
     "remote_id",
     "cmd1",
     "cmd2",
