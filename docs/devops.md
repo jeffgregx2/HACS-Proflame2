@@ -64,34 +64,36 @@ That target creates/uses `./.venv-esphome/bin/python` and installs
 
 ## Release A Version
 
-Use this flow when promoting `dev` to `main` and creating a HACS/ESPHome release.
-The example below uses `v0.4.0`; replace it with the target version.
+Use this flow when creating a HACS/ESPHome release. Stable releases are promoted
+from `dev` to `main`; an isolated beta may be released from its validated
+`issue-*` branch. The example below uses `v0.4.0`; replace it with the target
+version.
 
-### 1. Stamp Documentation Links For `dev`
+### 1. Stamp Documentation Links For The Source Branch
 
-Before pushing a promoted branch, stamp repository documentation links to the
-branch that will contain the documentation:
+Before pushing the release source branch, stamp repository documentation links
+to the branch that contains the documentation:
 
 ```bash
-./.venv/bin/python scripts/stamp_docs_ref.py --ref dev
+./.venv/bin/python scripts/stamp_docs_ref.py --ref <source-branch>
 git diff -- custom_components/proflame2/manifest.json custom_components/proflame2/docs_urls.py
 ```
 
-This keeps Home Assistant help links and config-flow guide links resolvable from
-the branch being tested. The links will resolve on GitHub after the stamped
-branch content is pushed.
+This keeps Home Assistant help links and config-flow guide links resolvable while
+the branch is being tested. The release workflow replaces these links with the
+immutable release tag when it stamps the release version.
 
 Pushes to any branch also run the **Documentation Links** workflow. The workflow
 stamps and commits the correct branch ref automatically if a push left the links
 pointing somewhere else. Pull requests validate that links point at the source
 branch, so branch docs can be tested before merging.
 
-### 2. Push `dev`
+### 2. Push The Source Branch
 
 ```bash
-git checkout dev
+git checkout <source-branch>
 git status
-git push origin dev
+git push origin <source-branch>
 ```
 
 ### 3. Stamp The Release Version
@@ -99,34 +101,35 @@ git push origin dev
 In GitHub, run the **Stamp Release Version** workflow manually:
 
 - `version`: `0.4.0`
-- `ref`: `dev`
+- `ref`: `<source-branch>`
 
-The workflow commits the release version and branch documentation ref back to
-`dev` by updating:
+The workflow commits the release version and immutable tag documentation ref
+back to the selected source branch by updating:
 
 - `custom_components/proflame2/manifest.json`
 - `custom_components/proflame2/version.py`
 - `custom_components/proflame2/docs_urls.py`
 
-The documentation URL still points at the branch being stamped. For a normal
-release, the final tag is created from `main`, and release validation requires
-the tag contents to point at `main`.
+The documentation URL points at the future release tag, for example
+`v0.4.0`. Create that tag from the resulting commit. Release validation requires
+the tag contents to point at the same immutable tag.
 
 ### 4. Pull The Stamped Commit
 
 ```bash
-git checkout dev
-git pull origin dev
+git checkout <source-branch>
+git pull origin <source-branch>
 ```
 
-### 5. Open A Pull Request
+### 5. Promote A Stable Release Only
 
-Create a pull request from `dev` into `main`.
+For a beta, skip to tagging. For a stable release, create a pull request from
+`dev` into `main`.
 
 Wait for GitHub Actions to pass before merging. This validates the integration
 and ESPHome firmware configuration before `main` is updated.
 
-### 6. Merge And Sync `main`
+### 6. Merge And Sync `main` For A Stable Release
 
 After the PR is merged:
 
@@ -135,26 +138,21 @@ git checkout main
 git pull origin main
 ```
 
-Wait for the **Documentation Links** workflow on `main` to finish. If it stamped
-the documentation links to `main`, pull that commit before tagging:
-
-```bash
-git pull origin main
-```
-
 ### 7. Tag The Release
 
-Create the tag from the merged, version-stamped `main` commit:
+For a beta, create the tag from the version-stamped source branch. For a stable
+release, create it from the merged, version-stamped `main` commit:
 
 ```bash
 git tag -a v0.4.0 -m "Release v0.4.0"
 git push origin v0.4.0
 ```
 
-Do not tag before the version-stamp commit is merged to `main`. The release tag
-must point at the exact commit users should install.
+Do not tag before the version-stamp commit is available on the release source
+branch. The release tag must point at that exact commit, which already contains
+documentation links to the tag itself.
 
-### 7. Create The GitHub Release
+### 8. Create The GitHub Release
 
 In GitHub, create a release from tag `v0.4.0`.
 

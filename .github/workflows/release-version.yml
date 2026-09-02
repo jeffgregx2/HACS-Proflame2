@@ -69,7 +69,7 @@ jobs:
           PY
 
       - name: Stamp documentation URLs
-        run: python3 scripts/stamp_docs_ref.py --ref "${{ github.event.inputs.ref }}"
+        run: python3 scripts/stamp_docs_ref.py --ref "v${{ steps.resolve.outputs.version }}"
 
       - name: Commit stamped version
         env:

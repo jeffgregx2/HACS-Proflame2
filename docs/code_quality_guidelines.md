@@ -310,11 +310,12 @@ Default policy:
 
 Branch and release flow:
 
-- Treat `dev` as the working release-preparation branch and `main` as the
-  published stable branch.
-- For beta releases, stamp `dev` to `X.Y.Z-betaN`, validate it, and publish the
-  prerelease tag from `dev`. Do not merge beta stamp commits into `main` as a
-  final release.
+- Treat `dev` as the normal working release-preparation branch and `main` as
+  the published stable branch. A validated `issue-*` branch may be used for an
+  isolated beta when merging it into `dev` is not yet appropriate.
+- For beta releases, stamp the intended source branch to `X.Y.Z-betaN`, then
+  publish the prerelease tag from that stamped commit. The release workflow
+  stamps user-facing documentation links to the immutable release tag.
 - For final releases, start from the validated `dev` code line, stamp `dev` to
   `X.Y.Z`, merge `dev` into `main`, then create the final release tag from
   `main`.
