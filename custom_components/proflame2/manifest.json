@@ -5,7 +5,7 @@
     "@jeffgregx2"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/jeffgregx2/HACS-Proflame2/blob/issue-15-rmt-pulse-fallback/docs/add_fireplace_profile.md#add-fireplace-profile-options",
+  "documentation": "https://github.com/jeffgregx2/HACS-Proflame2/blob/v0.6.0-beta1/docs/add_fireplace_profile.md#add-fireplace-profile-options",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/jeffgregx2/HACS-Proflame2/issues",
   "loggers": [
