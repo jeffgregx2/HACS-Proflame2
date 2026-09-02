@@ -29,8 +29,11 @@ jobs:
             prerelease="${{ github.event.release.prerelease }}"
           fi
 
+          documentation_ref="${tag_name}"
+
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "documentation_ref=${documentation_ref}" >> "$GITHUB_OUTPUT"
 
       - name: Check out release tag
         uses: actions/checkout@v5
@@ -91,4 +94,4 @@ jobs:
           PY
 
       - name: Validate release documentation links
-        run: python3 scripts/stamp_docs_ref.py --check --ref main
+        run: python3 scripts/stamp_docs_ref.py --check --ref "${{ steps.release.outputs.documentation_ref }}"
