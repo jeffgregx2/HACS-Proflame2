@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -29,11 +30,13 @@ from custom_components.proflame2.learning import (
     async_capture_next_learning_packet,
     async_close_learning_session,
     async_create_learning_backend,
+    async_enable_extended_frame_diagnostics,
     async_learn_remote_profile,
     async_run_learning_with_backend,
     async_start_learning_session,
     derive_learn_result_from_session,
 )
+from custom_components.proflame2.packet_debug import PacketDebugLogPaths
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.base import BackendCapabilities, ReceiveStatus, RFBackend
 from custom_components.proflame2.rf.esphome.contract import ESPHomeRXEvent
@@ -515,6 +518,83 @@ def test_guided_learning_plain_duplicate_still_ignored_outside_restore() -> None
         assert second.success is False
         assert second.error_code == ERROR_TIMEOUT
         assert len(session.packets) == 1
+
+    asyncio.run(_run())
+
+
+def test_extended_frame_diagnostics_promote_buffered_records_once(monkeypatch) -> None:
+    """Fallback logging must retain prior extended frames without duplicate entries."""
+
+    class _FakePacketLogger:
+        def __init__(self) -> None:
+            self.info_messages: list[str] = []
+
+        def info(self, message: str, *args) -> None:
+            self.info_messages.append(message % args if args else message)
+
+    async def _run() -> None:
+        backend = FakeRFBackend()
+        await backend.connect()
+        backend.queue_packets(
+            _packet(remote_id=0x08E905, cmd1=0x81, err1=0x15, cmd2=0x06, err2=0xE6),
+            _packet(remote_id=0x08E905, cmd1=0x80, err1=0x15, cmd2=0x06, err2=0xE6),
+        )
+        session = LearnSession(
+            backend=backend,
+            step_timeout=0.1,
+            receive_timeout=0.01,
+            hass=object(),
+            prompt_index=0,
+            prompt_label="power_on",
+        )
+        fake_packet_logger = _FakePacketLogger()
+
+        async def fake_enable_packet_debug_logging(_hass):
+            return PacketDebugLogPaths(
+                primary_log_path=Path("/tmp/proflame2_debug.log"),
+                decode_failure_log_path=Path("/tmp/proflame2_decode_failures.log"),
+            )
+
+        monkeypatch.setattr(
+            "custom_components.proflame2.learning.async_enable_packet_debug_logging",
+            fake_enable_packet_debug_logging,
+        )
+        monkeypatch.setattr(
+            "custom_components.proflame2.learning.get_packet_debug_logger",
+            lambda: fake_packet_logger,
+        )
+
+        backend.last_fifo_semantic_artifact = {
+            "event_id": "extended-1",
+            "capture_metadata": "invalid-metadata",
+            "raw_payload_hex": "e55959",
+            "validation_notes": ("frame_format=extended_10_word_truncated_end_guard",),
+        }
+        first = await async_capture_next_learning_packet(session)
+        assert isinstance(first, ProflamePacket)
+        assert session.extended_frame_records[0]["pcm_bit_length"] is None
+        assert fake_packet_logger.info_messages == []
+
+        assert await async_enable_extended_frame_diagnostics(session) == "/tmp/proflame2_debug.log"
+        assert len(fake_packet_logger.info_messages) == 1
+
+        session.prompt_index = 1
+        session.prompt_label = "power_off"
+        backend.last_fifo_semantic_artifact = {
+            "event_id": "extended-2",
+            "capture_metadata": {"pcm_bit_length": "259"},
+            "raw_payload_hex": "a59a56",
+            "validation_notes": ("frame_format=extended_10_word_truncated_end_guard",),
+        }
+        second = await async_capture_next_learning_packet(session)
+        assert isinstance(second, ProflamePacket)
+
+        assert await async_enable_extended_frame_diagnostics(session) == "/tmp/proflame2_debug.log"
+        captures = [message for message in fake_packet_logger.info_messages if "extended_frame_capture" in message]
+        assert len(captures) == 2
+        assert "event_id': 'extended-1'" in captures[0]
+        assert "event_id': 'extended-2'" in captures[1]
+        assert session.extended_frame_records_logged == 2
 
     asyncio.run(_run())
 

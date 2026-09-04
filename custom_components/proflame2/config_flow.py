@@ -61,6 +61,7 @@ from .learning import (
     DEFAULT_LEARN_TIMEOUT_SECONDS,
     DEFAULT_RECEIVE_TIMEOUT_SECONDS,
     ERROR_BACKEND_UNAVAILABLE,
+    ERROR_CONTRADICTORY_PROFILE,
     MIN_UNIQUE_CMD1_SAMPLES,
     MIN_UNIQUE_CMD2_SAMPLES,
     MIN_VALID_PACKETS,
@@ -68,6 +69,7 @@ from .learning import (
     LearnSession,
     async_capture_next_learning_packet,
     async_close_learning_session,
+    async_enable_extended_frame_diagnostics,
     async_start_learning_session,
     derive_learn_result_from_session,
 )
@@ -224,6 +226,16 @@ EXTRA_LEARN_PROMPT = (
     "Press Flame Down or Flame Up once more so the integration can collect an additional Cmd2-changing packet if needed.",
 )
 
+EXTENDED_DIAGNOSTIC_PROMPTS: tuple[tuple[str, str], ...] = (
+    ("diagnostic_flame_change", "Press Flame Down or Flame Up once."),
+    ("diagnostic_light_change", "Press a Light control once. If unavailable, press Flame Down or Flame Up once."),
+    ("diagnostic_aux_change", "Toggle AUX once. If unavailable, press a Flame control once."),
+    (
+        "diagnostic_mode_change",
+        "Change thermostat, pilot, or fan mode once. If unavailable, press a Flame control once.",
+    ),
+)
+
 RTL433_MANUAL_PROMPTS: tuple[tuple[str, str], ...] = (
     ("power_on", "Press **Power** once, then paste the rtl_433 decoded line for that press."),
     ("temp_down", "Press **Temp Down** once, then paste the rtl_433 decoded line for that press."),
@@ -232,9 +244,7 @@ RTL433_MANUAL_PROMPTS: tuple[tuple[str, str], ...] = (
     ("temp_up_again", "Press **Temp Up** once more, then paste the rtl_433 decoded line for that press."),
 )
 RTL433_MANUAL_COMMAND = "rtl_433 -f 315M -R 207 -M level -F json"
-RTL433_MANUAL_LEARNING_GUIDE = (
-    f"[rtl_433-assisted manual learning guide]({rtl433_manual_learning_url()})"
-)
+RTL433_MANUAL_LEARNING_GUIDE = f"[rtl_433-assisted manual learning guide]({rtl433_manual_learning_url()})"
 
 
 class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -247,6 +257,9 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _learn_task: asyncio.Task[ProflamePacket | LearnResult] | None = None
     _learn_session: LearnSession | None = None
     _learn_prompt_index: int = 0
+    _extended_diagnostic_active: bool = False
+    _extended_diagnostic_log_path: str | None = None
+    _extended_diagnostic_task: asyncio.Task[str | None] | None = None
     _manual_pending_data: dict[str, Any] | None = None
     _manual_pending_options: dict[str, Any] | None = None
     _manual_rtl433_input: dict[str, Any] | None = None
@@ -518,6 +531,9 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_learn_failed()
         self._learn_session = learn_session
         self._learn_prompt_index = 0
+        self._extended_diagnostic_active = False
+        self._extended_diagnostic_log_path = None
+        self._extended_diagnostic_task = None
         return await self.async_step_learn_prompt()
 
     async def async_step_learn_prompt(self, user_input: dict[str, Any] | None = None):
@@ -526,10 +542,27 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._learn_input is None or self._learn_session is None:
             return await self.async_step_learn()
 
+        if self._learn_task is not None:
+            if self._learn_task.done():
+                return self.async_show_progress_done(next_step_id="learn_progress")
+            return self.async_show_progress(
+                step_id="learn_progress",
+                progress_action="learn_remote",
+                description_placeholders={
+                    "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
+                    "instruction": self._current_learn_instruction(),
+                },
+                progress_task=self._learn_task,
+            )
+
+        if self._extended_diagnostic_task is not None:
+            self._extended_diagnostic_log_path = await self._extended_diagnostic_task
+            self._extended_diagnostic_task = None
+
         self._learn_session.prompt_index = self._learn_prompt_index
         self._learn_session.prompt_label = self._current_learn_prompt_label()
         self._learn_session.prompt_instruction = self._current_learn_instruction()
-        if self._learn_session.debug_logging_enabled:
+        if self._learn_session.packet_debug_logging_enabled:
             get_packet_debug_logger().info(
                 "config_flow: prompt_index=%s instruction=%s",
                 self._learn_prompt_index,
@@ -574,8 +607,31 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         self._learn_prompt_index += 1
+        if self._extended_diagnostic_active:
+            if self._learn_prompt_index < len(EXTENDED_DIAGNOSTIC_PROMPTS):
+                return self.async_show_progress_done(next_step_id="learn_prompt")
+            self._learn_result = LearnResult(
+                success=False,
+                error=(
+                    "This remote uses an extended frame whose integrity format is not yet supported. "
+                    f"Diagnostic captures were saved to {self._extended_diagnostic_log_path}. Attach that file to a bug report."
+                ),
+            )
+            await self._async_dispose_learning_session()
+            return self.async_show_progress_done(next_step_id="learn_failed")
         maybe_result = derive_learn_result_from_session(self._learn_session)
         if maybe_result is not None:
+            if (
+                not maybe_result.success
+                and maybe_result.error_code == ERROR_CONTRADICTORY_PROFILE
+                and self._learn_session.extended_frame_records
+            ):
+                self._extended_diagnostic_active = True
+                self._learn_prompt_index = 0
+                self._extended_diagnostic_task = self.hass.async_create_task(
+                    async_enable_extended_frame_diagnostics(self._learn_session)
+                )
+                return self.async_show_progress_done(next_step_id="learn_prompt")
             self._learn_result = maybe_result
             await self._async_dispose_learning_session()
             return self.async_show_progress_done(
@@ -654,6 +710,9 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_learn_failed()
         self._learn_session = learn_session
         self._learn_prompt_index = 0
+        self._extended_diagnostic_active = False
+        self._extended_diagnostic_log_path = None
+        self._extended_diagnostic_task = None
         return await self.async_step_learn_prompt()
 
     async def _async_create_profile_entry(
@@ -854,6 +913,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _current_learn_instruction(self) -> str:
         """Return the current guided-learning prompt."""
 
+        if self._extended_diagnostic_active:
+            return EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][1]
         if self._learn_prompt_index < len(LEARN_PROMPTS):
             instruction = LEARN_PROMPTS[self._learn_prompt_index][1]
         else:
@@ -863,6 +924,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _current_learn_prompt_label(self) -> str:
         """Return the short label for the current guided-learning prompt."""
 
+        if self._extended_diagnostic_active:
+            return EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][0]
         if self._learn_prompt_index < len(LEARN_PROMPTS):
             return LEARN_PROMPTS[self._learn_prompt_index][0]
         return EXTRA_LEARN_PROMPT[0]
@@ -870,6 +933,9 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _async_dispose_learning_session(self) -> None:
         """Close the current guided-learning backend session, if any."""
 
+        if self._extended_diagnostic_task is not None:
+            self._extended_diagnostic_log_path = await self._extended_diagnostic_task
+            self._extended_diagnostic_task = None
         if self._learn_session is not None:
             await async_close_learning_session(self._learn_session)
             self._learn_session = None

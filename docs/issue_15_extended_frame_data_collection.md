@@ -4,6 +4,20 @@ Use this procedure to collect evidence for an extended Proflame2 remote whose
 ten-word frames do not use the legacy C/D integrity relationship. This is a
 diagnostic capture only; do not start guided learning during the procedure.
 
+## Automatic Learning Fallback
+
+Normal guided learning now recognizes an accepted extended RMT frame when it
+cannot derive a consistent C/D profile. It automatically enables the packet
+debug log at `/config/proflame2_debug.log`, preserves the already accepted
+extended captures, and asks for four additional labeled state changes: flame,
+light, AUX, and thermostat/pilot/fan mode. If the alternate integrity format
+is still not supported, learning fails without creating a fireplace profile
+and identifies that log for attachment to the issue report.
+
+The automatic fallback is the preferred first diagnostic path. Use the manual
+matrix below when more state coverage is required to reverse engineer the
+extended words or their integrity relationship.
+
 ## Setup
 
 1. Install firmware containing the Issue 15 RMT pulse path.

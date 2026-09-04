@@ -134,6 +134,10 @@ class LearnSession:
     receive_outcome_counts: dict[str, int] = field(default_factory=dict)
     receive_reason_counts: dict[str, int] = field(default_factory=dict)
     last_receive_status_snapshot: dict[str, object | None] = field(default_factory=dict)
+    extended_frame_records: list[dict[str, object]] = field(default_factory=list)
+    extended_frame_records_logged: int = 0
+    packet_debug_logging_enabled: bool = False
+    packet_debug_log_path: str | None = None
     _seen_frames: set[tuple[int, int, int, int, int]] = field(default_factory=set)
 
 
@@ -284,6 +288,8 @@ async def async_start_learning_session(
         step_timeout=timeout,
         receive_timeout=receive_timeout,
         debug_logging_enabled=debug_logging,
+        packet_debug_logging_enabled=debug_logging,
+        packet_debug_log_path=str(log_paths.primary_log_path) if debug_logging else None,
         hass=hass,
     )
 
@@ -313,7 +319,7 @@ async def async_close_learning_session(session: LearnSession | None) -> None:
                     _LOGGER.exception("Proflame2 learning-mode shutdown update failed")
             await session.backend.close()
         finally:
-            if session.debug_logging_enabled and session.hass is not None:
+            if session.packet_debug_logging_enabled and session.hass is not None:
                 get_packet_debug_logger().info("Closed packet debug learning session")
                 await async_disable_packet_debug_logging(session.hass)
             _LOGGER.info(
@@ -498,6 +504,54 @@ def _record_learning_packet_observed(
         packet.frame.cmd2,
         packet.frame.err2,
     )
+    artifact = getattr(session.backend, "last_fifo_semantic_artifact", None)
+    if not isinstance(artifact, dict):
+        return
+    notes = artifact.get("validation_notes")
+    if not isinstance(notes, tuple) or not any(str(note).startswith("frame_format=extended_10_word") for note in notes):
+        return
+    capture_metadata = artifact.get("capture_metadata")
+    record = {
+        "prompt_index": session.prompt_index,
+        "prompt_label": session.prompt_label,
+        "event_id": artifact.get("event_id"),
+        "pcm_bit_length": capture_metadata.get("pcm_bit_length") if isinstance(capture_metadata, dict) else None,
+        "pcm_hex": artifact.get("raw_payload_hex"),
+        "remote_id": f"{packet.remote_id:06x}",
+        "cmd1": f"{packet.frame.cmd1:02x}",
+        "cmd2": f"{packet.frame.cmd2:02x}",
+        "err1": f"{packet.frame.err1:02x}",
+        "err2": f"{packet.frame.err2:02x}",
+        "validation_notes": notes,
+    }
+    session.extended_frame_records.append(record)
+    if session.packet_debug_logging_enabled:
+        _log_unwritten_extended_frame_records(session)
+
+
+def _log_unwritten_extended_frame_records(session: LearnSession) -> None:
+    """Write each extended-frame record once after debug logging is available."""
+
+    for record in session.extended_frame_records[session.extended_frame_records_logged :]:
+        get_packet_debug_logger().info("extended_frame_capture schema=1 %s", record)
+    session.extended_frame_records_logged = len(session.extended_frame_records)
+
+
+async def async_enable_extended_frame_diagnostics(session: LearnSession) -> str | None:
+    """Persist accepted extended RMT frames before diagnostic prompts continue."""
+
+    if session.hass is None:
+        return None
+    if not session.packet_debug_logging_enabled:
+        paths = await async_enable_packet_debug_logging(session.hass)
+        session.packet_debug_logging_enabled = True
+        session.packet_debug_log_path = str(paths.primary_log_path)
+    else:
+        paths = None
+    _log_unwritten_extended_frame_records(session)
+    if session.packet_debug_log_path is not None:
+        return session.packet_debug_log_path
+    return str(paths.primary_log_path) if paths is not None else None
 
 
 def _ensure_learning_remote_id(
