@@ -60,6 +60,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          # The default pull_request checkout is GitHub's synthetic merge
+          # commit, whose documentation ref belongs to the base branch.
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Validate stamped documentation links
         run: python3 scripts/stamp_docs_ref.py --check --ref "${{ github.head_ref }}"

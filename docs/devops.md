@@ -161,3 +161,7 @@ In GitHub, create a release from tag `v0.4.0`.
 HACS uses the GitHub release as the installable integration release. ESPHome
 users can pin package references to the same tag, for example `v0.4.0`, when
 they want reproducible firmware builds.
+
+A final-version release may initially be marked as a GitHub prerelease while
+it receives final validation. Once validated, promote that same release; do not
+create a second tag or change the version solely to make it generally available.
