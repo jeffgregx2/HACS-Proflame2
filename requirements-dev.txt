@@ -8,6 +8,8 @@
 pytest>=8.4.2; python_version >= "3.13"
 pytest-asyncio>=0.23.1; python_version >= "3.13"
 pytest-cov>=6.0.0; python_version >= "3.13"
+# Exercise the currently supported Home Assistant runtime in the custom-component suite.
+homeassistant==2026.9.0; python_version >= "3.13"
 pytest-homeassistant-custom-component>=0.13.211,<0.14; python_version >= "3.13"
 black>=25.1.0; python_version >= "3.13"
 ruff>=0.8.0; python_version >= "3.13"

@@ -7,7 +7,6 @@ from collections import deque
 from pathlib import Path
 
 import pytest
-import voluptuous_serialize
 
 homeassistant = pytest.importorskip("homeassistant")
 pytest.importorskip("pytest_homeassistant_custom_component")
@@ -16,7 +15,6 @@ pytestmark = pytest.mark.ha
 
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import config_validation as cv
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.proflame2 import CONFIG_SCHEMA, async_setup
@@ -72,6 +70,17 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     """Enable loading integrations from the local custom_components directory."""
 
     yield
+
+
+def _form_schema_fields(data_schema):
+    """Return config-flow fields keyed by their submitted name.
+
+    Home Assistant 2026.9 uses probatio-backed schemas, which are consumed by
+    the frontend directly and are no longer compatible with the old standalone
+    voluptuous serializer used by these tests.
+    """
+
+    return {str(marker.schema): selector for marker, selector in data_schema.schema.items()}
 
 
 def _packet(
@@ -285,8 +294,8 @@ async def test_invalid_cd_value_is_rejected(hass) -> None:
     assert result["errors"] == {CONF_C1: "invalid_nibble"}
 
 
-async def test_manual_entry_form_schema_is_ui_serializable(hass) -> None:
-    """The manual-entry form schema should serialize for the frontend."""
+async def test_manual_entry_form_schema_exposes_fields(hass) -> None:
+    """The manual-entry form should expose fields to the HA frontend."""
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN,
@@ -301,11 +310,7 @@ async def test_manual_entry_form_schema_is_ui_serializable(hass) -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "manual"
-    serialized = voluptuous_serialize.convert(
-        result["data_schema"],
-        custom_serializer=cv.custom_serializer,
-    )
-    assert serialized
+    assert _form_schema_fields(result["data_schema"])
 
 
 async def test_manual_rtl433_learning_captures_buttons_then_confirms_remote_learned(hass) -> None:
@@ -449,16 +454,13 @@ async def test_manual_entry_form_exposes_only_hardware_backends_by_default(hass)
         user_input={"next_step_id": "manual"},
     )
 
-    serialized = voluptuous_serialize.convert(
-        result["data_schema"],
-        custom_serializer=cv.custom_serializer,
-    )
-    backend_field = next(field for field in serialized if field["name"] == CONF_BACKEND_TYPE)
-    option_values = {option["value"] for option in backend_field["selector"]["select"]["options"]}
+    fields = _form_schema_fields(result["data_schema"])
+    backend_field = fields[CONF_BACKEND_TYPE]
+    option_values = {option["value"] for option in backend_field.config["options"]}
     assert option_values == {BACKEND_YARDSTICK, BACKEND_ESPHOME}
-    assert not any(field["name"] == CONF_ESPHOME_ENTRY_ID for field in serialized)
-    assert not any(field["name"] == CONF_DEBUG_LOGGING for field in serialized)
-    assert not any(field["name"] == CONF_ACTIVE_LISTENING for field in serialized)
+    assert CONF_ESPHOME_ENTRY_ID not in fields
+    assert CONF_DEBUG_LOGGING not in fields
+    assert CONF_ACTIVE_LISTENING not in fields
 
 
 async def test_learning_form_includes_only_hardware_backends_by_default(hass) -> None:
@@ -473,15 +475,12 @@ async def test_learning_form_includes_only_hardware_backends_by_default(hass) ->
         user_input={"next_step_id": "learn"},
     )
 
-    serialized = voluptuous_serialize.convert(
-        result["data_schema"],
-        custom_serializer=cv.custom_serializer,
-    )
-    backend_field = next(field for field in serialized if field["name"] == CONF_BACKEND_TYPE)
-    option_values = {option["value"] for option in backend_field["selector"]["select"]["options"]}
+    fields = _form_schema_fields(result["data_schema"])
+    backend_field = fields[CONF_BACKEND_TYPE]
+    option_values = {option["value"] for option in backend_field.config["options"]}
     assert option_values == {BACKEND_YARDSTICK, BACKEND_ESPHOME}
-    assert not any(field["name"] == CONF_ESPHOME_ENTRY_ID for field in serialized)
-    assert not any(field["name"] == CONF_DEBUG_LOGGING for field in serialized)
+    assert CONF_ESPHOME_ENTRY_ID not in fields
+    assert CONF_DEBUG_LOGGING not in fields
 
 
 async def test_yaml_learning_debug_override_enables_initial_guided_learning_debug(hass, monkeypatch) -> None:
@@ -569,13 +568,9 @@ async def test_learning_esphome_entry_requires_linked_esphome_config_entry(hass)
     assert result["step_id"] == "learn_esphome"
     assert result["description_placeholders"] == {"setup_text": LILYGO_ESPHOME_LINK_HELP}
     assert "docs/lilygo_cc1101_controller.md" in LILYGO_ESPHOME_LINK_HELP
-    serialized = voluptuous_serialize.convert(
-        result["data_schema"],
-        custom_serializer=cv.custom_serializer,
-    )
-    assert [field["name"] for field in serialized] == [CONF_ESPHOME_ENTRY_ID]
-    esphome_field = serialized[0]
-    assert esphome_field["selector"]["select"]["options"] == [
+    fields = _form_schema_fields(result["data_schema"])
+    assert list(fields) == [CONF_ESPHOME_ENTRY_ID]
+    assert fields[CONF_ESPHOME_ENTRY_ID].config["options"] == [
         {"value": linked_entry.entry_id, "label": "LilyGO Controller"}
     ]
 
@@ -612,13 +607,9 @@ async def test_manual_esphome_entry_requires_linked_esphome_config_entry(hass) -
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "manual_esphome"
     assert result["description_placeholders"] == {"setup_text": LILYGO_ESPHOME_LINK_HELP}
-    serialized = voluptuous_serialize.convert(
-        result["data_schema"],
-        custom_serializer=cv.custom_serializer,
-    )
-    assert [field["name"] for field in serialized] == [CONF_ESPHOME_ENTRY_ID]
-    esphome_field = serialized[0]
-    assert esphome_field["selector"]["select"]["options"] == [
+    fields = _form_schema_fields(result["data_schema"])
+    assert list(fields) == [CONF_ESPHOME_ENTRY_ID]
+    assert fields[CONF_ESPHOME_ENTRY_ID].config["options"] == [
         {"value": linked_entry.entry_id, "label": "LilyGO Controller"}
     ]
 
