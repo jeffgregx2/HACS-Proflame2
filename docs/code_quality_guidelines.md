@@ -305,8 +305,9 @@ Default policy:
   further local work.
 - Do not create release tags until the stamped version files, branch state, and
   validation checks are consistent.
-- Release validation should verify tag format, prerelease/final release status,
-  and stamped version consistency.
+- Release validation should verify tag format, beta-release prerelease status,
+  and stamped version consistency. A final `X.Y.Z` release may be marked as a
+  GitHub prerelease while it receives final validation before promotion.
 
 Branch and release flow:
 
@@ -318,7 +319,8 @@ Branch and release flow:
   stamps user-facing documentation links to the immutable release tag.
 - For final releases, start from the validated `dev` code line, stamp `dev` to
   `X.Y.Z`, merge `dev` into `main`, then create the final release tag from
-  `main`.
+  `main`. It may initially be published as a GitHub prerelease for final
+  validation, then promoted without changing the tag.
 - After a final release, bring `dev` back in sync with `main` when needed so
   future work starts from the released baseline.
 - Avoid stamping `main` separately when `dev` already contains the intended

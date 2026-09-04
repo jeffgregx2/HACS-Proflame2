@@ -58,6 +58,7 @@ from custom_components.proflame2.profile import (
 from custom_components.proflame2.protocol.models import FireplaceFeatures
 from custom_components.proflame2.rf.registry import get_backend_definition, normalize_controller_id
 from custom_components.proflame2.version import (
+    DEFAULT_INTEGRATION_VERSION,
     ENABLE_FAKE_BACKEND_ENV,
     build_flavor,
     fake_backend_enabled,
@@ -394,16 +395,16 @@ def test_build_profile_id_slugifies_display_name() -> None:
     assert build_profile_id("Evening Relax") == "evening_relax"
 
 
-def test_build_metadata_defaults_to_current_beta_with_fake_disabled(monkeypatch) -> None:
-    """Current beta builds should default to dev flavor with Fake still hidden."""
+def test_build_metadata_defaults_to_current_release_with_fake_disabled(monkeypatch) -> None:
+    """The declared default release should keep Fake hidden."""
 
     monkeypatch.delenv("PROFLAME2_VERSION", raising=False)
     monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
     monkeypatch.delenv(ENABLE_FAKE_BACKEND_ENV, raising=False)
 
-    assert integration_version() == "0.5.4-beta3"
-    assert build_flavor() == "dev"
-    assert is_dev_build() is True
+    assert integration_version() == DEFAULT_INTEGRATION_VERSION
+    assert build_flavor() == "prod"
+    assert is_dev_build() is False
     assert fake_backend_enabled() is False
     assert available_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
     assert available_learning_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)

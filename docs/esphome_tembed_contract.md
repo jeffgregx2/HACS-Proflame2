@@ -56,6 +56,17 @@ HA -> ESPHome/native API -> CC1101
 
 Both consume the same HA-generated transmission plan.
 
+## Home Assistant Boundary
+
+The firmware uses ESPHome's native API, but the Proflame2 HA integration must
+interact with it through documented Home Assistant service, state-machine,
+entity-registry, and event-bus interfaces. It must not depend on ESPHome
+integration `runtime_data` objects or their in-memory service and state maps.
+
+Issue #17 records the migration from the legacy runtime-data transport and the
+required action-response contract:
+[Issue #17 Public Home Assistant / ESPHome Transport Design](issue_17_ha_esphome_public_transport_design.md).
+
 ## Persistent Radio Configuration
 
 Configuration is persistent endpoint state. It is not repeated on every TX call.

@@ -29,7 +29,11 @@ jobs:
             prerelease="${{ github.event.release.prerelease }}"
           fi
 
-          documentation_ref="${tag_name}"
+          if [[ "${tag_name}" == *-beta* ]]; then
+            documentation_ref="${tag_name}"
+          else
+            documentation_ref="main"
+          fi
 
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
@@ -65,8 +69,9 @@ jobs:
           is_beta = "-beta" in version
           if is_beta and not prerelease:
               raise SystemExit(f"Beta release tag {tag!r} must be marked as a GitHub prerelease.")
-          if not is_beta and prerelease:
-              raise SystemExit(f"Final release tag {tag!r} must not be marked as a GitHub prerelease.")
+          # A final version may be published as a GitHub prerelease while it
+          # receives final validation. Promoting that release later does not
+          # change its version or tag.
 
           manifest = json.loads(Path("custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
           manifest_version = manifest.get("version")
