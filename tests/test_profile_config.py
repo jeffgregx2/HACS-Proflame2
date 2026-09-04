@@ -425,6 +425,20 @@ def test_build_metadata_prod_release_override_hides_fake(monkeypatch) -> None:
     assert available_learning_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
 
 
+def test_build_metadata_beta_release_hides_fake(monkeypatch) -> None:
+    """Beta releases must retain production behavior by default."""
+
+    monkeypatch.setenv("PROFLAME2_VERSION", "0.6.0-beta1")
+    monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
+    monkeypatch.delenv(ENABLE_FAKE_BACKEND_ENV, raising=False)
+
+    assert build_flavor() == "prod"
+    assert is_dev_build() is False
+    assert fake_backend_enabled() is False
+    assert available_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
+    assert available_learning_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
+
+
 def test_fake_backend_requires_explicit_opt_in(monkeypatch) -> None:
     """Test fixtures may opt into Fake without exposing it by default."""
 

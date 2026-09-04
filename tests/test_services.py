@@ -40,10 +40,10 @@ from custom_components.proflame2.const import (
     SERVICE_DISPLAY_STATE_UPDATE,
 )
 from custom_components.proflame2.diagnostics import async_get_config_entry_diagnostics
+from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.base import SendResult
 from custom_components.proflame2.rf.yardstick import YardStickBackend
 from custom_components.proflame2.runtime import async_get_runtime_entries
-from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 
 
 @pytest.fixture(autouse=True)
