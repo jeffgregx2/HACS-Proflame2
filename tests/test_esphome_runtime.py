@@ -197,6 +197,7 @@ def _fake_esphome_runtime_data(
     repeat_count: int = 5,
     reported_repeat_count_override: int | None = None,
     execute_error: str | None = None,
+    device_entity_state_keys: bool = False,
 ):
     from collections import defaultdict
     from types import SimpleNamespace
@@ -230,8 +231,8 @@ def _fake_esphome_runtime_data(
         "proflame2_rx_transport_unavailable": _FakeESPHomeState(26, 7),
         "proflame2_rx_last_rejection_snapshot": _FakeESPHomeState(27, "stage=decode_failed"),
     }
-    info_map = {state.key: _FakeESPHomeInfo(object_id, state.key) for object_id, state in object_states.items()}
-    state_map = {state.key: state for state in object_states.values()}
+    info_map = {(0, state.key): _FakeESPHomeInfo(object_id, state.key) for object_id, state in object_states.items()}
+    state_map = {((0, state.key) if device_entity_state_keys else state.key): state for state in object_states.values()}
 
     runtime_data = SimpleNamespace(
         services={
@@ -452,8 +453,9 @@ async def test_service_path_reaches_esphome_mock_transport(hass) -> None:
     assert runtime_entry.last_send_result.backend_name == BACKEND_ESPHOME
 
 
-async def test_service_path_reaches_linked_esphome_native_action(hass) -> None:
-    linked_runtime_data = _fake_esphome_runtime_data()
+@pytest.mark.parametrize("device_entity_state_keys", [False, True])
+async def test_service_path_reaches_linked_esphome_native_action(hass, device_entity_state_keys: bool) -> None:
+    linked_runtime_data = _fake_esphome_runtime_data(device_entity_state_keys=device_entity_state_keys)
     linked_entry = _add_linked_esphome_entry(hass, linked_runtime_data)
     hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0
     entry = _add_entry(

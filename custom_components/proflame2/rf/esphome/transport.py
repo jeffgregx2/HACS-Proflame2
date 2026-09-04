@@ -715,12 +715,17 @@ class HomeAssistantESPHomeTransport:
         if runtime_data is None:
             return _TelemetrySnapshot()
 
-        info_by_key: dict[int, Any] = {}
+        info_by_key: dict[Any, Any] = {}
         for info_map in getattr(runtime_data, "info", {}).values():
             if isinstance(info_map, Mapping):
                 for key, info in info_map.items():
+                    # Home Assistant 2026.9 keys ESPHome states by
+                    # (device_id, entity_key), matching the info map. Older
+                    # releases key states by entity_key alone, so retain both
+                    # forms while they remain supported.
+                    info_by_key[key] = info
                     entity_key = key[1] if isinstance(key, tuple) else getattr(info, "key", key)
-                    info_by_key[entity_key] = info
+                    info_by_key.setdefault(entity_key, info)
 
         def text_value(object_id: str) -> str | None:
             state = _find_state_for_object_id(runtime_data, info_by_key, object_id)
@@ -1138,7 +1143,7 @@ def _find_user_service(services: Any, action_name: str) -> Any | None:
     return None
 
 
-def _find_state_for_object_id(runtime_data: Any, info_by_key: dict[int, Any], object_id: str) -> Any | None:
+def _find_state_for_object_id(runtime_data: Any, info_by_key: dict[Any, Any], object_id: str) -> Any | None:
     for state_map in getattr(runtime_data, "state", {}).values():
         if not isinstance(state_map, Mapping):
             continue
