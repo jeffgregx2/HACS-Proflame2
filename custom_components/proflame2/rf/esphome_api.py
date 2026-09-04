@@ -19,7 +19,6 @@ from ..protocol.packet import ProflameFrame, ProflamePacket
 from .artifacts import ESPHomeAcceptedRXPacketMetadata, FifoDebugFailure, LilyGoFifoSemanticArtifact
 from .base import BackendCapabilities, CaptureResult, RFBackend, SendResult
 from .capture import CaptureSample, DecodeCandidate, find_proflame_candidates, frame_to_capture_sample
-from .pulse import find_proflame_pcm_candidates
 from .esphome.contract import (
     ESPHomeDisplayState,
     ESPHomeEndpointStatusReport,
@@ -29,6 +28,7 @@ from .esphome.contract import (
     ESPHomeTXResponse,
 )
 from .esphome.transport import ESPHomeTransport
+from .pulse import find_proflame_pcm_candidates
 
 ESPHOME_CONNECT_TIMEOUT_SECONDS = 10.0
 ESPHOME_CLOSE_TIMEOUT_SECONDS = 5.0
@@ -364,10 +364,16 @@ class ESPHomeAPIBackend(RFBackend):
                 learning_accepted=False,
             )
             self._log_debug(
-                "receive decoded rx event controller_id=%s event_id=%s remote_id=%06x payload_length_bytes=%s payload_hex_preview=%s",
+                "receive decoded rx event controller_id=%s event_id=%s remote_id=%06x cmd1=%02x cmd2=%02x err1=%02x err2=%02x "
+                "validation_notes=%s payload_length_bytes=%s payload_hex_preview=%s",
                 self.name,
                 event.event_id,
                 packet.remote_id,
+                packet.frame.cmd1,
+                packet.frame.cmd2,
+                packet.frame.err1,
+                packet.frame.err2,
+                candidate.validation_notes,
                 len(event.raw_payload),
                 _abbreviate_hex(event.raw_payload_hex),
             )

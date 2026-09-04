@@ -6,8 +6,8 @@ PCM row. FIFO remains an explicit rollback path.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from ..protocol.packet import ProflameFrame
 from .waveform import BITS_TO_SYMBOL, PROFLAME_WORD_COUNT, SYMBOLS_PER_WORD
@@ -116,6 +116,17 @@ def find_proflame_pcm_candidates(bit_stream: str) -> list[PulseDecodeCandidate]:
         if words is None or not _has_extended_word_layout(words):
             continue
         extended_end = bit_offset + EXTENDED_WORD_BITS
+        if extended_end == len(bit_stream) + 1:
+            candidates.append(
+                PulseDecodeCandidate(
+                    frame=frame,
+                    frame_format="extended_10_word_truncated_end_guard",
+                    extension_words=tuple(words[7:]),
+                    bit_offset=bit_offset,
+                    repeat_gap_bits=0,
+                )
+            )
+            continue
         repeat_gap_bits = _leading_zero_count(bit_stream, extended_end)
         if repeat_gap_bits < MIN_REPEAT_GAP_BITS:
             continue
@@ -143,8 +154,7 @@ def _decode_words(bit_stream: str, bit_offset: int, word_count: int) -> tuple[in
         truncated_last_word = terminal_end_guard_truncated and word_index == word_count - 1
         symbol_end = start + ((SYMBOLS_PER_WORD - 1 if truncated_last_word else SYMBOLS_PER_WORD) * 2)
         symbols = "".join(
-            BITS_TO_SYMBOL.get(bit_stream[index : index + 2], "?")
-            for index in range(start, symbol_end, 2)
+            BITS_TO_SYMBOL.get(bit_stream[index : index + 2], "?") for index in range(start, symbol_end, 2)
         )
         if symbols[0] != "S" or symbols[1] != "1":
             return None

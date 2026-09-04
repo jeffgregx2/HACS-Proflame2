@@ -14,7 +14,6 @@ from custom_components.proflame2.rf.pulse import (
 )
 from custom_components.proflame2.rf.waveform import SYMBOL_TO_BITS, frame_to_air_bytes
 
-
 ISSUE_15_FRAME = ProflameFrame(
     serial_id=0x08E905,
     cmd1=0x81,
@@ -73,13 +72,77 @@ def test_issue_15_pulse_runs_decode_to_same_extended_row() -> None:
 
 
 def test_extended_row_requires_full_extension_and_repeat_gap() -> None:
-    """A clipped tenth word or missing repeat gap must remain diagnostic only."""
+    """Only a one-bit terminal guard truncation may omit the repeat gap."""
 
     first_seven_bits = "".join(f"{byte:08b}" for byte in frame_to_air_bytes(ISSUE_15_FRAME))[:182]
     extension_bits = "".join(_word_bits(value, trailing_bit=0) for value in ISSUE_15_EXTENSION)
 
     assert find_proflame_pcm_candidates(first_seven_bits + extension_bits[:-2] + ("0" * 13)) == []
     assert find_proflame_pcm_candidates(first_seven_bits + extension_bits) == []
+
+
+@pytest.mark.parametrize(
+    ("capture_id", "pcm_hex", "expected_words"),
+    [
+        (
+            54,
+            "e55959baa659ae55665ba55596e55695b95999aea9696b955556e65565b9a9a960",
+            (0x81, 0x06, 0x15, 0xE6, 0x00, 0x41, 0x77),
+        ),
+        (
+            55,
+            "e55959baa659ae55665ba5555ae55695b95999aea9696b955556e65565ba9955a0",
+            (0x80, 0x06, 0x15, 0xE6, 0x00, 0x41, 0xD0),
+        ),
+        (
+            56,
+            "e55959baa659ae55665ba55596e55695b95999aea9696b955556e65565b9a9a960",
+            (0x81, 0x06, 0x15, 0xE6, 0x00, 0x41, 0x77),
+        ),
+        (
+            57,
+            "e55959baa659ae55665ba55596e55665b95999aea9696b955556e95655b9a9a960",
+            (0x81, 0x05, 0x15, 0xE6, 0x00, 0x84, 0x77),
+        ),
+    ],
+)
+def test_issue_15_259_bit_extended_captures_decode_without_repeat_gap(
+    capture_id: int,
+    pcm_hex: str,
+    expected_words: tuple[int, ...],
+) -> None:
+    """Issue #15's RMT rows omit only the final tenth-word guard bit."""
+
+    bits = "".join(f"{byte:08b}" for byte in bytes.fromhex(pcm_hex))[:259]
+
+    candidates = find_proflame_pcm_candidates(bits)
+
+    assert len(candidates) == 1, capture_id
+    candidate = candidates[0]
+    assert candidate.frame.serial_id == 0x08E905
+    assert (candidate.frame.cmd1, candidate.frame.cmd2, candidate.frame.err1, candidate.frame.err2) == expected_words[
+        :4
+    ]
+    assert candidate.extension_words == expected_words[4:]
+    assert candidate.frame_format == "extended_10_word_truncated_end_guard"
+    assert candidate.repeat_gap_bits == 0
+
+
+def test_esphome_event_preserves_259_bit_extended_capture_metadata() -> None:
+    """The ESPHome adapter retains the truncated extended-frame diagnostics."""
+
+    event = ESPHomeRXEvent(
+        event_id="issue-15-259-bit",
+        raw_payload=bytes.fromhex("e55959baa659ae55665ba55596e55695b95999aea9696b955556e65565b9a9a960"),
+        capture_metadata={"event_kind": "pulse_capture", "pcm_bit_length": "259"},
+    )
+
+    candidates = ESPHomeAPIBackend()._scan_fifo_event(event)
+
+    assert len(candidates) == 1
+    assert candidates[0].frame.serial_id == 0x08E905
+    assert "frame_format=extended_10_word_truncated_end_guard" in candidates[0].validation_notes
+    assert "extension_hex=004177" in candidates[0].validation_notes
 
 
 @pytest.mark.parametrize(
