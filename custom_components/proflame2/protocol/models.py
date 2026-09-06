@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..const import PROTOCOL_VARIANT_EXTENDED_10_WORD, PROTOCOL_VARIANT_LEGACY_7_WORD
+
 
 @dataclass(frozen=True)
 class ECCProfile:
@@ -13,6 +15,21 @@ class ECCProfile:
     d1: int
     c2: int
     d2: int
+
+
+@dataclass(frozen=True)
+class ExtendedFrameTemplate:
+    """Learned fixed fields used to generate manual ten-word frames."""
+
+    w4_base: int
+    w6: int
+    w7: int
+    w8: int
+
+    def __post_init__(self) -> None:
+        for name, value in (("w4_base", self.w4_base), ("w6", self.w6), ("w7", self.w7), ("w8", self.w8)):
+            if not 0 <= value <= 0xFF:
+                raise ValueError(f"Extended frame {name} must fit in one byte.")
 
 
 @dataclass(frozen=True)
@@ -33,6 +50,25 @@ class RemoteProfile:
     serial_id: int
     ecc: ECCProfile
     features: FireplaceFeatures = field(default_factory=FireplaceFeatures)
+    protocol_variant: str = PROTOCOL_VARIANT_LEGACY_7_WORD
+    extended_template: ExtendedFrameTemplate | None = None
+
+    def __post_init__(self) -> None:
+        if self.protocol_variant == PROTOCOL_VARIANT_LEGACY_7_WORD:
+            if self.extended_template is not None:
+                raise ValueError("Legacy remote profiles cannot include an extended frame template.")
+            return
+        if self.protocol_variant == PROTOCOL_VARIANT_EXTENDED_10_WORD:
+            if self.extended_template is None:
+                raise ValueError("Extended remote profiles require an extended frame template.")
+            return
+        raise ValueError(f"Unsupported Proflame protocol variant: {self.protocol_variant}")
+
+    @property
+    def is_extended(self) -> bool:
+        """Return whether this profile emits the ten-word frame variant."""
+
+        return self.protocol_variant == PROTOCOL_VARIANT_EXTENDED_10_WORD
 
 
 @dataclass(frozen=True)

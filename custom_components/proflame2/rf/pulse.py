@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from ..protocol.ecc import extended_frame_integrity_matches
 from ..protocol.packet import ProflameFrame
 from .waveform import BITS_TO_SYMBOL, PROFLAME_WORD_COUNT, SYMBOLS_PER_WORD
 
@@ -30,6 +31,20 @@ class PulseDecodeCandidate:
     extension_words: tuple[int, ...]
     bit_offset: int
     repeat_gap_bits: int
+
+    @property
+    def words(self) -> tuple[int, ...]:
+        """Return every decoded on-air word in transmission order."""
+
+        return self.frame.wire_words
+
+    @property
+    def extended_integrity_valid(self) -> bool | None:
+        """Return extended integrity status, or ``None`` for legacy frames."""
+
+        if not self.extension_words:
+            return None
+        return extended_frame_integrity_matches(self.words)
 
 
 def pulse_durations_to_bits(
@@ -113,9 +128,17 @@ def find_proflame_pcm_candidates(bit_stream: str) -> list[PulseDecodeCandidate]:
             continue
 
         words = _decode_words(bit_stream, bit_offset, EXTENDED_WORD_COUNT)
-        if words is None or not _has_extended_word_layout(words):
+        if words is None or not _has_extended_word_layout(words) or not extended_frame_integrity_matches(words):
             continue
         extended_end = bit_offset + EXTENDED_WORD_BITS
+        frame = ProflameFrame(
+            serial_id=(words[0] << 16) | (words[1] << 8) | words[2],
+            cmd1=words[3],
+            cmd2=words[4],
+            err1=words[5],
+            err2=words[6],
+            extension_words=tuple(words[7:]),
+        )
         if extended_end == len(bit_stream) + 1:
             candidates.append(
                 PulseDecodeCandidate(

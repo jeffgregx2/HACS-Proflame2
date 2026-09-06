@@ -18,7 +18,7 @@ from ..protocol.models import RemoteProfile
 from ..protocol.packet import ProflameFrame, ProflamePacket
 from .artifacts import ESPHomeAcceptedRXPacketMetadata, FifoDebugFailure, LilyGoFifoSemanticArtifact
 from .base import BackendCapabilities, CaptureResult, RFBackend, SendResult
-from .capture import CaptureSample, DecodeCandidate, find_proflame_candidates, frame_to_capture_sample
+from .capture import CaptureSample, DecodeCandidate, find_proflame_candidates
 from .esphome.contract import (
     ESPHomeDisplayState,
     ESPHomeEndpointStatusReport,
@@ -125,7 +125,7 @@ class ESPHomeAPIBackend(RFBackend):
             await asyncio.wait_for(
                 self.transport.set_active_listening(
                     self.active_listening_enabled,
-                    self.active_listening_profile if self.active_listening_enabled else None,
+                    self._firmware_active_listening_profile(),
                 ),
                 timeout=self._connect_timeout_seconds,
             )
@@ -394,8 +394,10 @@ class ESPHomeAPIBackend(RFBackend):
         set_active_listening = getattr(self.transport, "set_active_listening", None)
         if not callable(set_active_listening):
             return
+        # Firmware strict filtering understands only the legacy C/D profile.
+        # Extended RMT frames are validated by this HA-side decoder instead.
         await asyncio.wait_for(
-            set_active_listening(enabled, self.active_listening_profile if enabled else None),
+            set_active_listening(enabled, self._firmware_active_listening_profile()),
             timeout=self._send_timeout_seconds,
         )
         transport_diagnostics = (
@@ -409,6 +411,14 @@ class ESPHomeAPIBackend(RFBackend):
             f"{profile.serial_id:06x}" if profile is not None else None,
             transport_diagnostics,
         )
+
+    def _firmware_active_listening_profile(self) -> RemoteProfile | None:
+        """Return the profile that can safely be supplied to firmware filtering."""
+
+        if not self.active_listening_enabled:
+            return None
+        profile = self.active_listening_profile
+        return None if profile is not None and profile.is_extended else profile
 
     async def stop_rx(self) -> None:
         if self.transport is None:
@@ -792,7 +802,17 @@ class ESPHomeAPIBackend(RFBackend):
         pulse_candidates = find_proflame_pcm_candidates(bit_stream)
         candidates: list[DecodeCandidate] = []
         for pulse_candidate in pulse_candidates:
-            sample = frame_to_capture_sample(pulse_candidate.frame)
+            sample = CaptureSample(
+                remote_id=pulse_candidate.frame.serial_id,
+                cmd1=pulse_candidate.frame.cmd1,
+                err1=pulse_candidate.frame.err1,
+                cmd2=pulse_candidate.frame.cmd2,
+                err2=pulse_candidate.frame.err2,
+                raw_payload=event.raw_payload,
+                symbols="",
+                extension_words=pulse_candidate.extension_words,
+                frame_format=pulse_candidate.frame_format,
+            )
             notes = [
                 "decode_path=cc1101_gdo0_rmt_pcm",
                 f"frame_format={pulse_candidate.frame_format}",
@@ -800,6 +820,7 @@ class ESPHomeAPIBackend(RFBackend):
             ]
             if pulse_candidate.extension_words:
                 notes.append("extension_hex=" + bytes(pulse_candidate.extension_words).hex())
+                notes.append("extended_integrity=valid")
             candidates.append(
                 DecodeCandidate(
                     bit_offset=pulse_candidate.bit_offset % 8,

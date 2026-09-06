@@ -29,7 +29,8 @@ The implemented receive path is:
   `proflame2_active_listener_rx_path_default`; set it to `fifo` in an overlay
   to make FIFO the first-boot rollback default.
 - Home Assistant decodes those pulse events using the same learning candidate
-  path as FIFO captures. Extension bytes are retained in diagnostic notes only.
+  path as FIFO captures. Validated ten-word frames retain their extension words
+  and are handled by the extended-profile decoder in Home Assistant.
 
 The selected path is persistent. Changing the YAML substitution does not alter
 an already-saved selection; use `Active Listener RX Path` in Home Assistant or
@@ -183,15 +184,16 @@ Recognize two explicit layouts:
 | Format | Layout | Acceptance |
 | --- | --- | --- |
 | Standard | seven validated words followed by the zero trailer, or the final one-bit RMT end-guard truncation | Publish the seven standard fields. |
-| Extended | seven validated words, then exactly three additional validated words and a repeat low gap | Publish the standard seven-word fields and retain the extension bytes only in diagnostics. |
+| Extended | seven validated words, then exactly three additional validated words and a repeat low gap | Preserve all ten words. Home Assistant validates the extended integrity lanes and decodes only proven manual state fields. |
 
 Do not make the trailer generally optional. The only accepted truncation is the
 first bit of the final `1` Manchester end guard in the seventh word. A frame is
 extended only when all ten words, their parity, and the repeat gap validate.
 
-The extension's protocol meaning is not established. The implementation must
-not map `00 EC 77` or any other extension values into fireplace state or ECC
-until independently validated across buttons and remotes.
+The extension has a distinct integrity construction. The beta maps only the
+proven manual-control state fields, keeps learned fixed fields in an extended
+profile, and uses `W7=0xC8` for manual Home Assistant transmission. Native
+thermostat behavior and dynamic temperature telemetry remain unsupported.
 
 ## Integration Boundaries
 
@@ -242,7 +244,8 @@ Unit tests must prove:
 - the captured 181-bit standard rows decode despite the terminal end-guard
   truncation;
 - the standard and extended layouts validate their required guards;
-- extension bytes never alter semantic state;
+- extension words are preserved and their integrity is required before a
+  supported manual-state update;
 - wrong polarity, missing extended repeat gap, parity errors, and invalid RMT
   segments reject;
 - decoder work and storage remain bounded.

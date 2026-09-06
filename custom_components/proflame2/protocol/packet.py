@@ -21,6 +21,34 @@ class ProflameFrame:
     err1: int
     cmd2: int
     err2: int
+    extension_words: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.extension_words and len(self.extension_words) != 3:
+            raise ValueError("Extended Proflame frames require exactly three extension words.")
+        if any(not 0 <= value <= 0xFF for value in self.extension_words):
+            raise ValueError("Extended Proflame frame words must fit in one byte.")
+
+    @property
+    def is_extended(self) -> bool:
+        """Return whether this is the ten-word extended frame variant."""
+
+        return bool(self.extension_words)
+
+    @property
+    def wire_words(self) -> tuple[int, ...]:
+        """Return the on-air words in their transmission order."""
+
+        return (
+            (self.serial_id >> 16) & 0xFF,
+            (self.serial_id >> 8) & 0xFF,
+            self.serial_id & 0xFF,
+            self.cmd1 & 0xFF,
+            self.cmd2 & 0xFF,
+            self.err1 & 0xFF,
+            self.err2 & 0xFF,
+            *self.extension_words,
+        )
 
     def as_bytes(self) -> bytes:
         """Return the canonical seven-byte payload."""
@@ -132,7 +160,9 @@ def state_from_frame(frame: ProflameFrame) -> FireplaceState:
         power=bool(frame.cmd1 & 0x01),
         thermostat=bool(frame.cmd1 & 0x02),
         light=(frame.cmd1 >> 4) & 0x07,
-        cpi=bool(frame.cmd1 & 0x80),
+        # Extended frames use this high bit as part of their learned manual
+        # frame template, not as the legacy CPI control field.
+        cpi=bool(frame.cmd1 & 0x80) and not frame.is_extended,
         flame=frame.cmd2 & 0x07,
         aux=bool(frame.cmd2 & 0x08),
         fan=(frame.cmd2 >> 4) & 0x07,

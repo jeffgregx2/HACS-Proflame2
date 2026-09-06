@@ -69,6 +69,8 @@ class CaptureSample:
     err2: int
     raw_payload: bytes
     symbols: str
+    extension_words: tuple[int, ...] = ()
+    frame_format: str = "standard_7_word"
 
     @property
     def cmd1_tuple(self) -> tuple[int, int]:
@@ -91,6 +93,7 @@ class CaptureSample:
             err1=self.err1,
             cmd2=self.cmd2,
             err2=self.err2,
+            extension_words=self.extension_words,
         )
 
     def as_packet(
@@ -211,6 +214,8 @@ def frame_to_capture_sample(frame: ProflameFrame) -> CaptureSample:
         err2=frame.err2,
         raw_payload=raw_payload,
         symbols=air_bytes_to_symbols(raw_payload),
+        extension_words=frame.extension_words,
+        frame_format="extended_10_word" if frame.is_extended else "standard_7_word",
     )
 
 

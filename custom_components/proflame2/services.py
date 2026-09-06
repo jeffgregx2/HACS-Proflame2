@@ -1320,10 +1320,11 @@ def _log_pre_send_packet(runtime_entry: Proflame2RuntimeEntry, prepared_request:
     packet = prepared_request.packet
     _log_control_event(
         runtime_entry,
-        "PROFLAME_TX_PRESEND source=%s controller_id=%s linked_entry_id=%s state=power=%s flame=%s fan=%s light=%s front=%s aux=%s thermostat=%s cpi=%s serial_id=%06x c1=%s d1=%s c2=%s d2=%s cmd1=0x%02X err1=0x%02X cmd2=0x%02X err2=0x%02X air_payload_hex=%s payload_bit_length=%s repeat_count=%s",
+        "PROFLAME_TX_PRESEND source=%s controller_id=%s linked_entry_id=%s protocol_variant=%s state=power=%s flame=%s fan=%s light=%s front=%s aux=%s thermostat=%s cpi=%s serial_id=%06x c1=%s d1=%s c2=%s d2=%s cmd1=0x%02X err1=0x%02X cmd2=0x%02X err2=0x%02X wire_words=%s air_payload_hex=%s payload_bit_length=%s repeat_count=%s",
         prepared_request.source,
         runtime_entry.backend_type,
         _linked_backend_entry_id(runtime_entry),
+        runtime_entry.remote_profile.protocol_variant,
         requested_state.power,
         requested_state.flame,
         requested_state.fan,
@@ -1341,6 +1342,7 @@ def _log_pre_send_packet(runtime_entry: Proflame2RuntimeEntry, prepared_request:
         packet.frame.err1,
         packet.frame.cmd2,
         packet.frame.err2,
+        " ".join(f"{word:02X}" for word in packet.frame.wire_words),
         packet.transmission_plan.air_payload.hex(),
         packet.transmission_plan.air_payload_bit_length,
         packet.transmission_plan.repeat_count,

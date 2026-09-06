@@ -30,6 +30,10 @@ from .const import (
     CONF_D2,
     CONF_DEBUG_LOGGING,
     CONF_ESPHOME_ENTRY_ID,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FRONT,
@@ -37,6 +41,7 @@ from .const import (
     CONF_INITIAL_PACKET_SOURCE,
     CONF_LIGHT,
     CONF_PROFILES,
+    CONF_PROTOCOL_VARIANT,
     CONF_REMOTE_ID,
     DATA_ACTIVE_LISTENING,
     DATA_ESPHOME_TRANSPORT_FACTORY,
@@ -57,7 +62,14 @@ from .packet_debug import (
 )
 from .profile import normalize_profiles, sanitize_fireplace_short_name
 from .protocol.encoder import encode_packet
-from .protocol.models import ECCProfile, FireplaceFeatures, FireplaceState, RemoteProfile
+from .protocol.models import (
+    PROTOCOL_VARIANT_EXTENDED_10_WORD,
+    ECCProfile,
+    ExtendedFrameTemplate,
+    FireplaceFeatures,
+    FireplaceState,
+    RemoteProfile,
+)
 from .protocol.packet import ProflameFrame, ProflamePacket
 from .rf.base import RFBackend, SendResult
 from .rf.esphome.transport import ESPHomeTransport, HomeAssistantESPHomeTransport
@@ -242,6 +254,7 @@ async def async_restore_runtime_state(hass: HomeAssistant, runtime_entry: Profla
                 err1=int(raw_frame["err1"]),
                 cmd2=int(raw_frame["cmd2"]),
                 err2=int(raw_frame["err2"]),
+                extension_words=tuple(int(word) for word in raw_frame.get("extension_words", ())),
             ),
             source=str(restored.get("source", "restored_state")),
         )
@@ -278,6 +291,7 @@ async def async_bootstrap_runtime_state_from_entry_data(
             err1=int(raw_frame["err1"]),
             cmd2=int(raw_frame["cmd2"]),
             err2=int(raw_frame["err2"]),
+            extension_words=tuple(int(word) for word in raw_frame.get("extension_words", ())),
         ),
         source=str(entry.data.get(CONF_INITIAL_PACKET_SOURCE, "observed_packet")),
     )
@@ -490,15 +504,26 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
         aux=bool(entry.options.get(CONF_AUX, False)),
         cpi=bool(entry.options.get(CONF_CPI, False)),
     )
+    protocol_variant = str(entry.data.get(CONF_PROTOCOL_VARIANT, "legacy_7_word"))
+    extended_template = None
+    if protocol_variant == PROTOCOL_VARIANT_EXTENDED_10_WORD:
+        extended_template = ExtendedFrameTemplate(
+            w4_base=int(entry.data[CONF_EXTENDED_W4_BASE]),
+            w6=int(entry.data[CONF_EXTENDED_W6]),
+            w7=int(entry.data[CONF_EXTENDED_W7]),
+            w8=int(entry.data[CONF_EXTENDED_W8]),
+        )
     remote_profile = RemoteProfile(
         serial_id=int(entry.data[CONF_REMOTE_ID]),
         ecc=ECCProfile(
-            c1=int(entry.data[CONF_C1]),
-            d1=int(entry.data[CONF_D1]),
-            c2=int(entry.data[CONF_C2]),
-            d2=int(entry.data[CONF_D2]),
+            c1=int(entry.data.get(CONF_C1, 0)),
+            d1=int(entry.data.get(CONF_D1, 0)),
+            c2=int(entry.data.get(CONF_C2, 0)),
+            d2=int(entry.data.get(CONF_D2, 0)),
         ),
         features=features,
+        protocol_variant=protocol_variant,
+        extended_template=extended_template,
     )
 
     backend_type = normalize_controller_id(entry.data[CONF_BACKEND_TYPE])
@@ -773,6 +798,12 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
             "serial_id": runtime_entry.remote_profile.serial_id,
             "ecc": asdict(runtime_entry.remote_profile.ecc),
             "features": asdict(runtime_entry.remote_profile.features),
+            "protocol_variant": runtime_entry.remote_profile.protocol_variant,
+            "extended_template": (
+                asdict(runtime_entry.remote_profile.extended_template)
+                if runtime_entry.remote_profile.extended_template is not None
+                else None
+            ),
         },
         "last_packet": serialize_packet(last_packet) if last_packet is not None else None,
         "last_requested_state": asdict(last_packet.state) if last_packet is not None else None,

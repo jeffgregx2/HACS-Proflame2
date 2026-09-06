@@ -54,7 +54,11 @@ def test_issue_15_extended_row_decodes_standard_fields_and_extension() -> None:
 
     assert len(candidates) == 1
     candidate = candidates[0]
-    assert candidate.frame == ISSUE_15_FRAME
+    assert candidate.frame.serial_id == ISSUE_15_FRAME.serial_id
+    assert candidate.frame.cmd1 == ISSUE_15_FRAME.cmd1
+    assert candidate.frame.cmd2 == ISSUE_15_FRAME.cmd2
+    assert candidate.frame.err1 == ISSUE_15_FRAME.err1
+    assert candidate.frame.err2 == ISSUE_15_FRAME.err2
     assert candidate.frame_format == "extended_10_word"
     assert candidate.extension_words == ISSUE_15_EXTENSION
     assert candidate.repeat_gap_bits == 13
@@ -68,7 +72,10 @@ def test_issue_15_pulse_runs_decode_to_same_extended_row() -> None:
     row = first_seven_bits + extension_bits + ("0" * 13)
 
     assert pulse_durations_to_bits(_runs_from_bits(row)) == row
-    assert find_proflame_pcm_candidates(pulse_durations_to_bits(_runs_from_bits(row)))[0].frame == ISSUE_15_FRAME
+    assert find_proflame_pcm_candidates(pulse_durations_to_bits(_runs_from_bits(row)))[0].frame.wire_words == (
+        *ISSUE_15_FRAME.wire_words,
+        *ISSUE_15_EXTENSION,
+    )
 
 
 def test_extended_row_requires_full_extension_and_repeat_gap() -> None:
@@ -79,6 +86,16 @@ def test_extended_row_requires_full_extension_and_repeat_gap() -> None:
 
     assert find_proflame_pcm_candidates(first_seven_bits + extension_bits[:-2] + ("0" * 13)) == []
     assert find_proflame_pcm_candidates(first_seven_bits + extension_bits) == []
+
+
+def test_extended_row_with_invalid_integrity_is_rejected() -> None:
+    """Extended structure alone is insufficient to promote an RX candidate."""
+
+    first_seven_bits = "".join(f"{byte:08b}" for byte in frame_to_air_bytes(ISSUE_15_FRAME))[:182]
+    invalid_extension = (0x00, 0xEC, 0x76)
+    extension_bits = "".join(_word_bits(value, trailing_bit=0) for value in invalid_extension)
+
+    assert find_proflame_pcm_candidates(first_seven_bits + extension_bits + ("0" * 13)) == []
 
 
 @pytest.mark.parametrize(
@@ -143,6 +160,7 @@ def test_esphome_event_preserves_259_bit_extended_capture_metadata() -> None:
     assert candidates[0].frame.serial_id == 0x08E905
     assert "frame_format=extended_10_word_truncated_end_guard" in candidates[0].validation_notes
     assert "extension_hex=004177" in candidates[0].validation_notes
+    assert "extended_integrity=valid" in candidates[0].validation_notes
 
 
 @pytest.mark.parametrize(
@@ -189,6 +207,7 @@ def test_esphome_pulse_event_uses_pcm_bit_length_and_preserves_extension_metadat
     candidates = ESPHomeAPIBackend()._scan_fifo_event(event)
 
     assert len(candidates) == 1
-    assert candidates[0].frame == ISSUE_15_FRAME
+    assert candidates[0].frame.wire_words == (*ISSUE_15_FRAME.wire_words, *ISSUE_15_EXTENSION)
     assert "frame_format=extended_10_word" in candidates[0].validation_notes
     assert "extension_hex=00ec77" in candidates[0].validation_notes
+    assert "extended_integrity=valid" in candidates[0].validation_notes

@@ -18,6 +18,7 @@ from custom_components.proflame2.const import (
     DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
     DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
+    PROTOCOL_VARIANT_EXTENDED_10_WORD,
 )
 from custom_components.proflame2.learning import (
     ERROR_AMBIGUOUS_PROFILE,
@@ -27,6 +28,7 @@ from custom_components.proflame2.learning import (
     ERROR_TIMEOUT,
     LearnResult,
     LearnSession,
+    _learning_frame_key,
     async_capture_next_learning_packet,
     async_close_learning_session,
     async_create_learning_backend,
@@ -73,6 +75,23 @@ def _packet(
     )
 
 
+def _extended_packet(*, cmd1: int, cmd2: int, w6: int = 0x15, w7: int = 0xE1, w8: int = 0x00) -> ProflamePacket:
+    from custom_components.proflame2.protocol.ecc import build_extended_integrity_words
+
+    w9, w10 = build_extended_integrity_words(cmd1, cmd2, w6, w7, w8)
+    return ProflamePacket.from_frame(
+        ProflameFrame(
+            serial_id=0x08E905,
+            cmd1=cmd1,
+            err1=w6,
+            cmd2=cmd2,
+            err2=w7,
+            extension_words=(w8, w9, w10),
+        ),
+        source="test_extended",
+    )
+
+
 def test_learning_succeeds_from_valid_packets() -> None:
     """Repeated valid packets should converge on one stable remote profile."""
 
@@ -94,6 +113,83 @@ def test_learning_succeeds_from_valid_packets() -> None:
         assert result.valid_packets == 3
 
     asyncio.run(_run())
+
+
+def test_guided_learning_derives_extended_manual_profile() -> None:
+    """Ten-word captures learn a manual template instead of legacy C/D values."""
+
+    session = LearnSession(backend=FakeRFBackend(), step_timeout=1.0, receive_timeout=0.1)
+    session.remote_id = 0x08E905
+    session.packets = [
+        _extended_packet(cmd1=0x81, cmd2=0x06),
+        _extended_packet(cmd1=0x80, cmd2=0x06),
+        _extended_packet(cmd1=0x81, cmd2=0x06),
+        _extended_packet(cmd1=0x81, cmd2=0x05),
+    ]
+    session.valid_packets = len(session.packets)
+    session.packets_seen = len(session.packets)
+
+    result = derive_learn_result_from_session(session)
+
+    assert result is not None
+    assert result.success is True
+    assert result.protocol_variant == PROTOCOL_VARIANT_EXTENDED_10_WORD
+    assert result.data == {
+        "remote_id": 0x08E905,
+        "protocol_variant": PROTOCOL_VARIANT_EXTENDED_10_WORD,
+        "extended_w4_base": 0x80,
+        "extended_w6": 0x15,
+        "extended_w7": 0xC8,
+        "extended_w8": 0x00,
+    }
+
+
+def test_extended_learning_waits_for_distinct_flame_change_after_restore() -> None:
+    """Power On/Off plus a restore duplicate must not prematurely create a profile."""
+
+    session = LearnSession(backend=FakeRFBackend(), step_timeout=1.0, receive_timeout=0.1)
+    session.remote_id = 0x08E905
+    session.packets = [
+        _extended_packet(cmd1=0x81, cmd2=0x06),
+        _extended_packet(cmd1=0x80, cmd2=0x06),
+    ]
+    session.valid_packets = 3  # The restore Power On packet is intentionally a duplicate.
+    session.packets_seen = 3
+
+    assert derive_learn_result_from_session(session) is None
+
+    session.packets.append(_extended_packet(cmd1=0x81, cmd2=0x05))
+    assert derive_learn_result_from_session(session).success is True
+
+
+def test_extended_learning_duplicate_identity_includes_extension_words() -> None:
+    """Different ten-word frames must not be suppressed as the same capture."""
+
+    first = _extended_packet(cmd1=0x81, cmd2=0x06, w8=0x00)
+    changed_extension = _extended_packet(cmd1=0x81, cmd2=0x06, w8=0x01)
+
+    assert _learning_frame_key(first) != _learning_frame_key(changed_extension)
+
+
+def test_extended_learning_rejects_inconsistent_fixed_template_fields() -> None:
+    """Learning must not select one arbitrary template from conflicting captures."""
+
+    session = LearnSession(backend=FakeRFBackend(), step_timeout=1.0, receive_timeout=0.1)
+    session.remote_id = 0x08E905
+    session.packets = [
+        _extended_packet(cmd1=0x81, cmd2=0x06, w6=0x15),
+        _extended_packet(cmd1=0x80, cmd2=0x06, w6=0x15),
+        _extended_packet(cmd1=0x81, cmd2=0x05, w6=0x16),
+    ]
+    session.valid_packets = len(session.packets)
+    session.packets_seen = len(session.packets)
+
+    result = derive_learn_result_from_session(session)
+
+    assert result is not None
+    assert result.success is False
+    assert result.error_code == ERROR_CONTRADICTORY_PROFILE
+    assert "fixed template fields" in (result.error or "")
 
 
 def test_learning_times_out_cleanly() -> None:

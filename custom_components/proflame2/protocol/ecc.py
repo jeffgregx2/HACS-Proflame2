@@ -74,6 +74,46 @@ def build_err_byte(command: int, c_value: int, d_value: int) -> int:
     return (err_high << 4) | err_low
 
 
+def build_extended_integrity_byte(values: Iterable[int], final_xor: int) -> int:
+    """Build one extended-frame interleaved integrity lane.
+
+    The ten-word Proflame2 variant chains the C/D-free legacy transform across
+    alternating state words, then applies a fixed final XOR.  It is not a
+    legacy C/D ``Err`` byte and must not be passed to :func:`derive_ecc_profile`.
+    """
+
+    integrity = 0
+    for value in values:
+        integrity = build_err_byte(integrity ^ value, 0, 0)
+    return integrity ^ (final_xor & 0xFF)
+
+
+def extended_frame_integrity_matches(words: Iterable[int]) -> bool:
+    """Return whether ten decoded words satisfy the extended-frame lanes.
+
+    Word numbering is the on-air order: serial bytes ``W1..W3``, state bytes
+    ``W4/W5``, extension words ``W6..W8``, then integrity words ``W9/W10``.
+    """
+
+    decoded_words = tuple(value & 0xFF for value in words)
+    if len(decoded_words) != 10:
+        return False
+    return (
+        build_extended_integrity_byte((decoded_words[4], decoded_words[6]), 0x23) == decoded_words[8]
+        and build_extended_integrity_byte((decoded_words[3], decoded_words[5], decoded_words[7]), 0x65)
+        == decoded_words[9]
+    )
+
+
+def build_extended_integrity_words(w4: int, w5: int, w6: int, w7: int, w8: int) -> tuple[int, int]:
+    """Return ``W9/W10`` for one generated ten-word Proflame2 frame."""
+
+    return (
+        build_extended_integrity_byte((w5, w7), 0x23),
+        build_extended_integrity_byte((w4, w6, w8), 0x65),
+    )
+
+
 def combine_cd(c_value: int, d_value: int) -> int:
     """Combine 4-bit C and D values into the SmartFire-style CD byte.
 

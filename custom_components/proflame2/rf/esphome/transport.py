@@ -955,6 +955,7 @@ class MockESPHomeTransport:
         self.tx_responses: list[ESPHomeTXResponse] = []
         self.display_state_updates: list[ESPHomeDisplayState] = []
         self.active_listening_updates: list[bool] = []
+        self.active_listening_profiles: list[Any | None] = []
         self.rx_stop_count = 0
         self.rx_end_confirmation_count = 0
         self.learning_mode_updates: list[dict[str, object]] = []
@@ -1019,6 +1020,7 @@ class MockESPHomeTransport:
                 except asyncio.QueueEmpty:
                     break
         self.active_listening_updates.append(enabled)
+        self.active_listening_profiles.append(profile)
 
     async def stop_rx(self) -> None:
         self.rx_stop_count += 1

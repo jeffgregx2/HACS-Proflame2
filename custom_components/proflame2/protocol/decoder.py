@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .ecc import err1_for, err2_for
+from .ecc import err1_for, err2_for, extended_frame_integrity_matches
 from .models import FireplaceState, RemoteProfile
 from .packet import ProflameFrame, ProflamePacket, state_from_frame
 
@@ -10,12 +10,20 @@ from .packet import ProflameFrame, ProflamePacket, state_from_frame
 def decode_state(frame: ProflameFrame, profile: RemoteProfile) -> FireplaceState:
     """Decode a frame into fireplace state and validate ECC bytes."""
 
-    expected_err1 = err1_for(frame.cmd1, profile.ecc)
-    expected_err2 = err2_for(frame.cmd2, profile.ecc)
-    if frame.err1 != expected_err1:
-        raise ValueError("Cmd1 validation byte does not match profile constants.")
-    if frame.err2 != expected_err2:
-        raise ValueError("Cmd2 validation byte does not match profile constants.")
+    if profile.is_extended:
+        if not frame.is_extended:
+            raise ValueError("Frame does not match the configured extended protocol variant.")
+        if not extended_frame_integrity_matches(frame.wire_words):
+            raise ValueError("Extended frame integrity words do not match.")
+    else:
+        if frame.is_extended:
+            raise ValueError("Frame does not match the configured legacy protocol variant.")
+        expected_err1 = err1_for(frame.cmd1, profile.ecc)
+        expected_err2 = err2_for(frame.cmd2, profile.ecc)
+        if frame.err1 != expected_err1:
+            raise ValueError("Cmd1 validation byte does not match profile constants.")
+        if frame.err2 != expected_err2:
+            raise ValueError("Cmd2 validation byte does not match profile constants.")
     if frame.serial_id != profile.serial_id:
         raise ValueError("Frame serial_id does not match the configured remote profile.")
 

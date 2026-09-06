@@ -25,6 +25,11 @@ from .const import (
     CONF_C2,
     CONF_D1,
     CONF_D2,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
+    CONF_PROTOCOL_VARIANT,
     CONF_REMOTE_ID,
     DATA_ESPHOME_TRANSPORT_FACTORY,
     DATA_FAKE_LEARNING_DELAY,
@@ -40,6 +45,7 @@ from .packet_debug import (
     get_packet_debug_logger,
 )
 from .protocol.ecc import derive_ecc_profile
+from .protocol.models import PROTOCOL_VARIANT_EXTENDED_10_WORD
 from .protocol.packet import ProflameFrame, ProflamePacket
 from .rf.base import RFBackend
 from .rf.esphome.transport import HomeAssistantESPHomeTransport
@@ -60,6 +66,7 @@ MIN_VALID_PACKETS = 3
 DEFAULT_LEARN_TIMEOUT_SECONDS = 120.0
 DEFAULT_RECEIVE_TIMEOUT_SECONDS = 1.0
 DEFAULT_FAKE_LEARN_DELAY_SECONDS = 2.0
+DEFAULT_EXTENDED_MANUAL_W7 = 0xC8
 
 ERROR_TIMEOUT = "timeout"
 ERROR_INCONSISTENT_REMOTE_ID = "inconsistent_remote_id"
@@ -81,6 +88,11 @@ class LearnResult:
     d1: int | None = None
     c2: int | None = None
     d2: int | None = None
+    protocol_variant: str = "legacy_7_word"
+    extended_w4_base: int | None = None
+    extended_w6: int | None = None
+    extended_w7: int | None = None
+    extended_w8: int | None = None
     packets_seen: int = 0
     valid_packets: int = 0
     warnings: list[str] = field(default_factory=list)
@@ -89,19 +101,27 @@ class LearnResult:
     final_packet: ProflamePacket | None = None
 
     @property
-    def data(self) -> dict[str, int]:
+    def data(self) -> dict[str, int | str]:
         """Return learned permanent profile fields for config-entry storage."""
 
-        if not self.success or None in (
-            self.remote_id,
-            self.c1,
-            self.d1,
-            self.c2,
-            self.d2,
-        ):
+        if not self.success or self.remote_id is None:
+            raise ValueError("Learn result does not contain a complete remote profile.")
+        if self.protocol_variant == PROTOCOL_VARIANT_EXTENDED_10_WORD:
+            if None in (self.extended_w4_base, self.extended_w6, self.extended_w7, self.extended_w8):
+                raise ValueError("Extended learn result does not contain a complete frame template.")
+            return {
+                CONF_REMOTE_ID: self.remote_id,
+                CONF_PROTOCOL_VARIANT: self.protocol_variant,
+                CONF_EXTENDED_W4_BASE: self.extended_w4_base,
+                CONF_EXTENDED_W6: self.extended_w6,
+                CONF_EXTENDED_W7: self.extended_w7,
+                CONF_EXTENDED_W8: self.extended_w8,
+            }
+        if None in (self.c1, self.d1, self.c2, self.d2):
             raise ValueError("Learn result does not contain a complete remote profile.")
         return {
             CONF_REMOTE_ID: self.remote_id,
+            CONF_PROTOCOL_VARIANT: self.protocol_variant,
             CONF_C1: self.c1,
             CONF_D1: self.d1,
             CONF_C2: self.c2,
@@ -138,7 +158,7 @@ class LearnSession:
     extended_frame_records_logged: int = 0
     packet_debug_logging_enabled: bool = False
     packet_debug_log_path: str | None = None
-    _seen_frames: set[tuple[int, int, int, int, int]] = field(default_factory=set)
+    _seen_frames: set[tuple[int, ...]] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -624,7 +644,7 @@ async def _accept_distinct_learning_packet(
     session: LearnSession,
     receive_timeout: float,
     packet: ProflamePacket,
-    frame_key: tuple[int, int, int, int, int],
+    frame_key: tuple[int, ...],
 ) -> ProflamePacket:
     session._seen_frames.add(frame_key)
     session.packets.append(packet)
@@ -699,16 +719,10 @@ async def _async_update_learning_prompt_status(session: LearnSession, status: st
         await maybe_awaitable
 
 
-def _learning_frame_key(packet: ProflamePacket) -> tuple[int, int, int, int, int]:
+def _learning_frame_key(packet: ProflamePacket) -> tuple[int, ...]:
     """Return the identity used to suppress duplicate guided-learning packets."""
 
-    return (
-        packet.remote_id,
-        packet.frame.cmd1,
-        packet.frame.err1,
-        packet.frame.cmd2,
-        packet.frame.err2,
-    )
+    return packet.frame.wire_words
 
 
 def _build_inconsistent_remote_result(session: LearnSession) -> LearnResult:
@@ -743,6 +757,10 @@ def _build_prompt_timeout_result(session: LearnSession) -> LearnResult:
 
 def derive_learn_result_from_session(session: LearnSession) -> LearnResult | None:
     """Attempt to derive a stable profile from the packets seen so far."""
+
+    extended_packets = [packet for packet in session.packets if packet.frame.is_extended]
+    if extended_packets:
+        return _derive_extended_learn_result(session, extended_packets)
 
     cmd1_samples = {(packet.frame.cmd1, packet.frame.err1) for packet in session.packets}
     cmd2_samples = {(packet.frame.cmd2, packet.frame.err2) for packet in session.packets}
@@ -810,6 +828,60 @@ def derive_learn_result_from_session(session: LearnSession) -> LearnResult | Non
         valid_packets=session.valid_packets,
         warnings=session.warnings,
         final_packet=session.packets[-1] if session.packets else None,
+    )
+
+
+def _derive_extended_learn_result(
+    session: LearnSession,
+    extended_packets: list[ProflamePacket],
+) -> LearnResult | None:
+    """Build a manual ten-word profile from integrity-validated RMT frames."""
+
+    if len(extended_packets) != len(session.packets):
+        return LearnResult(
+            success=False,
+            remote_id=session.remote_id,
+            packets_seen=session.packets_seen,
+            valid_packets=session.valid_packets,
+            warnings=session.warnings,
+            error_code=ERROR_CONTRADICTORY_PROFILE,
+            error="Learning observed a mixture of legacy and extended Proflame frame formats.",
+        )
+    if len(extended_packets) < MIN_VALID_PACKETS:
+        return None
+
+    manual_frames = [packet.frame for packet in extended_packets if (packet.frame.cmd1 & 0x03) == 0x01]
+    # The normal Power On/Off/restore sequence retains only two distinct
+    # packets. Require the following Flame change before promoting an extended
+    # profile, so W5 is proven to be the manual state word.
+    if len(manual_frames) < 2 or len({frame.cmd2 for frame in manual_frames}) < 2:
+        return None
+    w4_base_values = {frame.cmd1 & 0x80 for frame in manual_frames}
+    w6_values = {frame.err1 for frame in manual_frames}
+    w8_values = {frame.extension_words[0] for frame in manual_frames}
+    if len(w4_base_values) != 1 or len(w6_values) != 1 or len(w8_values) != 1:
+        return LearnResult(
+            success=False,
+            remote_id=session.remote_id,
+            packets_seen=session.packets_seen,
+            valid_packets=session.valid_packets,
+            warnings=session.warnings,
+            error_code=ERROR_CONTRADICTORY_PROFILE,
+            error="Extended-frame learning observed inconsistent fixed template fields.",
+        )
+
+    return LearnResult(
+        success=True,
+        remote_id=session.remote_id,
+        protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
+        extended_w4_base=next(iter(w4_base_values)),
+        extended_w6=next(iter(w6_values)),
+        extended_w7=DEFAULT_EXTENDED_MANUAL_W7,
+        extended_w8=next(iter(w8_values)),
+        packets_seen=session.packets_seen,
+        valid_packets=session.valid_packets,
+        warnings=session.warnings,
+        final_packet=extended_packets[-1],
     )
 
 

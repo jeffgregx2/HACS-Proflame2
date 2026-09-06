@@ -56,6 +56,7 @@ from custom_components.proflame2.const import (
     DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
     DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
+    PROTOCOL_VARIANT_EXTENDED_10_WORD,
 )
 from custom_components.proflame2.learning import LearnSession
 from custom_components.proflame2.packet_debug import PacketDebugLogPaths
@@ -100,6 +101,23 @@ def _packet(
             err2=err2,
         ),
         source="fake",
+    )
+
+
+def _extended_packet(*, remote_id: int, cmd1: int, cmd2: int, w6: int = 0x15, w7: int = 0xE1) -> ProflamePacket:
+    from custom_components.proflame2.protocol.ecc import build_extended_integrity_words
+
+    w9, w10 = build_extended_integrity_words(cmd1, cmd2, w6, w7, 0x00)
+    return ProflamePacket.from_frame(
+        ProflameFrame(
+            serial_id=remote_id,
+            cmd1=cmd1,
+            err1=w6,
+            cmd2=cmd2,
+            err2=w7,
+            extension_words=(0x00, w9, w10),
+        ),
+        source="fake_extended",
     )
 
 
@@ -1082,20 +1100,16 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass, monkeypatch)
     assert result["options"][CONF_PROFILES] == {}
 
 
-async def test_extended_rmt_contradiction_collects_diagnostic_captures(hass, monkeypatch) -> None:
-    """Extended RMT frames should collect labeled diagnostics before failing."""
+async def test_extended_rmt_learning_creates_manual_profile(hass, monkeypatch) -> None:
+    """Extended RMT frames should create an extended manual TX profile."""
 
     _enable_fake_backend(monkeypatch)
     backend = ExtendedFrameFakeRFBackend()
     backend.queue_packets(
-        _packet(remote_id=0x08E905, cmd1=0x81, err1=0x15, cmd2=0x06, err2=0xE6),
-        _packet(remote_id=0x08E905, cmd1=0x80, err1=0x15, cmd2=0x06, err2=0xE6),
-        _packet(remote_id=0x08E905, cmd1=0x81, err1=0x15, cmd2=0x06, err2=0xE6),
-        _packet(remote_id=0x08E905, cmd1=0x81, err1=0x15, cmd2=0x05, err2=0xE6),
-        _packet(remote_id=0x08E905, cmd1=0x81, err1=0x15, cmd2=0x04, err2=0xE6),
-        _packet(remote_id=0x08E905, cmd1=0x91, err1=0x15, cmd2=0x04, err2=0xE6),
-        _packet(remote_id=0x08E905, cmd1=0x91, err1=0x16, cmd2=0x0C, err2=0xE6),
-        _packet(remote_id=0x08E905, cmd1=0x82, err1=0x16, cmd2=0x00, err2=0xE6),
+        _extended_packet(remote_id=0x08E905, cmd1=0x81, cmd2=0x06),
+        _extended_packet(remote_id=0x08E905, cmd1=0x80, cmd2=0x06),
+        _extended_packet(remote_id=0x08E905, cmd1=0x81, cmd2=0x06),
+        _extended_packet(remote_id=0x08E905, cmd1=0x81, cmd2=0x05),
     )
     hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
     hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
@@ -1111,14 +1125,28 @@ async def test_extended_rmt_contradiction_collects_diagnostic_captures(hass, mon
 
     result = await _advance_guided_learning(hass, result["flow_id"], result)
 
-    assert result["type"] is FlowResultType.MENU
-    assert result["step_id"] == "learn_failed"
-    assert "extended frame" in result["description_placeholders"]["error"]
-    debug_log = Path(hass.config.path("proflame2_debug.log")).read_text(encoding="utf-8")
-    assert "prompt_label': 'power_on'" in debug_log
-    assert "prompt_label': 'diagnostic_flame_change'" in debug_log
-    assert "prompt_label': 'diagnostic_mode_change'" in debug_log
-    assert "pcm_bit_length': '259'" in debug_log
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "learn_features"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+            CONF_DEBUG_LOGGING: False,
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_REMOTE_ID] == 0x08E905
+    assert result["data"]["protocol_variant"] == PROTOCOL_VARIANT_EXTENDED_10_WORD
+    assert result["data"]["extended_w4_base"] == 0x80
+    assert result["data"]["extended_w6"] == 0x15
+    assert result["data"]["extended_w7"] == 0xC8
+    assert result["data"]["extended_w8"] == 0x00
 
 
 async def test_guided_learning_prompt_reuses_pending_capture_task(hass, monkeypatch) -> None:

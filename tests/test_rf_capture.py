@@ -6,6 +6,7 @@ import pytest
 
 pytestmark = pytest.mark.protocol
 
+from custom_components.proflame2.protocol.ecc import build_extended_integrity_words
 from custom_components.proflame2.protocol.packet import ProflameFrame
 from custom_components.proflame2.rf.capture import (
     AIR_PACKET_BYTES,
@@ -48,6 +49,25 @@ def test_air_packet_round_trip(remote_profile) -> None:
     assert sample.remote_id == remote_profile.serial_id
     assert sample.cmd1_tuple == (0x31, 0x25)
     assert sample.cmd2_tuple == (0x26, 0xBC)
+    assert sample.as_frame() == frame
+
+
+def test_frame_to_capture_sample_preserves_extended_words() -> None:
+    """Generic capture conversion must not silently downgrade ten-word frames."""
+
+    w9, w10 = build_extended_integrity_words(0x81, 0x06, 0x15, 0xC8, 0x00)
+    frame = ProflameFrame(
+        serial_id=0x08E905,
+        cmd1=0x81,
+        err1=0x15,
+        cmd2=0x06,
+        err2=0xC8,
+        extension_words=(0x00, w9, w10),
+    )
+
+    sample = frame_to_capture_sample(frame)
+
+    assert sample.frame_format == "extended_10_word"
     assert sample.as_frame() == frame
 
 
