@@ -60,6 +60,17 @@ def test_esphome_firmware_tree_contains_expected_source_files() -> None:
     )
 
 
+def test_esphome_ci_compiles_the_checked_out_component_revision() -> None:
+    """CI must not combine its package YAML with a component fetched from main."""
+
+    workflow = (REPO_ROOT / ".github/workflows/esphome.yml").read_text(encoding="utf-8")
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert "run: make esphome-validate" in workflow
+    assert "esphome-stage:" in makefile
+    assert 'cp -R "$(ESPHOME_STAGE)/esphome/components/proflame2_tembed"' in makefile
+
+
 def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
     header = _read("components/proflame2_tembed/proflame2_tembed.h")
     developer_notes = (REPO_ROOT / "docs/lilygo_cc1101_controller_dev.md").read_text(encoding="utf-8")
