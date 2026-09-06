@@ -303,8 +303,10 @@ Default policy:
 - Prefer automation that validates before mutating repository state. If a
   workflow must mutate a branch, document that the branch must be pulled before
   further local work.
-- Do not create release tags until the stamped version files, branch state, and
-  validation checks are consistent.
+- Do not create release tags manually. The release-version workflow must first
+  stamp and validate the target branch, then create the tag from that exact
+  commit. It must reject existing tags unless an unpublished tag replacement is
+  explicitly confirmed.
 - Release validation should verify tag format, beta-release prerelease status,
   and stamped version consistency. A final `X.Y.Z` release may be marked as a
   GitHub prerelease while it receives final validation before promotion.
@@ -314,18 +316,18 @@ Branch and release flow:
 - Treat `dev` as the normal working release-preparation branch and `main` as
   the published stable branch. A validated `issue-*` branch may be used for an
   isolated beta when merging it into `dev` is not yet appropriate.
-- For beta releases, stamp the intended source branch to `X.Y.Z-betaN`, then
-  publish the prerelease tag from that stamped commit. The release workflow
-  stamps user-facing documentation links to the immutable release tag.
-- For final releases, start from the validated `dev` code line, stamp `dev` to
-  `X.Y.Z`, merge `dev` into `main`, then create the final release tag from
-  `main`. It may initially be published as a GitHub prerelease for final
-  validation, then promoted without changing the tag.
+- For beta releases, run the release-version workflow against the intended
+  source branch with `X.Y.Z-betaN`. It stamps user-facing documentation links
+  to the immutable release tag and creates that tag in one operation.
+- For final releases, merge validated `dev` into `main` first, then run the
+  release-version workflow against `main` with `X.Y.Z`. It may initially be
+  published as a GitHub prerelease for final validation, then promoted without
+  changing the tag.
 - After a final release, bring `dev` back in sync with `main` when needed so
   future work starts from the released baseline.
-- Avoid stamping `main` separately when `dev` already contains the intended
-  release content. Separate main-only stamping creates avoidable back-merge
-  conflicts in version files.
+- Do not hand-stamp `main` after merging `dev`. Run the release-version
+  workflow against `main` so its version stamp and immutable tag are created
+  together.
 
 Manual lifecycle work is allowed when automation is unavailable or would create
 more risk than it removes, but the decision should be explicit. Do not

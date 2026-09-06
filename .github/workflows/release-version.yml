@@ -7,9 +7,17 @@ on:
         description: Release version to stamp, for example 0.5.2 or 0.5.2-beta1
         required: true
       ref:
-        description: Branch or ref to update before creating the release tag
+        description: Branch to stamp and tag, for example dev
         required: true
         default: dev
+      replace_existing_tag:
+        description: Replace an existing tag only when it has no GitHub release
+        required: true
+        type: boolean
+        default: false
+      confirm_replace_tag:
+        description: When replacing a tag, type the exact tag name, for example v0.6.0-beta3
+        required: false
 
 jobs:
   stamp-version:
@@ -22,12 +30,15 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.ref }}
+          fetch-depth: 0
 
       - name: Resolve release version
         id: resolve
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.event.inputs.version }}
         run: |
-          version="${{ github.event.inputs.version }}"
+          version="${RELEASE_VERSION}"
 
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta[0-9]+)?$ ]]; then
             echo "Invalid version: $version" >&2
@@ -36,6 +47,7 @@ jobs:
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
       - name: Stamp manifest.json and version.py
         env:
@@ -71,6 +83,9 @@ jobs:
       - name: Stamp documentation URLs
         run: python3 scripts/stamp_docs_ref.py --ref "v${{ steps.resolve.outputs.version }}"
 
+      - name: Validate release source before tagging
+        run: python3 scripts/validate_release_source.py --tag "${{ steps.resolve.outputs.tag }}"
+
       - name: Commit stamped version
         env:
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
@@ -83,4 +98,60 @@ jobs:
             exit 0
           fi
           git commit -m "chore: stamp release version ${RELEASE_VERSION}"
-          git push origin HEAD:${{ github.event.inputs.ref }}
+
+      - name: Validate branch and existing release tag
+        env:
+          RELEASE_REF: ${{ github.event.inputs.ref }}
+          RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
+          REPLACE_EXISTING_TAG: ${{ github.event.inputs.replace_existing_tag }}
+          CONFIRM_REPLACE_TAG: ${{ github.event.inputs.confirm_replace_tag }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git check-ref-format --branch "$RELEASE_REF" >/dev/null
+          git ls-remote --exit-code --heads origin "refs/heads/$RELEASE_REF" >/dev/null
+
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null; then
+            exit 0
+          fi
+
+          if [[ "$REPLACE_EXISTING_TAG" != "true" ]]; then
+            echo "Tag $RELEASE_TAG already exists. Refusing to move it." >&2
+            echo "Use a new version, or explicitly request replacement before a GitHub release exists." >&2
+            exit 1
+          fi
+          if [[ "$CONFIRM_REPLACE_TAG" != "$RELEASE_TAG" ]]; then
+            echo "To replace $RELEASE_TAG, set confirm_replace_tag to that exact value." >&2
+            exit 1
+          fi
+          set +e
+          release_response="$(gh api --include "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" 2>&1)"
+          release_status=$?
+          set -e
+          if [[ $release_status -eq 0 ]]; then
+            echo "GitHub already has a release for $RELEASE_TAG; published release tags are immutable." >&2
+            echo "Delete the GitHub release deliberately before replacing its tag." >&2
+            exit 1
+          fi
+          if ! grep -qE '^HTTP/[0-9.]+ 404 ' <<<"$release_response"; then
+            echo "Unable to determine whether $RELEASE_TAG has a GitHub release; refusing to move it." >&2
+            echo "$release_response" >&2
+            exit 1
+          fi
+
+          git push origin ":refs/tags/$RELEASE_TAG"
+          git tag -d "$RELEASE_TAG" || true
+
+      - name: Create immutable release tag
+        env:
+          RELEASE_REF: ${{ github.event.inputs.ref }}
+          RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "$RELEASE_TAG" --message "Release $RELEASE_TAG" HEAD
+          git push origin "HEAD:refs/heads/$RELEASE_REF" "refs/tags/$RELEASE_TAG"
