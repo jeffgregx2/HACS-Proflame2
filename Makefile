@@ -1,4 +1,4 @@
-.PHONY: test lint-python format-python-check format-cpp-check esphome-setup esphome-stage esphome-config esphome-compile esphome-validate esphome-clean
+.PHONY: test firmware-unit-test lint-python format-python-check format-cpp-check esphome-setup esphome-stage esphome-config esphome-compile esphome-validate esphome-clean
 
 PYTHON ?= ./.venv/bin/python
 BLACK ?= ./.venv/bin/black
@@ -14,6 +14,9 @@ ESPHOME_STAGE_CLI ?= $(ESPHOME_WORK_ROOT)/esphome
 
 test:
 	$(PYTHON) -m pytest -q
+
+firmware-unit-test:
+	$(PYTHON) -m pytest -q tests/test_esphome_cpp_unit.py
 
 lint-python:
 	$(RUFF) check custom_components tools tests

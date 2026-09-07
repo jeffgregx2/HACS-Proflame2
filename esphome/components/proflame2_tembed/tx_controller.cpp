@@ -37,10 +37,7 @@ TxValidationResult TxController::validate_payload_request(const std::string& air
     result.reject_reason = TxValidationRejectReason::REPEAT_COUNT_MISMATCH;
     return result;
   }
-  if (!decode_hex_payload_(air_payload_hex, &result.prepared.payload)) {
-    result.reject_reason = TxValidationRejectReason::INVALID_HEX_PAYLOAD;
-    return result;
-  }
+  decode_hex_payload_(air_payload_hex, result.prepared.payload);
 
   result.prepared.max_payload_bits = static_cast<uint32_t>(result.prepared.payload.size() * 8U);
   if (payload_bit_length == 0U || payload_bit_length > result.prepared.max_payload_bits) {
@@ -90,19 +87,14 @@ bool TxController::is_hex_payload_(const std::string& value) {
   return true;
 }
 
-bool TxController::decode_hex_payload_(const std::string& value, std::vector<uint8_t>* payload) {
-  if (!is_hex_payload_(value) || payload == nullptr) {
-    return false;
-  }
-
-  payload->clear();
-  payload->reserve(value.size() / 2U);
+void TxController::decode_hex_payload_(const std::string& value, std::vector<uint8_t>& payload) {
+  payload.clear();
+  payload.reserve(value.size() / 2U);
   for (size_t i = 0; i < value.size(); i += 2U) {
     const uint8_t high = hex_nibble_(value[i]);
     const uint8_t low = hex_nibble_(value[i + 1U]);
-    payload->push_back(static_cast<uint8_t>((high << 4U) | low));
+    payload.push_back(static_cast<uint8_t>((high << 4U) | low));
   }
-  return true;
 }
 
 } // namespace proflame2_tembed

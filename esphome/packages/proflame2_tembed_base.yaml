@@ -30,7 +30,9 @@
 # emitted to HA.
 
 substitutions:
-  proflame2_payload_bit_length_override: "182"
+  # Zero preserves the authoritative length supplied by Home Assistant: 182
+  # bits for legacy remotes and 260 bits for supported extended remotes.
+  proflame2_payload_bit_length_override: "0"
   proflame2_tx_mode_override: "proflame_native_groups"
   proflame2_native_group_timing_profile_override: "native_remote"
   proflame2_inter_frame_gap_us_override: "0"

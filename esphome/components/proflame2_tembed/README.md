@@ -16,7 +16,7 @@ This is the reference for the working transmitter path:
 - `native_group_timing_profile: native_remote`
 - `native_group_repeat_boundary_mode: continuous_tx`
 - `repeat_count: 5`
-- `payload_bit_length_override: 182`
+- `payload_bit_length_override: 0` (use the Home Assistant-provided length)
 - `inter_frame_gap_us: 0`
 - `post_frame_idle_gap_us: 0`
 
@@ -44,8 +44,10 @@ The firmware receives a prepared payload from Home Assistant:
 - `payload_bit_length`
 - `repeat_count`
 
-For the validated native-group path, Home Assistant provides 25 payload bytes
-and the firmware transmits the first 182 bits of that payload.
+For the validated native-group path, Home Assistant provides the full payload
+and the firmware transmits the supplied meaningful bit length. This is `182`
+bits for a legacy seven-word frame and `260` bits for a supported extended
+ten-word frame.
 
 Example validated ON fixture:
 
@@ -82,11 +84,12 @@ Symbol mapping:
 - `10` -> `1`
 - `00` -> `Z` (`TRAILER`)
 
-For the validated Proflame2 native-group packet:
+For a validated Proflame2 native-group packet:
 
-- 7 groups are expected
+- 7 groups are expected for a legacy frame; 10 groups are expected for a
+  supported extended frame
 - each group consumes 13 symbols
-- total word symbols per repeat = `7 * 13 = 91`
+- total word symbols per repeat = `7 * 13 = 91` or `10 * 13 = 130`
 - any remaining symbols must be trailer symbols (`00`)
 
 Each 13-symbol group is interpreted as:
@@ -106,7 +109,7 @@ The firmware requires:
 - symbol 0 in every group is `S`
 - `start`, `parity`, and `end` are each either `0` or `1`
 - all 9 data symbols are each either `0` or `1`
-- all symbols after the 7 groups are `Z`
+- all symbols after the complete 7- or 10-group frame are `Z`
 
 ## Native-Group Emit-Bit Derivation
 
@@ -425,7 +428,7 @@ proflame2_tembed:
   tx_mode: proflame_native_groups
   native_group_timing_profile: native_remote
   native_group_repeat_boundary_mode: continuous_tx
-  payload_bit_length_override: 182
+  payload_bit_length_override: 0
   inter_frame_gap_us: 0
   post_frame_idle_gap_us: 0
   pre_burst_low_us: 0

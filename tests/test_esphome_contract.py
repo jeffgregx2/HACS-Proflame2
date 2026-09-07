@@ -6,8 +6,9 @@ import dataclasses
 
 import pytest
 
+from custom_components.proflame2.const import PROTOCOL_VARIANT_EXTENDED_10_WORD
 from custom_components.proflame2.protocol.encoder import encode_packet
-from custom_components.proflame2.protocol.models import ECCProfile, FireplaceState, RemoteProfile
+from custom_components.proflame2.protocol.models import ECCProfile, ExtendedFrameTemplate, FireplaceState, RemoteProfile
 from custom_components.proflame2.rf.esphome.contract import (
     ESPHomeDisplayState,
     ESPHomeEndpointStatus,
@@ -56,6 +57,45 @@ def test_tx_request_uses_prepared_transmission_plan_payload(remote_profile: Remo
     assert request.err1 == packet.frame.err1
     assert request.cmd2 == packet.frame.cmd2
     assert request.err2 == packet.frame.err2
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_word_count", "expected_payload_bytes", "expected_payload_bits"),
+    [
+        (
+            RemoteProfile(serial_id=0x3B3F03, ecc=ECCProfile(c1=0x10, d1=0x20, c2=0x30, d2=0x40)),
+            7,
+            25,
+            182,
+        ),
+        (
+            RemoteProfile(
+                serial_id=0x08E905,
+                ecc=ECCProfile(c1=0, d1=0, c2=0, d2=0),
+                protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
+                extended_template=ExtendedFrameTemplate(w4_base=0x80, w6=0x15, w7=0xC8, w8=0x00),
+            ),
+            10,
+            35,
+            260,
+        ),
+    ],
+)
+def test_lilygo_tx_request_preserves_complete_legacy_and_extended_frames(
+    profile: RemoteProfile,
+    expected_word_count: int,
+    expected_payload_bytes: int,
+    expected_payload_bits: int,
+) -> None:
+    """The HA-to-firmware contract must carry every word for each variant."""
+
+    packet = encode_packet(FireplaceState(power=True, flame=3), profile)
+    packet.transmission_plan = build_transmission_plan(packet.frame)
+    request = ESPHomeTXRequest.from_packet(packet, request_id="variant-boundary")
+
+    assert len(packet.frame.wire_words) == expected_word_count
+    assert len(request.air_payload) == expected_payload_bytes
+    assert request.air_payload_bit_length == expected_payload_bits
 
 
 def test_tx_request_requires_prepared_transmission_plan(remote_profile: RemoteProfile) -> None:

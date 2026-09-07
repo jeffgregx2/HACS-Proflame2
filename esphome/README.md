@@ -168,7 +168,7 @@ Validated TX defaults:
 - `tx_mode: proflame_native_groups`
 - `native_group_timing_profile: native_remote`
 - `native_group_repeat_boundary_mode: continuous_tx`
-- `payload_bit_length_override: 182`
+- `payload_bit_length_override: 0` (use the Home Assistant-provided length)
 - `inter_frame_gap_us: 0`
 - `post_frame_idle_gap_us: 0`
 
@@ -195,6 +195,13 @@ Python tests do not require ESPHome to be installed:
 
 ```bash
 ./.venv/bin/python -m pytest -q
+```
+
+The firmware's transport-only C++ TX helpers also have host-executed `gcov`
+coverage tests:
+
+```bash
+make firmware-unit-test
 ```
 
 ESPHome validation uses a dedicated virtualenv because ESPHome and Home

@@ -53,7 +53,7 @@ public:
 
 private:
   static bool is_hex_payload_(const std::string& value);
-  static bool decode_hex_payload_(const std::string& value, std::vector<uint8_t>* payload);
+  static void decode_hex_payload_(const std::string& value, std::vector<uint8_t>& payload);
 };
 
 } // namespace proflame2_tembed

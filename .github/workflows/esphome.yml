@@ -20,6 +20,15 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Set up firmware host-test environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements-dev.txt
+
+      - name: Run firmware TX host tests with coverage
+        run: make firmware-unit-test
+
       - name: Validate and compile ESPHome example
         run: make esphome-validate
 

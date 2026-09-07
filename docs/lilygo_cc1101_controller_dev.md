@@ -32,7 +32,7 @@ The production ESPHome package configures the controller for:
 | RX frequency | `314973000` Hz |
 | Data rate | `2400` bps |
 | Modulation | ASK/OOK |
-| TX payload bit length | `182` bits |
+| TX payload bit length | Supplied by Home Assistant: `182` bits for legacy frames and `260` bits for supported extended frames |
 | TX repeat count | `5` native repeats |
 | TX data pin | `GDO0` |
 | RX export window | `6000` ms |
@@ -59,6 +59,18 @@ The timing-critical transmit loop is intentionally monolithic. The order of
 preload writes, enter-TX, TX-ready waits, scheduled GDO writes, repeat
 boundaries, and set-idle calls is RF-visible. Do not refactor the inner timing
 loop without scope/rtl_433/fireplace validation.
+
+### Firmware TX Coverage
+
+Run `make firmware-unit-test` to compile and execute the transport-only C++
+TX helpers on the host with `gcov` coverage enabled. The test verifies the
+seven-word/182-bit and ten-word/260-bit payload layouts, the no-override
+default, explicit override behavior, and every reachable validation rejection.
+
+This host test does not prove RF timing or CC1101 behavior. Full target-side
+ESP-IDF coverage requires an instrumented firmware build and a physical JTAG
+connection with OpenOCD to dump coverage counters from the ESP32-S3. That
+hardware coverage workflow is not configured in this repository.
 
 ### TX CC1101 Register Settings
 

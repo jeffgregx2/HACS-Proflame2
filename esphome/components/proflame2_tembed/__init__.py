@@ -149,7 +149,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_PRE_BURST_LOW_US, default=0): cv.positive_int,
         cv.Optional(CONF_PRE_FRAME_LOW_US, default=0): cv.positive_int,
         cv.Optional(CONF_DIAGNOSTIC_REPEAT_COUNT_OVERRIDE, default=0): cv.int_range(min=0, max=20),
-        cv.Optional(CONF_PAYLOAD_BIT_LENGTH_OVERRIDE, default=200): cv.positive_int,
+        cv.Optional(CONF_PAYLOAD_BIT_LENGTH_OVERRIDE, default=0): cv.positive_int,
         cv.Optional(CONF_ASYNC_TX_DATA_PIN, default="gdo0"): cv.one_of(
             "gdo0", "gdo2", lower=True
         ),

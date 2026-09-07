@@ -49,6 +49,8 @@ def test_esphome_firmware_tree_contains_expected_source_files() -> None:
         "components/proflame2_tembed/rmt_ook_receiver.cpp",
         "components/proflame2_tembed/telemetry_publisher.h",
         "components/proflame2_tembed/telemetry_publisher.cpp",
+        "components/proflame2_tembed/tx_payload_layout.h",
+        "components/proflame2_tembed/tx_payload_layout.cpp",
         "components/proflame2_tembed/tx_controller.h",
         "components/proflame2_tembed/tx_controller.cpp",
         "components/proflame2_tembed/display_state.h",
@@ -140,7 +142,8 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "set_api_connected(false)" not in base
     assert "proflame2_tembed:" in base
     assert "id: proflame2_radio" in base
-    assert 'proflame2_payload_bit_length_override: "182"' in base
+    assert 'proflame2_payload_bit_length_override: "0"' in base
+    assert "182\n  # bits for legacy remotes and 260 bits for supported extended remotes." in base
     assert "payload_bit_length_override: ${proflame2_payload_bit_length_override}" in base
     assert 'proflame2_tx_mode_override: "proflame_native_groups"' in base
     assert 'proflame2_native_group_timing_profile_override: "native_remote"' in base
@@ -650,9 +653,21 @@ def test_tx_debug_format_strings_match_fixed_width_diagnostic_types() -> None:
 
 def test_esphome_native_group_serializer_supports_variable_emit_lengths() -> None:
     radio = _read("components/proflame2_tembed/radio_cc1101_tx.cpp")
+    layout = _read("components/proflame2_tembed/tx_payload_layout.h")
+    component = _read("components/proflame2_tembed/__init__.py")
 
     assert "PROFLAME_NATIVE_SOURCE_BITS_PER_GROUP = 9" in radio
     assert "PROFLAME_NATIVE_MAX_EMIT_BITS_PER_GROUP = 16" in radio
+    assert "PROFLAME_EXTENDED_WORD_COUNT" in radio
+    assert "derive_native_payload_layout(symbol_count, layout)" in radio
+    assert "PROFLAME_NATIVE_MAX_TRANSITIONS_PER_FRAME" in radio
+    assert "Native TX schedule must hold a complete extended frame" in radio
+    assert "unsupported_symbol_count" in radio
+    assert "group_index * PROFLAME_SYMBOLS_PER_WORD" in radio
+    assert "WORD_SYMBOL_COUNT" not in radio
+    assert "PROFLAME_LEGACY_WORD_COUNT = 7" in layout
+    assert "PROFLAME_EXTENDED_WORD_COUNT = 10" in layout
+    assert "CONF_PAYLOAD_BIT_LENGTH_OVERRIDE, default=0" in component
     assert "group3_derive_failed" not in radio
     assert "unexpected_high_run:" in radio
     assert "emit_overflow" in radio
