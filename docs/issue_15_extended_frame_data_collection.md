@@ -47,8 +47,10 @@ For every capture, preserve each line containing:
 
 ```text
 RX RMT pulse capture schema=2 capture_id=...
-RX RMT pulse capture discarded reason=...
 ```
+
+Discarded-window messages are diagnostic only. Empty windows are suppressed and
+other discard messages are rate-limited, so they do not need to be collected.
 
 After the final button press, wait about two seconds and set **Enable Capture**
 to `off`. Paste the complete log block from enabling through disabling capture.

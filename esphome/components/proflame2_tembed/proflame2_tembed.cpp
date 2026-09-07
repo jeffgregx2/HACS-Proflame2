@@ -30,6 +30,7 @@ static constexpr uint32_t RX_FIFO_AUTO_COMPLETE_MIN_INTERESTING_BYTES = 24U;
 static constexpr uint32_t RX_FIFO_ACTIVE_LISTENER_MIN_ACTIVITY_BYTES = 24U;
 static constexpr uint32_t RX_FIFO_ACTIVE_LISTENER_SCAN_INTERVAL_MS = 1500U;
 static constexpr uint32_t RX_FIFO_ACCEPTED_DEDUP_MS = 5000U;
+static constexpr uint32_t RX_RMT_PULSE_DISCARD_LOG_INTERVAL_MS = 5000U;
 
 static std::string format_hex_byte_(uint8_t value) {
   char buffer[5];
@@ -429,6 +430,11 @@ static void radio_runtime_task_entry_(void* context) {
       runtime->state = RadioRuntimeState::ERROR;
     }
   }
+}
+
+void Proflame2TEmbedComponent::set_firmware_package_ref(const std::string& value) {
+  this->firmware_package_ref_ = value;
+  ESP_LOGI(TAG, "Proflame2 firmware package ref: %s", this->firmware_package_ref_.c_str());
 }
 
 void Proflame2TEmbedComponent::setup() {
@@ -977,6 +983,8 @@ void Proflame2TEmbedComponent::set_rmt_pulse_capture_enabled_(bool value) {
   }
   if (!value) {
     this->rx_rmt_pulse_capture_enabled_ = false;
+    this->rx_rmt_pulse_discard_log_initialized_ = false;
+    this->rx_rmt_pulse_discard_suppressed_count_ = 0;
     this->rmt_ook_receiver_.end();
     this->strobe_(CC1101_SIDLE);
     if (this->cc1101_gdo0_pin_ != nullptr) {
@@ -1019,6 +1027,8 @@ void Proflame2TEmbedComponent::set_rmt_pulse_capture_enabled_(bool value) {
   }
   this->strobe_(CC1101_SRX);
   this->rx_rmt_pulse_capture_enabled_ = true;
+  this->rx_rmt_pulse_discard_log_initialized_ = false;
+  this->rx_rmt_pulse_discard_suppressed_count_ = 0;
   ESP_LOGI(TAG, "RX RMT pulse capture enabled gpio=%d resolution_hz=%" PRIu32 " idle_end_ms=%u",
            gdo0_gpio, RmtOokReceiver::RESOLUTION_HZ,
            static_cast<unsigned>(RmtOokReceiver::IDLE_END_NS / 1000000U));
@@ -1032,8 +1042,23 @@ void Proflame2TEmbedComponent::poll_rmt_pulse_capture_() {
   RmtOokCapture capture{};
   std::string error;
   if (!this->rmt_ook_receiver_.poll(capture, error)) {
-    if (!error.empty()) {
-      ESP_LOGD(TAG, "RX RMT pulse capture discarded reason=%s", error.c_str());
+    if (error.empty() || error == "rmt_pcm_empty") {
+      return;
+    }
+    const uint32_t now = millis();
+    if (!this->rx_rmt_pulse_discard_log_initialized_ ||
+        (now - this->rx_rmt_pulse_last_discard_log_ms_) >= RX_RMT_PULSE_DISCARD_LOG_INTERVAL_MS) {
+      if (this->rx_rmt_pulse_discard_suppressed_count_ > 0U) {
+        ESP_LOGD(TAG, "RX RMT pulse capture discarded reason=%s suppressed=%" PRIu32, error.c_str(),
+                 this->rx_rmt_pulse_discard_suppressed_count_);
+      } else {
+        ESP_LOGD(TAG, "RX RMT pulse capture discarded reason=%s", error.c_str());
+      }
+      this->rx_rmt_pulse_last_discard_log_ms_ = now;
+      this->rx_rmt_pulse_discard_log_initialized_ = true;
+      this->rx_rmt_pulse_discard_suppressed_count_ = 0;
+    } else {
+      this->rx_rmt_pulse_discard_suppressed_count_++;
     }
     return;
   }

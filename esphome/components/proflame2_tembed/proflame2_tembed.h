@@ -151,6 +151,7 @@ public:
   void set_payload_bit_length_override(uint32_t value) {
     this->payload_bit_length_override_ = value;
   }
+  void set_firmware_package_ref(const std::string& value);
   void set_display_debug_mode(bool value) {
     this->display_.display_debug_mode = value;
     this->display_.display_refresh_pending = true;
@@ -589,6 +590,7 @@ protected:
   uint32_t pre_frame_low_us_{0};
   uint8_t diagnostic_repeat_count_override_{0};
   uint32_t payload_bit_length_override_{0};
+  std::string firmware_package_ref_{"unknown"};
   AsyncTxDataPin async_tx_data_pin_{AsyncTxDataPin::GDO0};
 
   GPIOPin* board_power_enable_pin_{nullptr};
@@ -698,6 +700,9 @@ protected:
   bool rx_rmt_pulse_capture_enabled_{false};
   bool rx_rmt_pulse_paused_for_tx_{false};
   uint32_t rx_rmt_pulse_capture_sequence_{0};
+  uint32_t rx_rmt_pulse_last_discard_log_ms_{0};
+  uint32_t rx_rmt_pulse_discard_suppressed_count_{0};
+  bool rx_rmt_pulse_discard_log_initialized_{false};
   RmtOokReceiver rmt_ook_receiver_{};
   bool rx_fifo_capture_export_busy_{false};
   bool rx_fifo_capture_configured_{false};

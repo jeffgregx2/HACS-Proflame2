@@ -100,6 +100,10 @@ packages:
   proflame2_tembed_display: !include ../packages/proflame2_tembed_display.yaml
 ```
 
+At boot, the ESPHome log reports the configured package reference at `INFO`
+level, for example `Proflame2 firmware package ref: v0.6.0-beta4`. This is the
+same `proflame2_package_ref` value used to fetch the production component.
+
 ## Hardware Target
 
 The production overlay targets the LilyGO T-Embed CC1101:

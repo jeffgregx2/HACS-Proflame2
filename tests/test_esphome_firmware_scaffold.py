@@ -107,6 +107,27 @@ def test_tx_debug_symbol_logging_uses_the_native_payload_layout() -> None:
     assert "PROFLAME_WORD_COUNT" not in logger
 
 
+def test_firmware_logs_the_configured_package_ref_at_info_level() -> None:
+    header = _read("components/proflame2_tembed/proflame2_tembed.h")
+    implementation = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+
+    assert "void set_firmware_package_ref(const std::string& value)" in header
+    assert 'std::string firmware_package_ref_{"unknown"}' in header
+    assert 'ESP_LOGI(TAG, "Proflame2 firmware package ref: %s", this->firmware_package_ref_.c_str());' in implementation
+
+
+def test_rmt_empty_capture_discards_do_not_flood_debug_logs() -> None:
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    start = component.index("void Proflame2TEmbedComponent::poll_rmt_pulse_capture_()")
+    end = component.index("void Proflame2TEmbedComponent::publish_rmt_pulse_capture_", start)
+    poll = component[start:end]
+
+    assert 'error.empty() || error == "rmt_pcm_empty"' in poll
+    assert "RX_RMT_PULSE_DISCARD_LOG_INTERVAL_MS" in poll
+    assert "rx_rmt_pulse_discard_suppressed_count_" in poll
+    assert 'RX RMT pulse capture discarded reason=%s suppressed=%" PRIu32' in poll
+
+
 def test_esphome_external_component_uses_codegen_schema_and_action() -> None:
     component = _read("components/proflame2_tembed/__init__.py")
 
@@ -186,6 +207,9 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert '      - "rmt_pulse"' in base
     assert "id(proflame2_radio).set_active_listener_rx_path(x);" in base
     assert "id(proflame2_radio).set_active_listener_rx_path(id(proflame2_active_listener_rx_path_state));" in base
+    assert "id(proflame2_radio).set_firmware_package_ref(id(proflame2_firmware_package_ref));" in base
+    assert "id: proflame2_firmware_package_ref" in base
+    assert "initial_value: '\"${proflame2_package_ref}\"'" in base
     assert 'initial_value: "1"' in base
     assert "select:" in base
     assert "platform: template" in base
