@@ -49,6 +49,20 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
+      - name: Normalize release branch
+        id: release_ref
+        shell: bash
+        env:
+          RELEASE_REF: ${{ github.event.inputs.ref }}
+        run: |
+          release_ref="${RELEASE_REF#"${RELEASE_REF%%[![:space:]]*}"}"
+          release_ref="${release_ref%"${release_ref##*[![:space:]]}"}"
+          if [[ -z "$release_ref" ]]; then
+            echo "Release branch cannot be empty." >&2
+            exit 1
+          fi
+          echo "ref=$release_ref" >> "$GITHUB_OUTPUT"
+
       - name: Stamp manifest.json and version.py
         env:
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
@@ -101,7 +115,7 @@ jobs:
 
       - name: Validate branch and existing release tag
         env:
-          RELEASE_REF: ${{ github.event.inputs.ref }}
+          RELEASE_REF: ${{ steps.release_ref.outputs.ref }}
           RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
           REPLACE_EXISTING_TAG: ${{ github.event.inputs.replace_existing_tag }}
           CONFIRM_REPLACE_TAG: ${{ github.event.inputs.confirm_replace_tag }}
@@ -146,7 +160,7 @@ jobs:
 
       - name: Create immutable release tag
         env:
-          RELEASE_REF: ${{ github.event.inputs.ref }}
+          RELEASE_REF: ${{ steps.release_ref.outputs.ref }}
           RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
         shell: bash
         run: |
