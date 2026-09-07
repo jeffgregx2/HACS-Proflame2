@@ -84,6 +84,7 @@ CONF_INTENDED_FRONT = "intended_front"
 CONF_INTENDED_AUX = "intended_aux"
 CONF_INTENDED_ACTION_LABEL = "intended_action_label"
 CONF_FIREPLACE_NAME = "fireplace_name"
+CONF_FIRMWARE_PACKAGE_REF = "firmware_package_ref"
 
 proflame2_tembed_ns = cg.esphome_ns.namespace("proflame2_tembed")
 TXMode = proflame2_tembed_ns.enum("TXMode", is_class=True)
@@ -132,6 +133,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_DISPLAY_DEBUG_MODE, default=False): cv.boolean,
         cv.Optional(CONF_DISPLAY_DIM_TIMEOUT_MIN, default=1): cv.int_range(min=0),
         cv.Optional(CONF_DISPLAY_WAKE_ON_ACTIVITY, default=True): cv.boolean,
+        cv.Optional(CONF_FIRMWARE_PACKAGE_REF, default="unknown"): cv.string,
         cv.Optional(CONF_TX_MODE, default="repeated_strobe"): cv.one_of(
             "continuous_burst",
             "repeated_strobe",
@@ -251,6 +253,7 @@ async def to_code(config):
     cg.add(var.set_display_debug_mode(config[CONF_DISPLAY_DEBUG_MODE]))
     cg.add(var.set_display_dim_timeout_min(config[CONF_DISPLAY_DIM_TIMEOUT_MIN]))
     cg.add(var.set_display_wake_on_activity(config[CONF_DISPLAY_WAKE_ON_ACTIVITY]))
+    cg.add(var.set_firmware_package_ref(config[CONF_FIRMWARE_PACKAGE_REF]))
     cg.add(var.set_tx_mode_requested(config[CONF_TX_MODE]))
     cg.add(
         var.set_native_group_timing_profile_requested(

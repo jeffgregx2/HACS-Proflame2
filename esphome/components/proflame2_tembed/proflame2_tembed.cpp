@@ -434,10 +434,10 @@ static void radio_runtime_task_entry_(void* context) {
 
 void Proflame2TEmbedComponent::set_firmware_package_ref(const std::string& value) {
   this->firmware_package_ref_ = value;
-  ESP_LOGI(TAG, "Proflame2 firmware package ref: %s", this->firmware_package_ref_.c_str());
 }
 
 void Proflame2TEmbedComponent::setup() {
+  ESP_LOGI(TAG, "Proflame2 firmware package ref: %s", this->firmware_package_ref_.c_str());
   this->spi_setup();
 
   if (this->board_power_enable_pin_ != nullptr) {

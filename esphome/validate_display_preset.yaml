@@ -25,3 +25,11 @@ wifi:
 packages:
   proflame2_tembed_base: !include packages/proflame2_tembed_base.yaml
   proflame2_tembed_display: !include packages/proflame2_tembed_display.yaml
+
+# CI validates the package against this checkout's component schema rather than
+# the remote main branch, which may not yet contain a new package option.
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [proflame2_tembed]

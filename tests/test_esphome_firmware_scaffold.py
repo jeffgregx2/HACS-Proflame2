@@ -110,10 +110,18 @@ def test_tx_debug_symbol_logging_uses_the_native_payload_layout() -> None:
 def test_firmware_logs_the_configured_package_ref_at_info_level() -> None:
     header = _read("components/proflame2_tembed/proflame2_tembed.h")
     implementation = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    component = _read("components/proflame2_tembed/__init__.py")
+    base = _read("packages/proflame2_tembed_base.yaml")
 
     assert "void set_firmware_package_ref(const std::string& value)" in header
     assert 'std::string firmware_package_ref_{"unknown"}' in header
-    assert 'ESP_LOGI(TAG, "Proflame2 firmware package ref: %s", this->firmware_package_ref_.c_str());' in implementation
+    assert 'CONF_FIRMWARE_PACKAGE_REF = "firmware_package_ref"' in component
+    assert 'cv.Optional(CONF_FIRMWARE_PACKAGE_REF, default="unknown"): cv.string' in component
+    assert "cg.add(var.set_firmware_package_ref(config[CONF_FIRMWARE_PACKAGE_REF]))" in component
+    setup_start = implementation.index("void Proflame2TEmbedComponent::setup()")
+    setup = implementation[setup_start : setup_start + 300]
+    assert 'ESP_LOGI(TAG, "Proflame2 firmware package ref: %s", this->firmware_package_ref_.c_str());' in setup
+    assert "firmware_package_ref: ${proflame2_package_ref}" in base
 
 
 def test_rmt_empty_capture_discards_do_not_flood_debug_logs() -> None:
@@ -158,6 +166,8 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     ) in example
     assert "proflame2_tembed_base: !include packages/proflame2_tembed_base.yaml" in validation
     assert "proflame2_tembed_display: !include packages/proflame2_tembed_display.yaml" in validation
+    assert "type: local" in validation
+    assert "path: components" in validation
     assert "proflame2_asset_base_url: assets/icons" in validation
     assert "type: git" in base
     assert "url: https://github.com/jeffgregx2/HACS-Proflame2" in base
@@ -207,9 +217,9 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert '      - "rmt_pulse"' in base
     assert "id(proflame2_radio).set_active_listener_rx_path(x);" in base
     assert "id(proflame2_radio).set_active_listener_rx_path(id(proflame2_active_listener_rx_path_state));" in base
-    assert "id(proflame2_radio).set_firmware_package_ref(id(proflame2_firmware_package_ref));" in base
-    assert "id: proflame2_firmware_package_ref" in base
-    assert "initial_value: '\"${proflame2_package_ref}\"'" in base
+    assert "id(proflame2_radio).set_firmware_package_ref(id(proflame2_firmware_package_ref));" not in base
+    assert "id: proflame2_firmware_package_ref" not in base
+    assert "firmware_package_ref: ${proflame2_package_ref}" in base
     assert 'initial_value: "1"' in base
     assert "select:" in base
     assert "platform: template" in base
