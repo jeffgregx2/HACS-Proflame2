@@ -1,4 +1,5 @@
 #include "proflame2_tembed.h"
+#include "tx_payload_layout.h"
 
 #include <algorithm>
 #include <cstring>
@@ -208,10 +209,6 @@ static std::string safe_substr_(const std::string& value, size_t pos, size_t cou
 
 static void log_air_payload_symbols_(const std::string& request_id, const std::vector<uint8_t>& payload,
                                      uint32_t ha_payload_bit_length, uint32_t effective_payload_bit_length) {
-  constexpr size_t PROFLAME_WORD_COUNT = 7;
-  constexpr size_t SYMBOLS_PER_WORD = 13;
-  constexpr size_t TRAILING_ZERO_SYMBOLS = 9;
-
   const uint32_t full_air_bit_length = static_cast<uint32_t>(payload.size() * 8U);
   const std::string effective_symbols = decode_air_symbols_(payload, effective_payload_bit_length);
   const std::string full_symbols = decode_air_symbols_(payload, full_air_bit_length);
@@ -229,14 +226,21 @@ static void log_air_payload_symbols_(const std::string& request_id, const std::v
     return;
   }
 
+  NativePayloadLayout layout{};
+  if (!derive_native_payload_layout(effective_symbols.size(), layout)) {
+    ESP_LOGW(TAG, "TX air payload has no recognized native layout request_id=%s effective_symbols=%u",
+             request_id.c_str(), static_cast<unsigned>(effective_symbols.size()));
+    return;
+  }
+
   ESP_LOGI(TAG, "TX air payload symbol stream request_id=%s effective=%s trailer=%s", request_id.c_str(),
            effective_symbols.c_str(),
            full_symbols.size() > effective_symbols.size() ? full_symbols.substr(effective_symbols.size()).c_str()
                                                           : "<none>");
 
-  for (size_t word_index = 0; word_index < PROFLAME_WORD_COUNT; word_index++) {
-    const size_t offset = word_index * SYMBOLS_PER_WORD;
-    const std::string chunk = safe_substr_(full_symbols, offset, SYMBOLS_PER_WORD);
+  for (size_t word_index = 0; word_index < layout.word_count; word_index++) {
+    const size_t offset = word_index * PROFLAME_SYMBOLS_PER_WORD;
+    const std::string chunk = safe_substr_(full_symbols, offset, PROFLAME_SYMBOLS_PER_WORD);
     const std::string data9 = chunk.size() >= 11 ? chunk.substr(2, 9) : "";
     const std::string parity = chunk.size() >= 12 ? chunk.substr(11, 1) : "";
     const std::string end_guard = chunk.size() >= 13 ? chunk.substr(12, 1) : "";
@@ -247,7 +251,8 @@ static void log_air_payload_symbols_(const std::string& request_id, const std::v
              end_guard.empty() ? "?" : end_guard.c_str());
   }
 
-  const std::string trailer = safe_substr_(full_symbols, PROFLAME_WORD_COUNT * SYMBOLS_PER_WORD, TRAILING_ZERO_SYMBOLS);
+  const std::string trailer =
+      safe_substr_(full_symbols, layout.word_count * PROFLAME_SYMBOLS_PER_WORD, PROFLAME_MAX_TRAILER_SYMBOLS);
   ESP_LOGI(TAG, "TX air payload trailer request_id=%s trailer=%s", request_id.c_str(),
            trailer.empty() ? "<none>" : trailer.c_str());
 }

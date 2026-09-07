@@ -94,6 +94,19 @@ def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
     assert "The timing-critical transmit loop is intentionally monolithic" in developer_notes
 
 
+def test_tx_debug_symbol_logging_uses_the_native_payload_layout() -> None:
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    start = component.index("static void log_air_payload_symbols_")
+    end = component.index("template <size_t N> static void copy_string_", start)
+    logger = component[start:end]
+
+    assert '#include "tx_payload_layout.h"' in component
+    assert "derive_native_payload_layout(effective_symbols.size(), layout)" in logger
+    assert "word_index < layout.word_count" in logger
+    assert "layout.word_count * PROFLAME_SYMBOLS_PER_WORD" in logger
+    assert "PROFLAME_WORD_COUNT" not in logger
+
+
 def test_esphome_external_component_uses_codegen_schema_and_action() -> None:
     component = _read("components/proflame2_tembed/__init__.py")
 
@@ -660,6 +673,9 @@ def test_esphome_native_group_serializer_supports_variable_emit_lengths() -> Non
     assert "PROFLAME_NATIVE_MAX_EMIT_BITS_PER_GROUP = 16" in radio
     assert "PROFLAME_EXTENDED_WORD_COUNT" in radio
     assert "derive_native_payload_layout(symbol_count, layout)" in radio
+    assert "group_count = layout.word_count" in radio
+    assert "group_index < group_count" in radio
+    assert "group_index + 1U == group_count" in radio
     assert "PROFLAME_NATIVE_MAX_TRANSITIONS_PER_FRAME" in radio
     assert "Native TX schedule must hold a complete extended frame" in radio
     assert "unsupported_symbol_count" in radio

@@ -188,8 +188,9 @@ def _rtl433_expect(bits: str) -> str:
 
 def _native_groups_from_symbols(symbols: list[str]) -> list[str]:
     expand = {"S": "11", "0": "01", "1": "10", "Z": "00"}
+    assert len(symbols) % 13 == 0
     groups: list[str] = []
-    for group_index in range(7):
+    for group_index in range(len(symbols) // 13):
         word = symbols[group_index * 13 : (group_index + 1) * 13]
         air_bits = "".join(expand[symbol] for symbol in word)
         runs: list[tuple[str, int]] = []
@@ -212,6 +213,32 @@ def _native_groups_from_symbols(symbols: list[str]) -> list[str]:
             emitted.append("0" if run_length == 1 else "1")
         groups.append("".join(emitted))
     return groups
+
+
+def test_extended_frame_maps_to_ten_native_groups_and_complete_pcm_row() -> None:
+    """The extended payload must drive all ten groups through native TX shaping."""
+
+    profile = RemoteProfile(
+        serial_id=0x08E905,
+        ecc=ECCProfile(c1=0, d1=0, c2=0, d2=0),
+        protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
+        extended_template=ExtendedFrameTemplate(w4_base=0x80, w6=0x15, w7=0xC8, w8=0x00),
+    )
+    packet = encode_packet(FireplaceState(power=True, flame=3), profile)
+    packet.transmission_plan = build_transmission_plan(packet.frame)
+
+    plan = packet.transmission_plan
+    symbols = _symbols_from_air_bits(_air_payload_bits(plan.air_payload, plan.air_payload_bit_length))
+    groups = _native_groups_from_symbols(symbols)
+    expected_pcm_bits = _air_payload_bits(plan.air_payload, plan.air_payload_bit_length + 1)
+    shaped = _native_remote_pcm_shaped_segments(groups, expected_pcm_bits)
+
+    assert len(packet.frame.wire_words) == 10
+    assert len(symbols) == 130
+    assert len(groups) == 10
+    assert all(group for group in groups)
+    assert "".join(segment for _symbol, segment, _low_mode in shaped) == expected_pcm_bits
+    assert len(shaped) == sum(len(group) + 1 for group in groups)
 
 
 def _native_group_schedule_stats(groups: list[str]) -> tuple[int, int, int]:

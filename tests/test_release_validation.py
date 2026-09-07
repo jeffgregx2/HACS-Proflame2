@@ -27,7 +27,9 @@ def test_current_beta_release_source_is_self_consistent() -> None:
     """The checked-out beta source should pass the same pre-tag validation."""
 
     release_validation = _load_release_validation_module()
-    release_validation.validate_release_source("v0.6.0-beta3", prerelease=True)
+    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
+    version = manifest["version"]
+    release_validation.validate_release_source(f"v{version}", prerelease="-beta" in version)
 
 
 @pytest.mark.parametrize("tag", ("0.6.0", "v0.6", "v0.6.0-rc1", "v0.6.0-beta"))
