@@ -63,7 +63,7 @@ jobs:
           fi
           echo "ref=$release_ref" >> "$GITHUB_OUTPUT"
 
-      - name: Stamp manifest.json and version.py
+      - name: Stamp release metadata
         env:
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
         run: |
@@ -75,6 +75,7 @@ jobs:
           release_version = os.environ["RELEASE_VERSION"]
           manifest_path = Path("custom_components/proflame2/manifest.json")
           version_path = Path("custom_components/proflame2/version.py")
+          firmware_package_path = Path("esphome/packages/proflame2_tembed_base.yaml")
 
           manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
           manifest["version"] = release_version
@@ -92,6 +93,15 @@ jobs:
               raise RuntimeError("DEFAULT_INTEGRATION_VERSION not found in version.py")
 
           version_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          package_lines = firmware_package_path.read_text(encoding="utf-8").splitlines()
+          for index, line in enumerate(package_lines):
+              if line.startswith("  proflame2_firmware_version: "):
+                  package_lines[index] = f'  proflame2_firmware_version: "v{release_version}"'
+                  break
+          else:
+              raise RuntimeError("proflame2_firmware_version not found")
+          firmware_package_path.write_text("\n".join(package_lines) + "\n", encoding="utf-8")
           PY
 
       - name: Stamp documentation URLs
@@ -106,7 +116,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add custom_components/proflame2/manifest.json custom_components/proflame2/version.py custom_components/proflame2/docs_urls.py
+          git add custom_components/proflame2/manifest.json custom_components/proflame2/version.py custom_components/proflame2/docs_urls.py esphome/packages/proflame2_tembed_base.yaml
           if git diff --cached --quiet; then
             echo "No version changes to commit."
             exit 0

@@ -151,7 +151,7 @@ public:
   void set_payload_bit_length_override(uint32_t value) {
     this->payload_bit_length_override_ = value;
   }
-  void set_firmware_package_ref(const std::string& value);
+  void set_firmware_version(const std::string& value);
   void set_display_debug_mode(bool value) {
     this->display_.display_debug_mode = value;
     this->display_.display_refresh_pending = true;
@@ -214,6 +214,9 @@ public:
   }
   void set_cc1101_version_sensor(text_sensor::TextSensor* sensor) {
     this->cc1101_version_sensor_ = sensor;
+  }
+  void set_firmware_version_text_sensor(text_sensor::TextSensor* sensor) {
+    this->firmware_version_text_sensor_ = sensor;
   }
   void set_tx_success_count_sensor(sensor::Sensor* sensor) {
     this->tx_success_count_sensor_ = sensor;
@@ -535,6 +538,8 @@ protected:
   void apply_pending_display_intent_(const std::string& request_id);
   void clear_pending_display_intent_();
   void update_display_from_telemetry_();
+  void publish_firmware_version_();
+  void log_firmware_version_if_due_();
   void refresh_status_text_();
   void update_rx_runtime_display_state_();
 
@@ -590,7 +595,9 @@ protected:
   uint32_t pre_frame_low_us_{0};
   uint8_t diagnostic_repeat_count_override_{0};
   uint32_t payload_bit_length_override_{0};
-  std::string firmware_package_ref_{"unknown"};
+  std::string firmware_version_{"unknown"};
+  uint32_t firmware_version_api_last_log_ms_{0};
+  bool firmware_version_api_log_initialized_{false};
   AsyncTxDataPin async_tx_data_pin_{AsyncTxDataPin::GDO0};
 
   GPIOPin* board_power_enable_pin_{nullptr};
@@ -609,6 +616,7 @@ protected:
   text_sensor::TextSensor* last_marcstate_after_tx_sensor_{nullptr};
   text_sensor::TextSensor* cc1101_partnum_sensor_{nullptr};
   text_sensor::TextSensor* cc1101_version_sensor_{nullptr};
+  text_sensor::TextSensor* firmware_version_text_sensor_{nullptr};
   text_sensor::TextSensor* rx_last_rejection_snapshot_sensor_{nullptr};
   sensor::Sensor* tx_success_count_sensor_{nullptr};
   sensor::Sensor* tx_failure_count_sensor_{nullptr};

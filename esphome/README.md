@@ -100,9 +100,12 @@ packages:
   proflame2_tembed_display: !include ../packages/proflame2_tembed_display.yaml
 ```
 
-At boot, the ESPHome log reports the configured package reference at `INFO`
-level, for example `Proflame2 firmware package ref: v0.6.0-beta4`. This is the
-same `proflame2_package_ref` value used to fetch the production component.
+At boot, the ESPHome log reports the firmware version at `INFO` level, for
+example `Proflame2 firmware version: v0.6.0-beta4`. The release workflow stamps
+this value into the package, independently of the configured source reference.
+The line is emitted during startup and again shortly after an ESPHome API client
+connects. Home Assistant also exposes it as the diagnostic entity **Proflame2
+Firmware Version**.
 
 ## Hardware Target
 

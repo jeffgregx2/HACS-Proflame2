@@ -84,7 +84,8 @@ CONF_INTENDED_FRONT = "intended_front"
 CONF_INTENDED_AUX = "intended_aux"
 CONF_INTENDED_ACTION_LABEL = "intended_action_label"
 CONF_FIREPLACE_NAME = "fireplace_name"
-CONF_FIRMWARE_PACKAGE_REF = "firmware_package_ref"
+CONF_FIRMWARE_VERSION = "firmware_version"
+CONF_FIRMWARE_VERSION_TEXT = "firmware_version_text"
 
 proflame2_tembed_ns = cg.esphome_ns.namespace("proflame2_tembed")
 TXMode = proflame2_tembed_ns.enum("TXMode", is_class=True)
@@ -133,7 +134,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_DISPLAY_DEBUG_MODE, default=False): cv.boolean,
         cv.Optional(CONF_DISPLAY_DIM_TIMEOUT_MIN, default=1): cv.int_range(min=0),
         cv.Optional(CONF_DISPLAY_WAKE_ON_ACTIVITY, default=True): cv.boolean,
-        cv.Optional(CONF_FIRMWARE_PACKAGE_REF, default="unknown"): cv.string,
+        cv.Optional(CONF_FIRMWARE_VERSION, default="unknown"): cv.string,
         cv.Optional(CONF_TX_MODE, default="repeated_strobe"): cv.one_of(
             "continuous_burst",
             "repeated_strobe",
@@ -171,6 +172,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_LAST_MARCSTATE_AFTER_TX): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_CC1101_PARTNUM): text_sensor.text_sensor_schema(),
         cv.Optional(CONF_CC1101_VERSION): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_FIRMWARE_VERSION_TEXT): text_sensor.text_sensor_schema(
+            entity_category="diagnostic"
+        ),
         cv.Optional(CONF_TX_SUCCESS_COUNT): sensor.sensor_schema(accuracy_decimals=0),
         cv.Optional(CONF_TX_FAILURE_COUNT): sensor.sensor_schema(accuracy_decimals=0),
         cv.Optional(CONF_LAST_PAYLOAD_LENGTH): sensor.sensor_schema(accuracy_decimals=0),
@@ -253,7 +257,7 @@ async def to_code(config):
     cg.add(var.set_display_debug_mode(config[CONF_DISPLAY_DEBUG_MODE]))
     cg.add(var.set_display_dim_timeout_min(config[CONF_DISPLAY_DIM_TIMEOUT_MIN]))
     cg.add(var.set_display_wake_on_activity(config[CONF_DISPLAY_WAKE_ON_ACTIVITY]))
-    cg.add(var.set_firmware_package_ref(config[CONF_FIRMWARE_PACKAGE_REF]))
+    cg.add(var.set_firmware_version(config[CONF_FIRMWARE_VERSION]))
     cg.add(var.set_tx_mode_requested(config[CONF_TX_MODE]))
     cg.add(
         var.set_native_group_timing_profile_requested(
@@ -333,6 +337,7 @@ async def to_code(config):
         (CONF_LAST_MARCSTATE_AFTER_TX, "set_last_marcstate_after_tx_sensor"),
         (CONF_CC1101_PARTNUM, "set_cc1101_partnum_sensor"),
         (CONF_CC1101_VERSION, "set_cc1101_version_sensor"),
+        (CONF_FIRMWARE_VERSION_TEXT, "set_firmware_version_text_sensor"),
         (CONF_RX_LAST_REJECTION_SNAPSHOT, "set_rx_last_rejection_snapshot_sensor"),
     )
     for key, setter_name in text_sensor_setters:

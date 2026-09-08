@@ -58,6 +58,21 @@ def validate_release_source(tag: str, prerelease: bool | None = None) -> None:
     if version_match.group("version") != version:
         raise ValueError("version.py mismatch: " f"expected {version!r}, found {version_match.group('version')!r}.")
 
+    firmware_package_path = Path("esphome/packages/proflame2_tembed_base.yaml")
+    firmware_package_text = firmware_package_path.read_text(encoding="utf-8")
+    firmware_version_match = re.search(
+        r'^  proflame2_firmware_version: "(?P<version>[^"]+)"$',
+        firmware_package_text,
+        flags=re.MULTILINE,
+    )
+    if firmware_version_match is None:
+        raise ValueError("proflame2_firmware_version not found in the ESPHome base package.")
+    if firmware_version_match.group("version") != tag:
+        raise ValueError(
+            "ESPHome firmware version mismatch: "
+            f"expected {tag!r}, found {firmware_version_match.group('version')!r}."
+        )
+
     _load_stamp_docs_ref_module().validate_docs_ref(tag)
 
 

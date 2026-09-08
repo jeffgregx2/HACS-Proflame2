@@ -113,15 +113,28 @@ def test_firmware_logs_the_configured_package_ref_at_info_level() -> None:
     component = _read("components/proflame2_tembed/__init__.py")
     base = _read("packages/proflame2_tembed_base.yaml")
 
-    assert "void set_firmware_package_ref(const std::string& value)" in header
-    assert 'std::string firmware_package_ref_{"unknown"}' in header
-    assert 'CONF_FIRMWARE_PACKAGE_REF = "firmware_package_ref"' in component
-    assert 'cv.Optional(CONF_FIRMWARE_PACKAGE_REF, default="unknown"): cv.string' in component
-    assert "cg.add(var.set_firmware_package_ref(config[CONF_FIRMWARE_PACKAGE_REF]))" in component
+    assert "void set_firmware_version(const std::string& value)" in header
+    assert 'std::string firmware_version_{"unknown"}' in header
+    assert 'CONF_FIRMWARE_VERSION = "firmware_version"' in component
+    assert 'cv.Optional(CONF_FIRMWARE_VERSION, default="unknown"): cv.string' in component
+    assert "cg.add(var.set_firmware_version(config[CONF_FIRMWARE_VERSION]))" in component
+    assert 'CONF_FIRMWARE_VERSION_TEXT = "firmware_version_text"' in component
+    assert "set_firmware_version_text_sensor" in component
     setup_start = implementation.index("void Proflame2TEmbedComponent::setup()")
     setup = implementation[setup_start : setup_start + 300]
-    assert 'ESP_LOGI(TAG, "Proflame2 firmware package ref: %s", this->firmware_package_ref_.c_str());' in setup
-    assert "firmware_package_ref: ${proflame2_package_ref}" in base
+    assert 'ESP_LOGI(TAG, "Proflame2 firmware version: %s", this->firmware_version_.c_str());' in setup
+    assert "this->publish_firmware_version_();" in setup
+    api_connected_start = implementation.index("void Proflame2TEmbedComponent::handle_api_client_connected")
+    api_connected = implementation[api_connected_start : api_connected_start + 600]
+    assert 'this->set_timeout("firmware_version_log", 500, [this]()' in api_connected
+    assert "this->log_firmware_version_if_due_();" in api_connected
+    assert "this->publish_firmware_version_();" in api_connected
+    assert "void Proflame2TEmbedComponent::publish_firmware_version_()" in implementation
+    assert "void Proflame2TEmbedComponent::log_firmware_version_if_due_()" in implementation
+    assert "FIRMWARE_VERSION_API_LOG_INTERVAL_MS" in implementation
+    assert "firmware_version: ${proflame2_firmware_version}" in base
+    assert 'proflame2_firmware_version: "v0.6.0-beta4"' in base
+    assert "name: Proflame2 Firmware Version" in base
 
 
 def test_rmt_empty_capture_discards_do_not_flood_debug_logs() -> None:
@@ -217,9 +230,9 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert '      - "rmt_pulse"' in base
     assert "id(proflame2_radio).set_active_listener_rx_path(x);" in base
     assert "id(proflame2_radio).set_active_listener_rx_path(id(proflame2_active_listener_rx_path_state));" in base
-    assert "id(proflame2_radio).set_firmware_package_ref(id(proflame2_firmware_package_ref));" not in base
-    assert "id: proflame2_firmware_package_ref" not in base
-    assert "firmware_package_ref: ${proflame2_package_ref}" in base
+    assert "id(proflame2_radio).set_firmware_version(id(proflame2_firmware_version));" not in base
+    assert "id: proflame2_firmware_version" not in base
+    assert "firmware_version: ${proflame2_firmware_version}" in base
     assert 'initial_value: "1"' in base
     assert "select:" in base
     assert "platform: template" in base

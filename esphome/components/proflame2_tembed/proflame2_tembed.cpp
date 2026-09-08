@@ -31,6 +31,7 @@ static constexpr uint32_t RX_FIFO_ACTIVE_LISTENER_MIN_ACTIVITY_BYTES = 24U;
 static constexpr uint32_t RX_FIFO_ACTIVE_LISTENER_SCAN_INTERVAL_MS = 1500U;
 static constexpr uint32_t RX_FIFO_ACCEPTED_DEDUP_MS = 5000U;
 static constexpr uint32_t RX_RMT_PULSE_DISCARD_LOG_INTERVAL_MS = 5000U;
+static constexpr uint32_t FIRMWARE_VERSION_API_LOG_INTERVAL_MS = 5000U;
 
 static std::string format_hex_byte_(uint8_t value) {
   char buffer[5];
@@ -432,12 +433,13 @@ static void radio_runtime_task_entry_(void* context) {
   }
 }
 
-void Proflame2TEmbedComponent::set_firmware_package_ref(const std::string& value) {
-  this->firmware_package_ref_ = value;
+void Proflame2TEmbedComponent::set_firmware_version(const std::string& value) {
+  this->firmware_version_ = value;
 }
 
 void Proflame2TEmbedComponent::setup() {
-  ESP_LOGI(TAG, "Proflame2 firmware package ref: %s", this->firmware_package_ref_.c_str());
+  ESP_LOGI(TAG, "Proflame2 firmware version: %s", this->firmware_version_.c_str());
+  this->publish_firmware_version_();
   this->spi_setup();
 
   if (this->board_power_enable_pin_ != nullptr) {
@@ -1828,13 +1830,36 @@ void Proflame2TEmbedComponent::set_api_connected(bool value) {
 }
 
 void Proflame2TEmbedComponent::handle_api_client_connected(const std::string& client_info) {
+  // API log clients attach after component setup, so repeat the immutable build
+  // version once the client has had time to subscribe to log messages.
+  this->set_timeout("firmware_version_log", 500, [this]() {
+    this->log_firmware_version_if_due_();
+  });
   if (!is_home_assistant_api_client_(client_info)) {
     return;
   }
+  this->publish_firmware_version_();
   if (this->ha_api_client_count_ < UINT8_MAX) {
     this->ha_api_client_count_++;
   }
   this->set_api_connected(this->ha_api_client_count_ > 0U);
+}
+
+void Proflame2TEmbedComponent::publish_firmware_version_() {
+  if (this->firmware_version_text_sensor_ != nullptr) {
+    this->firmware_version_text_sensor_->publish_state(this->firmware_version_);
+  }
+}
+
+void Proflame2TEmbedComponent::log_firmware_version_if_due_() {
+  const uint32_t now = millis();
+  if (this->firmware_version_api_log_initialized_ &&
+      (now - this->firmware_version_api_last_log_ms_) < FIRMWARE_VERSION_API_LOG_INTERVAL_MS) {
+    return;
+  }
+  this->firmware_version_api_last_log_ms_ = now;
+  this->firmware_version_api_log_initialized_ = true;
+  ESP_LOGI(TAG, "Proflame2 firmware version: %s", this->firmware_version_.c_str());
 }
 
 void Proflame2TEmbedComponent::handle_api_client_disconnected(const std::string& client_info) {

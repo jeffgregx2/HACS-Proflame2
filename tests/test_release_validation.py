@@ -98,6 +98,12 @@ def test_release_source_rejects_branch_documentation_links(tmp_path: Path, monke
         ),
         encoding="utf-8",
     )
+    firmware_package_path = tmp_path / "esphome/packages/proflame2_tembed_base.yaml"
+    firmware_package_path.parent.mkdir(parents=True)
+    firmware_package_path.write_text(
+        '  proflame2_firmware_version: "v0.6.0-beta3"\n',
+        encoding="utf-8",
+    )
     scripts_path = tmp_path / "scripts"
     scripts_path.mkdir()
     (scripts_path / "stamp_docs_ref.py").write_text(
@@ -122,6 +128,8 @@ def test_release_workflows_validate_before_creating_or_publishing_tags() -> None
     assert "confirm_replace_tag:" in stamp_workflow
     assert "Validate release source before tagging" in stamp_workflow
     assert "Create immutable release tag" in stamp_workflow
+    assert "proflame2_firmware_version" in stamp_workflow
+    assert "esphome/packages/proflame2_tembed_base.yaml" in stamp_workflow
     assert "gh api --include" in stamp_workflow
     assert "refusing to move it" in stamp_workflow
     assert 'git push origin "HEAD:refs/heads/$RELEASE_REF" "refs/tags/$RELEASE_TAG"' in stamp_workflow

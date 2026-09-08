@@ -43,6 +43,9 @@ substitutions:
   proflame2_async_tx_data_pin_override: "gdo0"
   proflame2_active_listener_rx_path_default: "rmt_pulse"
   proflame2_display_debug_mode: "false"
+  # Stamped by the release workflow. This is independent of the source ref so
+  # a local development build can still identify the released firmware version.
+  proflame2_firmware_version: "v0.6.0-beta4"
 
 i2c:
   sda: GPIO8
@@ -117,7 +120,7 @@ proflame2_tembed:
   inter_frame_gap_us: ${proflame2_inter_frame_gap_us_override}
   post_frame_idle_gap_us: ${proflame2_post_frame_idle_gap_us_override}
   display_debug_mode: ${proflame2_display_debug_mode}
-  firmware_package_ref: ${proflame2_package_ref}
+  firmware_version: ${proflame2_firmware_version}
   pre_burst_low_us: ${proflame2_pre_burst_low_us_override}
   pre_frame_low_us: ${proflame2_pre_frame_low_us_override}
   diagnostic_repeat_count_override: ${proflame2_diagnostic_repeat_count_override}
@@ -151,6 +154,9 @@ proflame2_tembed:
     name: Proflame2 CC1101 PARTNUM
   cc1101_version:
     name: Proflame2 CC1101 VERSION
+  firmware_version_text:
+    name: Proflame2 Firmware Version
+    entity_category: diagnostic
   tx_success_count:
     name: Proflame2 TX Success Count
     accuracy_decimals: 0
