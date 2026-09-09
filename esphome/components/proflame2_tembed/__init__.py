@@ -39,7 +39,7 @@ CONF_REQUEST_ID = "request_id"
 CONF_REPEAT_COUNT = "repeat_count"
 CONF_RF_SWITCH_SW0_PIN = "rf_switch_sw0_pin"
 CONF_RF_SWITCH_SW1_PIN = "rf_switch_sw1_pin"
-CONF_RX_FREQUENCY_HZ = "rx_frequency_hz"
+CONF_RF_BAND = "rf_band"
 CONF_STATUS_TEXT = "status_text"
 CONF_ENDPOINT_STATUS = "endpoint_status"
 CONF_LAST_ERROR = "last_error"
@@ -70,7 +70,6 @@ CONF_RX_TRANSPORT_UNAVAILABLE_COUNT = "rx_transport_unavailable_count"
 CONF_RX_LAST_REJECTION_SNAPSHOT = "rx_last_rejection_snapshot"
 CONF_NATIVE_GROUP_TIMING_PROFILE = "native_group_timing_profile"
 CONF_NATIVE_GROUP_REPEAT_BOUNDARY_MODE = "native_group_repeat_boundary_mode"
-CONF_TX_FREQUENCY_HZ = "tx_frequency_hz"
 CONF_TX_MODE = "tx_mode"
 CONF_TX_REPEAT_COUNT = "tx_repeat_count"
 CONF_TX_REPEAT_COUNT_SENSOR = "tx_repeat_count_sensor"
@@ -91,6 +90,7 @@ proflame2_tembed_ns = cg.esphome_ns.namespace("proflame2_tembed")
 TXMode = proflame2_tembed_ns.enum("TXMode", is_class=True)
 TestPatternMode = proflame2_tembed_ns.enum("TestPatternMode", is_class=True)
 AsyncTxDataPin = proflame2_tembed_ns.enum("AsyncTxDataPin", is_class=True)
+RFBand = proflame2_tembed_ns.enum("RFBand", is_class=True)
 NativeGroupTimingProfile = proflame2_tembed_ns.enum(
     "NativeGroupTimingProfile", is_class=True
 )
@@ -125,8 +125,7 @@ CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(Proflame2TEmbedComponent),
         cv.GenerateID(CONF_SPI_ID): cv.use_id(spi.SPIComponent),
-        cv.Optional(CONF_TX_FREQUENCY_HZ, default=314_973_000): cv.positive_int,
-        cv.Optional(CONF_RX_FREQUENCY_HZ, default=314_973_000): cv.positive_int,
+        cv.Optional(CONF_RF_BAND, default="315"): cv.one_of("315", "433"),
         cv.Optional(CONF_DATA_RATE_BPS, default=2_400): cv.positive_int,
         cv.Optional(CONF_TX_REPEAT_COUNT, default=5): cv.int_range(min=1, max=20),
         cv.Optional(CONF_INTER_FRAME_GAP_US, default=0): cv.positive_int,
@@ -248,8 +247,7 @@ async def to_code(config):
         },
     )
 
-    cg.add(var.set_tx_frequency_hz(config[CONF_TX_FREQUENCY_HZ]))
-    cg.add(var.set_rx_frequency_hz(config[CONF_RX_FREQUENCY_HZ]))
+    cg.add(var.set_rf_band(RFBand.BAND_433 if config[CONF_RF_BAND] == "433" else RFBand.BAND_315))
     cg.add(var.set_data_rate_bps(config[CONF_DATA_RATE_BPS]))
     cg.add(var.set_tx_repeat_count(config[CONF_TX_REPEAT_COUNT]))
     cg.add(var.set_inter_frame_gap_us(config[CONF_INTER_FRAME_GAP_US]))

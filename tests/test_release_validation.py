@@ -23,13 +23,11 @@ def _load_release_validation_module():
     return module
 
 
-def test_current_beta_release_source_is_self_consistent() -> None:
-    """The checked-out beta source should pass the same pre-tag validation."""
+def test_current_development_source_has_self_consistent_documentation_links() -> None:
+    """The development branch must retain documentation links that target dev."""
 
     release_validation = _load_release_validation_module()
-    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
-    version = manifest["version"]
-    release_validation.validate_release_source(f"v{version}", prerelease="-beta" in version)
+    release_validation._load_stamp_docs_ref_module().validate_docs_ref("dev")
 
 
 @pytest.mark.parametrize("tag", ("0.6.0", "v0.6", "v0.6.0-rc1", "v0.6.0-beta"))

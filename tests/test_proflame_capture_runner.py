@@ -29,6 +29,15 @@ class SemanticStubRtl433Collector(StubRtl433Collector):
         return replace(result, metadata={**result.metadata, **semantic})
 
 
+class ClosingStubCollector(StubCollector):
+    def __init__(self, source_name: str) -> None:
+        super().__init__(source_name=source_name)
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
 def _run_runner(
     tmp_path: Path,
     *,
@@ -90,6 +99,14 @@ def test_sample_ids_and_metadata_are_generated(tmp_path: Path) -> None:
     assert sample_manifest["identity"]["sample_index"] == 1
     assert sample_manifest["identity"]["attempt_index"] == 1
     assert sample_manifest["identity"]["collection_valid"] is True
+
+
+def test_runner_closes_collectors_after_a_completed_session(tmp_path: Path) -> None:
+    collector = ClosingStubCollector("test")
+
+    _run_runner(tmp_path, valid_samples_target=1, max_attempts=1, collectors=[collector])
+
+    assert collector.close_calls == 1
 
 
 def test_invalid_sample_does_not_count_toward_target(tmp_path: Path) -> None:

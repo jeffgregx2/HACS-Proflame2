@@ -29,6 +29,7 @@
 #include "fifo_rx_controller.h"
 #include "proflame2_decoder.h"
 #include "radio_cc1101.h"
+#include "rf_band.h"
 #include "rmt_ook_receiver.h"
 #include "telemetry_publisher.h"
 #include "tx_controller.h"
@@ -103,11 +104,8 @@ public:
   void loop() override;
   void dump_config() override;
 
-  void set_tx_frequency_hz(uint32_t value) {
-    this->tx_frequency_hz_ = value;
-  }
-  void set_rx_frequency_hz(uint32_t value) {
-    this->rx_frequency_hz_ = value;
+  void set_rf_band(RFBand value) {
+    this->rf_band_ = value;
   }
   void set_data_rate_bps(uint32_t value) {
     this->data_rate_bps_ = value;
@@ -579,8 +577,10 @@ protected:
   void poll_battery_status_();
   uint8_t wifi_bars_from_rssi_(float dbm) const;
 
-  uint32_t tx_frequency_hz_{314973000};
-  uint32_t rx_frequency_hz_{314973000};
+  RFBand rf_band_{RFBand::BAND_315};
+  RFBandConfiguration rf_band_configuration_{314973000U, true, false, "315 MHz"};
+  uint32_t tx_frequency_hz_{rf_band_configuration_.frequency_hz};
+  uint32_t rx_frequency_hz_{rf_band_configuration_.frequency_hz};
   uint32_t data_rate_bps_{2400};
   uint8_t tx_repeat_count_{5};
   uint32_t inter_frame_gap_us_{4450};

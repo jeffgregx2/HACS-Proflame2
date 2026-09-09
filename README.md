@@ -130,7 +130,7 @@ Reliable range depends on the controller, its antenna, and how close it can be p
 - YardStick:
   - External antenna, longer range.
   - Best to use within about 20 feet of the fireplace.
-  - Range can improve with an antenna designed for 315 MHz, which is the frequency used by Proflame2 remotes.
+  - Range can improve with an antenna designed for the radio band used by your remote. Many Proflame2 remotes use 315 MHz.
 
 These are practical starting points, not guarantees. Fireplace location, walls, metal, USB placement, Wi-Fi, and local interference can change the reliable range.
 
@@ -197,6 +197,10 @@ To change the Active Listening settings, open Settings -> Devices & services -> 
 The Proflame2 integration can support multiple fireplaces.  Each fireplace will need its own controller set up using that fireplace's original remote.  Simply use "Add entry" multiple times, once per fireplace.
 
 At this time, one controller can only control one fireplace.
+
+A LilyGO controller can use only one radio band at a time. Use separate
+LilyGO controllers for fireplaces that use different bands, such as 315 MHz
+and 433.92 MHz.
 
 ## More Information
 

@@ -46,6 +46,8 @@
 
 substitutions:
   proflame2_package_ref: "main"
+  # Leave at "315" unless the original remote is labeled 433.92 MHz.
+  proflame2_rf_band: "315"
 
 esp32:
   board: esp32-s3-devkitc-1

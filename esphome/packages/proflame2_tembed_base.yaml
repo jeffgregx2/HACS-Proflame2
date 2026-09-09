@@ -18,8 +18,7 @@
 #   CC1101 CS: GPIO12
 #   CC1101 GDO0: GPIO3
 #   CC1101 GDO2: GPIO38
-#   RF switch SW1: GPIO47 = HIGH for 315 MHz path
-#   RF switch SW0: GPIO48 = LOW for 315 MHz path
+#   RF switch GPIO47/48 is selected from proflame2_rf_band
 #   I2C SDA: GPIO8
 #   I2C SCL: GPIO18
 #
@@ -30,6 +29,9 @@
 # emitted to HA.
 
 substitutions:
+  # Select the LilyGO radio band. Supported values: "315" (default) and
+  # "433". One LilyGO can use only one radio band at a time.
+  proflame2_rf_band: "315"
   # Zero preserves the authoritative length supplied by Home Assistant: 182
   # bits for legacy remotes and 260 bits for supported extended remotes.
   proflame2_payload_bit_length_override: "0"
@@ -111,8 +113,7 @@ external_components:
 proflame2_tembed:
   id: proflame2_radio
   spi_id: proflame2_spi_bus
-  tx_frequency_hz: 314973000
-  rx_frequency_hz: 314973000
+  rf_band: ${proflame2_rf_band}
   data_rate_bps: 2400
   tx_repeat_count: 5
   tx_mode: ${proflame2_tx_mode_override}

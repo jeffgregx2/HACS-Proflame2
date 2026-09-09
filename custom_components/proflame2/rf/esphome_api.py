@@ -47,6 +47,20 @@ _LOGGER = logging.getLogger(__name__)
 _LearningReceiveEvent = Callable[..., Awaitable[ESPHomeRXEvent | None]]
 
 
+def _is_esphome_api_connection_error(error: Exception) -> bool:
+    """Return whether an ESPHome native-API call lost its live connection.
+
+    ``aioesphomeapi`` is supplied by Home Assistant rather than this
+    integration's standalone development environment, so avoid importing its
+    private exception type directly. The fully-qualified class identity is
+    stable at this integration boundary and lets ordinary service failures
+    continue to surface normally.
+    """
+
+    error_type = type(error)
+    return error_type.__name__ == "APIConnectionError" and error_type.__module__.startswith("aioesphomeapi")
+
+
 @dataclass(slots=True)
 class FifoLearningAttempt:
     """One LilyGO FIFO learning event after policy and scanner evaluation."""
@@ -396,10 +410,20 @@ class ESPHomeAPIBackend(RFBackend):
             return
         # Firmware strict filtering understands only the legacy C/D profile.
         # Extended RMT frames are validated by this HA-side decoder instead.
-        await asyncio.wait_for(
-            set_active_listening(enabled, self._firmware_active_listening_profile()),
-            timeout=self._send_timeout_seconds,
-        )
+        try:
+            await asyncio.wait_for(
+                set_active_listening(enabled, self._firmware_active_listening_profile()),
+                timeout=self._send_timeout_seconds,
+            )
+        except Exception as exc:
+            if not _is_esphome_api_connection_error(exc):
+                raise
+            self._log_debug(
+                "active listening policy deferred because ESPHome disconnected controller_id=%s enabled=%s",
+                self.name,
+                enabled,
+            )
+            return
         transport_diagnostics = (
             self.transport.serialize_diagnostics() if hasattr(self.transport, "serialize_diagnostics") else None
         )

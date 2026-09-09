@@ -25,6 +25,16 @@ def _line_coverage_percent(output: str, source: Path) -> float:
     return float(match.group(1))
 
 
+def _branch_coverage_percent(output: str, source: Path) -> float:
+    match = re.search(
+        rf"File '{re.escape(str(source))}'\n.*?Branches executed:([0-9.]+)%",
+        output,
+        flags=re.DOTALL,
+    )
+    assert match is not None, f"gcov did not report branch coverage for {source}"
+    return float(match.group(1))
+
+
 def test_tx_payload_layout_cpp_unit_and_coverage(tmp_path: Path) -> None:
     """Exercise the firmware's legacy/extended TX shape logic with gcov."""
 
@@ -37,6 +47,7 @@ def test_tx_payload_layout_cpp_unit_and_coverage(tmp_path: Path) -> None:
     source_files = (
         COMPONENT_ROOT / "tx_controller.cpp",
         COMPONENT_ROOT / "tx_payload_layout.cpp",
+        COMPONENT_ROOT / "rf_band.cpp",
         CPP_TEST,
     )
     object_files: list[Path] = []
@@ -49,11 +60,14 @@ def test_tx_payload_layout_cpp_unit_and_coverage(tmp_path: Path) -> None:
     _run([compiler, "--coverage", *(str(path) for path in object_files), "-o", str(executable)], cwd=tmp_path)
     _run([str(executable)], cwd=tmp_path)
 
-    coverage_outputs = [
-        _run([gcov, "-b", "-o", str(tmp_path), str(source)], cwd=tmp_path).stdout for source in source_files[:2]
-    ]
+    coverage_outputs = {
+        source: _run([gcov, "-b", "-o", str(tmp_path), str(source)], cwd=tmp_path).stdout
+        for source in source_files[:-1]
+    }
 
     layout_report = (tmp_path / "tx_payload_layout.cpp.gcov").read_text(encoding="utf-8")
     assert "#####" not in layout_report
-    assert _line_coverage_percent(coverage_outputs[0], source_files[0]) >= 98.0
-    assert _line_coverage_percent(coverage_outputs[1], source_files[1]) == 100.0
+    assert _line_coverage_percent(coverage_outputs[source_files[0]], source_files[0]) >= 98.0
+    assert _line_coverage_percent(coverage_outputs[source_files[1]], source_files[1]) == 100.0
+    assert _line_coverage_percent(coverage_outputs[source_files[2]], source_files[2]) == 100.0
+    assert _branch_coverage_percent(coverage_outputs[source_files[2]], source_files[2]) == 100.0

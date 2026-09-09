@@ -75,8 +75,7 @@ Required fields:
 
 - `config_revision`
 - `firmware_protocol_version`
-- `tx_frequency_hz`
-- `rx_frequency_hz`
+- `rf_band`
 - `modulation`
 - `data_rate_bps`
 - `tx_repeat_count`
@@ -84,8 +83,7 @@ Required fields:
 
 Known Proflame2 defaults:
 
-- `tx_frequency_hz`: `314973000`
-- `rx_frequency_hz`: `314973000`
+- `rf_band`: `315` (derives `314973000` Hz for both TX and RX)
 - `modulation`: `ask_ook`
 - `data_rate_bps`: `2400`
 - `tx_repeat_count`: `5`
