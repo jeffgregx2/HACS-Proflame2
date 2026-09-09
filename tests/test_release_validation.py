@@ -30,7 +30,17 @@ def test_current_development_source_has_self_consistent_documentation_links() ->
     release_validation._load_stamp_docs_ref_module().validate_docs_ref("dev")
 
 
-@pytest.mark.parametrize("tag", ("0.6.0", "v0.6", "v0.6.0-rc1", "v0.6.0-beta"))
+@pytest.mark.parametrize(
+    ("tag", "expected_version"),
+    (("v0.7.0-alpha1", "0.7.0-alpha1"), ("v0.7.0-beta1", "0.7.0-beta1"), ("v0.7.0", "0.7.0")),
+)
+def test_release_tag_parser_accepts_documented_tag_formats(tag: str, expected_version: str) -> None:
+    release_validation = _load_release_validation_module()
+
+    assert release_validation.parse_release_tag(tag) == expected_version
+
+
+@pytest.mark.parametrize("tag", ("0.6.0", "v0.6", "v0.6.0-rc1", "v0.6.0-alpha", "v0.6.0-beta"))
 def test_release_tag_parser_rejects_unsupported_tags(tag: str) -> None:
     """Only the documented release tag formats are accepted."""
 
@@ -40,13 +50,14 @@ def test_release_tag_parser_rejects_unsupported_tags(tag: str) -> None:
         release_validation.parse_release_tag(tag)
 
 
-def test_beta_tag_requires_prerelease_flag() -> None:
-    """A beta tag cannot be published as a non-prerelease by accident."""
+@pytest.mark.parametrize("tag", ("v0.6.0-alpha1", "v0.6.0-beta3"))
+def test_prerelease_tag_requires_prerelease_flag(tag: str) -> None:
+    """An alpha or beta tag cannot be published as a final release by accident."""
 
     release_validation = _load_release_validation_module()
 
     with pytest.raises(ValueError, match="must be marked as a GitHub prerelease"):
-        release_validation.validate_release_source("v0.6.0-beta3", prerelease=False)
+        release_validation.validate_release_source(tag, prerelease=False)
 
 
 def test_release_source_rejects_an_unstamped_manifest(tmp_path: Path, monkeypatch) -> None:
@@ -131,4 +142,5 @@ def test_release_workflows_validate_before_creating_or_publishing_tags() -> None
     assert "gh api --include" in stamp_workflow
     assert "refusing to move it" in stamp_workflow
     assert 'git push origin "HEAD:refs/heads/$RELEASE_REF" "refs/tags/$RELEASE_TAG"' in stamp_workflow
+    assert "-(alpha|beta)[0-9]+" in stamp_workflow
     assert "scripts/validate_release_source.py" in validation_workflow

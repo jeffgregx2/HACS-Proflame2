@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Release tag to validate, for example v0.5.2 or v0.5.2-beta1
+        description: Release tag to validate, for example v0.5.2, v0.5.2-alpha1, or v0.5.2-beta1
         required: true
       prerelease:
         description: Whether the release should be treated as a prerelease

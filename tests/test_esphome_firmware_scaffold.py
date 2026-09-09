@@ -147,7 +147,7 @@ def test_firmware_logs_the_configured_package_ref_at_info_level() -> None:
     assert "FIRMWARE_VERSION_API_LOG_INTERVAL_MS" in implementation
     assert 'ESP_LOGI(TAG, "Proflame2 RF band: %s", this->rf_band_configuration_.name);' in implementation
     assert "firmware_version: ${proflame2_firmware_version}" in base
-    assert re.search(r'^  proflame2_firmware_version: "v\d+\.\d+\.\d+(?:-beta\d+)?"$', base, re.MULTILINE)
+    assert re.search(r'^  proflame2_firmware_version: "v\d+\.\d+\.\d+(?:-(?:alpha|beta)\d+)?"$', base, re.MULTILINE)
     assert "name: Proflame2 Firmware Version" in base
 
 
