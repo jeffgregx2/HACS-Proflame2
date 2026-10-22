@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -23,13 +24,25 @@ def _load_release_validation_module():
     return module
 
 
-def test_current_beta_release_source_is_self_consistent() -> None:
-    """The checked-out beta source should pass the same pre-tag validation."""
+def test_current_source_passes_release_validation_after_docs_stamping(tmp_path: Path, monkeypatch) -> None:
+    """Branch sources should pass pre-tag checks after release links are stamped."""
 
     release_validation = _load_release_validation_module()
     manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
     version = manifest["version"]
-    release_validation.validate_release_source(f"v{version}", prerelease="-beta" in version)
+    for relative_path in (
+        "custom_components/proflame2/manifest.json",
+        "custom_components/proflame2/version.py",
+        "custom_components/proflame2/docs_urls.py",
+        "esphome/packages/proflame2_tembed_base.yaml",
+        "scripts/stamp_docs_ref.py",
+    ):
+        destination = tmp_path / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO_ROOT / relative_path, destination)
+    monkeypatch.chdir(tmp_path)
+    release_validation._load_stamp_docs_ref_module().stamp_docs_ref(f"v{version}")
+    release_validation.validate_release_source(f"v{version}", prerelease="-" in version)
 
 
 @pytest.mark.parametrize("tag", ("0.6.0", "v0.6", "v0.6.0-rc1", "v0.6.0-beta"))

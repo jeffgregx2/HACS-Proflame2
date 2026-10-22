@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ESPHOME_ROOT = REPO_ROOT / "esphome"
@@ -107,7 +110,7 @@ def test_tx_debug_symbol_logging_uses_the_native_payload_layout() -> None:
     assert "PROFLAME_WORD_COUNT" not in logger
 
 
-def test_firmware_logs_the_configured_package_ref_at_info_level() -> None:
+def test_firmware_logs_the_stamped_version_at_info_level() -> None:
     header = _read("components/proflame2_tembed/proflame2_tembed.h")
     implementation = _read("components/proflame2_tembed/proflame2_tembed.cpp")
     component = _read("components/proflame2_tembed/__init__.py")
@@ -133,7 +136,11 @@ def test_firmware_logs_the_configured_package_ref_at_info_level() -> None:
     assert "void Proflame2TEmbedComponent::log_firmware_version_if_due_()" in implementation
     assert "FIRMWARE_VERSION_API_LOG_INTERVAL_MS" in implementation
     assert "firmware_version: ${proflame2_firmware_version}" in base
-    assert 'proflame2_firmware_version: "v0.6.0-beta4"' in base
+    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
+    assert (
+        yaml.load(base, Loader=yaml.BaseLoader)["substitutions"]["proflame2_firmware_version"]
+        == f"v{manifest['version']}"
+    )
     assert "name: Proflame2 Firmware Version" in base
 
 
