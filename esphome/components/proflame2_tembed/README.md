@@ -1,8 +1,9 @@
 # LilyGO CC1101 Proflame2 RF Reference
 
-This document describes the validated Proflame2 transmit path and the validated
-CC1101 FIFO receive path implemented by the LilyGO T-Embed CC1101 endpoint in
-HACS-Proflame2.
+This document describes the validated Proflame2 transmit path and the default
+CC1101 GDO0/RMT receive path implemented by the LilyGO T-Embed CC1101 endpoint
+in HACS-Proflame2. FIFO receive is used only as a fallback for RMT
+compatibility problems.
 
 The intent is to let a future controller implementation on different hardware
 reproduce a compliant waveform without rediscovering the protocol details.
@@ -15,7 +16,7 @@ This is the reference for the working transmitter path:
 - `native_group_timing_profile: native_remote`
 - `native_group_repeat_boundary_mode: continuous_tx`
 - `repeat_count: 5`
-- `payload_bit_length_override: 182`
+- `payload_bit_length_override: 0` (use the Home Assistant-provided length)
 - `inter_frame_gap_us: 0`
 - `post_frame_idle_gap_us: 0`
 
@@ -43,8 +44,10 @@ The firmware receives a prepared payload from Home Assistant:
 - `payload_bit_length`
 - `repeat_count`
 
-For the validated native-group path, Home Assistant provides 25 payload bytes
-and the firmware transmits the first 182 bits of that payload.
+For the validated native-group path, Home Assistant provides the full payload
+and the firmware transmits the supplied meaningful bit length. This is `182`
+bits for a legacy seven-word frame and `260` bits for a supported extended
+ten-word frame.
 
 Example validated ON fixture:
 
@@ -81,11 +84,12 @@ Symbol mapping:
 - `10` -> `1`
 - `00` -> `Z` (`TRAILER`)
 
-For the validated Proflame2 native-group packet:
+For a validated Proflame2 native-group packet:
 
-- 7 groups are expected
+- 7 groups are expected for a legacy frame; 10 groups are expected for a
+  supported extended frame
 - each group consumes 13 symbols
-- total word symbols per repeat = `7 * 13 = 91`
+- total word symbols per repeat = `7 * 13 = 91` or `10 * 13 = 130`
 - any remaining symbols must be trailer symbols (`00`)
 
 Each 13-symbol group is interpreted as:
@@ -105,7 +109,7 @@ The firmware requires:
 - symbol 0 in every group is `S`
 - `start`, `parity`, and `end` are each either `0` or `1`
 - all 9 data symbols are each either `0` or `1`
-- all symbols after the 7 groups are `Z`
+- all symbols after the complete 7- or 10-group frame are `Z`
 
 ## Native-Group Emit-Bit Derivation
 
@@ -424,7 +428,7 @@ proflame2_tembed:
   tx_mode: proflame_native_groups
   native_group_timing_profile: native_remote
   native_group_repeat_boundary_mode: continuous_tx
-  payload_bit_length_override: 182
+  payload_bit_length_override: 0
   inter_frame_gap_us: 0
   post_frame_idle_gap_us: 0
   pre_burst_low_us: 0
@@ -449,36 +453,45 @@ row directly, that is acceptable as long as the on-air result is equivalent.
 
 ## RX
 
-The validated LilyGO RX path is a CC1101 RX FIFO byte-window capture followed
-by host-side Proflame2 candidate scanning. It intentionally mirrors the
-YardStick/rfcat receive abstraction: use the CC1101 as an OOK slicer that
-produces bytes, then scan those bytes in software for a packet-owned Proflame2
-candidate. Do not use GDO edge-interval ownership as the semantic RX path.
+The default LilyGO RX path configures CC1101 asynchronous OOK data on GDO0 and
+uses a 1 MHz ESP32 RMT receiver to retain pulse timing. Runs are quantized to a
+417 us PCM row and sent to Home Assistant as `pulse_capture` events, where the
+frame is validated. `rmt_pulse` is the persisted base-package default for both
+guided learning and active listening.
 
-The LilyGO edge packet-ownership path was deprecated after Stage 5AL. Edge
-diagnostics may remain in firmware or historical tools for low-level RF
-troubleshooting, but they are not part of the active RX architecture and should
-not be used as a transform prerequisite.
+Select `Active Listener RX Path: fifo` only to roll back to the previous
+CC1101 FIFO byte-window capture path. The YAML substitution
+`proflame2_active_listener_rx_path_default: "fifo"` sets that path only before
+the device has a saved selection.
+
+The prior edge packet-ownership path was deprecated after Stage 5AL. It is not
+the RMT PCM path and must not be restored. The RMT implementation and its Bruce
+provenance are documented in
+[LilyGO CC1101 RMT Pulse Receive Path](../../../docs/lilygo_cc1101_rmt_pulse_fallback.md).
 
 ### RX Architecture
 
-The firmware performs bounded Proflame2 candidate decode only for FIFO learning
-and active-listening filtering. Home Assistant still owns learning persistence,
-command generation, profile policy, and fireplace state authority.
+The firmware performs bounded PCM acquisition. Home Assistant owns Proflame2
+frame validation, learning persistence, command generation, profile policy,
+and fireplace state authority.
 
 The firmware RX job is:
 
-1. Configure the CC1101 in an rfcat-like ASK/OOK RX FIFO mode.
-2. Continuously drain CC1101 `RXFIFO` bytes into a bounded rolling buffer.
-3. On learning, active-listening scan, or diagnostic completion, select the
-   trailing FIFO byte window.
-4. Include radio settings, status, timestamps, and overflow metadata.
-5. Decode enough Proflame2 candidate structure to suppress noise, stale
-   candidates, and packets for other serial/profile values.
-6. Publish only accepted learned-profile matches to Home Assistant during active
-   listening.
-7. Preserve raw FIFO diagnostics for troubleshooting without treating them as
-   semantic packet evidence.
+1. Configure CC1101 asynchronous ASK/OOK data output on GDO0.
+2. Capture up to 256 RMT symbols at 1 MHz and terminate a burst after 30 ms of
+   idle time.
+3. Quantize valid 1x, 2x, and 3x runs to 417 us PCM bits; discard invalid or
+   short segments.
+4. Publish `pulse_capture` with packed PCM, decimal bit length, symbol count,
+   and transition count.
+5. Let Home Assistant validate the frame and apply learned-profile and repeat
+   policy.
+
+### FIFO Rollback
+
+The remaining FIFO material in this section documents the previous receive
+path. It is still implemented for explicit rollback and debug capture; it is
+not the normal guided-learning or active-listening receiver.
 
 The packet-owned artifact is `semantic_fifo_artifact.json` with:
 

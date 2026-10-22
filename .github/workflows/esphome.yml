@@ -18,18 +18,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
-      - name: Install ESPHome validation dependencies
+      - name: Set up firmware host-test environment
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-esphome.txt
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements-dev.txt
 
-      - name: Validate ESPHome config
-        run: python -m esphome config esphome/validate_display_preset.yaml
+      - name: Run firmware TX host tests with coverage
+        run: make firmware-unit-test
 
-      - name: Compile ESPHome example
-        run: python -m esphome compile esphome/validate_display_preset.yaml
+      - name: Validate and compile ESPHome example
+        run: make esphome-validate
 
       - name: Remove generated firmware outputs
         if: always()

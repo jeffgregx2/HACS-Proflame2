@@ -393,6 +393,30 @@
           warnings.push('Added substitutions.proflame2_package_ref = "main".');
         }
 
+        function ensurePayloadBitLengthOverride(lines, warnings) {
+          const block = findBlock(lines, "substitutions");
+          if (!block) {
+            throw new Error("substitutions: block was not created.");
+          }
+
+          const overridePattern = /^(\s*)proflame2_payload_bit_length_override\s*:/;
+          for (let i = block.start + 1; i < block.end; i += 1) {
+            if (overridePattern.test(lines[i])) {
+              if (!/proflame2_payload_bit_length_override\s*:\s*"0"\s*(?:#.*)?$/.test(lines[i])) {
+                lines[i] = lines[i].replace(
+                  /^(\s*)proflame2_payload_bit_length_override\s*:.*$/,
+                  '$1proflame2_payload_bit_length_override: "0"'
+                );
+                warnings.push('Updated payload bit-length override to "0" for automatic legacy/extended frame lengths.');
+              }
+              return;
+            }
+          }
+
+          insertLines(lines, block.start + 1, ['  proflame2_payload_bit_length_override: "0"']);
+          warnings.push('Added payload bit-length override "0" for automatic legacy/extended frame lengths.');
+        }
+
         function ensureArduinoFramework(lines, doc, warnings) {
           const block = findBlock(lines, "esp32");
           if (!block) {
@@ -637,6 +661,7 @@
             const lines = text.split(/\r?\n/);
 
             ensureSubstitution(lines, warnings);
+            ensurePayloadBitLengthOverride(lines, warnings);
             ensureArduinoFramework(lines, originalDoc, warnings);
 
             const afterFrameworkDoc = parseYaml(lines.join(newline));

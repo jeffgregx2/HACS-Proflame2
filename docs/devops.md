@@ -53,6 +53,18 @@ The Makefile already defaults `PYTHON`, `RUFF`, and `BLACK` to `./.venv/bin/*`,
 so `make test`, `make lint-python`, and `make format-python-check` are safe
 entrypoints.
 
+The default suite includes the offline RF capture tests. The check for local
+`rtl_433` source instrumentation is opt-in because it requires the separately
+modified development source tree, not a standard `rtl_433` checkout:
+
+```bash
+PROFLAME2_RTL433_SOURCE=/path/to/instrumented/rtl_433 \
+  ./.venv/bin/python -m pytest -q -m rtl433_source tests/test_rtl433_compare.py
+```
+
+When explicitly selected, this check fails if the source tree or required
+instrumentation is missing.
+
 ESPHome validation uses a separate virtual environment:
 
 ```bash
@@ -64,99 +76,79 @@ That target creates/uses `./.venv-esphome/bin/python` and installs
 
 ## Release A Version
 
-Use this flow when promoting `dev` to `main` and creating a HACS/ESPHome release.
-The example below uses `v0.4.0`; replace it with the target version.
+Use this flow when creating a HACS/ESPHome release. Stable releases are promoted
+from `dev` to `main`; an isolated beta may be released from its validated
+`issue-*` branch. The example below uses `v0.4.0`; replace it with the target
+version.
 
-### 1. Stamp Documentation Links For `dev`
+### 1. Stamp Documentation Links For The Source Branch
 
-Before pushing a promoted branch, stamp repository documentation links to the
-branch that will contain the documentation:
+Before pushing the release source branch, stamp repository documentation links
+to the branch that contains the documentation:
 
 ```bash
-./.venv/bin/python scripts/stamp_docs_ref.py --ref dev
+./.venv/bin/python scripts/stamp_docs_ref.py --ref <source-branch>
 git diff -- custom_components/proflame2/manifest.json custom_components/proflame2/docs_urls.py
 ```
 
-This keeps Home Assistant help links and config-flow guide links resolvable from
-the branch being tested. The links will resolve on GitHub after the stamped
-branch content is pushed.
+This keeps Home Assistant help links and config-flow guide links resolvable while
+the branch is being tested. The release workflow replaces these links with the
+immutable release tag when it stamps the release version.
 
 Pushes to any branch also run the **Documentation Links** workflow. The workflow
 stamps and commits the correct branch ref automatically if a push left the links
 pointing somewhere else. Pull requests validate that links point at the source
 branch, so branch docs can be tested before merging.
 
-### 2. Push `dev`
+### 2. Push The Source Branch
 
 ```bash
-git checkout dev
+git checkout <source-branch>
 git status
-git push origin dev
+git push origin <source-branch>
 ```
 
-### 3. Stamp The Release Version
+### 3. Select The Release Branch
+
+For a beta, the release branch is the validated source branch. For a stable
+release, create and merge the pull request from `dev` into `main` first, then
+use `main` as the release branch. Wait for the branch checks to pass before
+continuing.
+
+### 4. Prepare The Release Tag
 
 In GitHub, run the **Stamp Release Version** workflow manually:
 
 - `version`: `0.4.0`
-- `ref`: `dev`
+- `ref`: `<release-branch>`
 
-The workflow commits the release version and branch documentation ref back to
-`dev` by updating:
+The workflow commits the release version and immutable tag documentation ref
+back to the selected release branch by updating:
 
 - `custom_components/proflame2/manifest.json`
 - `custom_components/proflame2/version.py`
 - `custom_components/proflame2/docs_urls.py`
 
-The documentation URL still points at the branch being stamped. For a normal
-release, the final tag is created from `main`, and release validation requires
-the tag contents to point at `main`.
+It validates that those files already agree with the future tag, then creates
+the annotated tag, for example `v0.4.0`, from that exact commit. It fails before
+tagging when any version or documentation reference is inconsistent.
 
-### 4. Pull The Stamped Commit
+Existing tags are rejected by default. The replacement controls are only for an
+unpublished tag created in error; they require the exact tag name as confirmation
+and refuse to move a tag that already has a GitHub release.
 
-```bash
-git checkout dev
-git pull origin dev
-```
-
-### 5. Open A Pull Request
-
-Create a pull request from `dev` into `main`.
-
-Wait for GitHub Actions to pass before merging. This validates the integration
-and ESPHome firmware configuration before `main` is updated.
-
-### 6. Merge And Sync `main`
-
-After the PR is merged:
+### 5. Pull The Stamped Commit And Tag
 
 ```bash
-git checkout main
-git pull origin main
+git checkout <release-branch>
+git pull origin <release-branch>
 ```
 
-Wait for the **Documentation Links** workflow on `main` to finish. If it stamped
-the documentation links to `main`, pull that commit before tagging:
+### 6. Create The GitHub Release
 
-```bash
-git pull origin main
-```
-
-### 7. Tag The Release
-
-Create the tag from the merged, version-stamped `main` commit:
-
-```bash
-git tag -a v0.4.0 -m "Release v0.4.0"
-git push origin v0.4.0
-```
-
-Do not tag before the version-stamp commit is merged to `main`. The release tag
-must point at the exact commit users should install.
-
-### 7. Create The GitHub Release
-
-In GitHub, create a release from tag `v0.4.0`.
+In GitHub, create a release from the existing tag `v0.4.0`. The tag already
+identifies the exact release commit; the branch selector does not change what is
+released and should not be used to choose a different commit.
 
 HACS uses the GitHub release as the installable integration release. ESPHome
 users can pin package references to the same tag, for example `v0.4.0`, when

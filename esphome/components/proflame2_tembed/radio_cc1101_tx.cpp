@@ -1,4 +1,5 @@
 #include "radio_cc1101.h"
+#include "tx_payload_layout.h"
 
 #include <algorithm>
 #include <inttypes.h>
@@ -33,8 +34,9 @@ static constexpr uint32_t PROFLAME_NATIVE_REMOTE_LONG_HIGH_COMPENSATION_US = 12;
 static constexpr uint32_t PROFLAME_NATIVE_REMOTE_SYNC_HIGH_COMPENSATION_US = 8;
 static constexpr uint32_t PROFLAME_NATIVE_REMOTE_REPEAT_GAP_COMPENSATION_US = 0;
 static constexpr size_t CLEAN_TIMING_MAX_BITS = 1024;
-static constexpr size_t PWM_SYMBOL_MAX_SYMBOLS = 128;
-static constexpr size_t PWM_SYMBOL_MAX_TRANSITIONS = 256;
+static constexpr size_t PWM_SYMBOL_MAX_SYMBOLS =
+    PROFLAME_EXTENDED_WORD_COUNT * PROFLAME_SYMBOLS_PER_WORD + PROFLAME_MAX_TRAILER_SYMBOLS;
+static constexpr size_t PWM_SYMBOL_MAX_TRANSITIONS = 384;
 static constexpr size_t PWM_SYMBOL_MAX_REPEAT_DIAGNOSTICS = 20;
 
 #if PROFLAME2_TEMBED_TX_DEBUG
@@ -127,9 +129,12 @@ struct NativeGroupTimingProfileSpec {
   uint32_t scheduled_repeat_gap_us{0};
 };
 
-static constexpr size_t PROFLAME_NATIVE_GROUP_COUNT = 7;
 static constexpr size_t PROFLAME_NATIVE_SOURCE_BITS_PER_GROUP = 9;
 static constexpr size_t PROFLAME_NATIVE_MAX_EMIT_BITS_PER_GROUP = 16;
+static constexpr size_t PROFLAME_NATIVE_MAX_TRANSITIONS_PER_FRAME =
+    PROFLAME_EXTENDED_WORD_COUNT * (1U + PROFLAME_NATIVE_MAX_EMIT_BITS_PER_GROUP) * 2U;
+static_assert(PWM_SYMBOL_MAX_TRANSITIONS >= PROFLAME_NATIVE_MAX_TRANSITIONS_PER_FRAME,
+              "Native TX schedule must hold a complete extended frame");
 
 struct NativePWMGroup {
   std::array<PWMSymbol, PROFLAME_NATIVE_MAX_EMIT_BITS_PER_GROUP> bits{};
@@ -425,8 +430,8 @@ static char pwm_symbol_to_char_(PWMSymbol symbol) {
   }
 }
 
-static std::string
-native_group_repeat_symbol_list_(const std::array<NativePWMGroup, PROFLAME_NATIVE_GROUP_COUNT>& groups,
+[[maybe_unused]] static std::string
+native_group_repeat_symbol_list_(const std::array<NativePWMGroup, PROFLAME_EXTENDED_WORD_COUNT>& groups,
                                  size_t group_count) {
   std::string out;
   for (size_t group_index = 0; group_index < group_count; group_index++) {
@@ -441,7 +446,7 @@ native_group_repeat_symbol_list_(const std::array<NativePWMGroup, PROFLAME_NATIV
   return out;
 }
 
-static std::string pwm_bits_to_string_(const PWMSymbol* bits, size_t bit_count) {
+[[maybe_unused]] static std::string pwm_bits_to_string_(const PWMSymbol* bits, size_t bit_count) {
   std::string out;
   out.reserve(bit_count);
   for (size_t bit_index = 0; bit_index < bit_count; bit_index++) {
@@ -450,7 +455,7 @@ static std::string pwm_bits_to_string_(const PWMSymbol* bits, size_t bit_count) 
   return out;
 }
 
-static std::string native_group_original_word_string_(const NativePWMGroup& group) {
+[[maybe_unused]] static std::string native_group_original_word_string_(const NativePWMGroup& group) {
   std::string out;
   out.reserve(13);
   out.push_back('S');
@@ -463,7 +468,7 @@ static std::string native_group_original_word_string_(const NativePWMGroup& grou
   return out;
 }
 
-static std::string rtl433_style_code_expectation_(const PWMSymbol* bits, size_t bit_count) {
+[[maybe_unused]] static std::string rtl433_style_code_expectation_(const PWMSymbol* bits, size_t bit_count) {
   uint32_t value = 0;
   for (size_t bit_index = 0; bit_index < bit_count; bit_index++) {
     value <<= 1U;
@@ -474,7 +479,7 @@ static std::string rtl433_style_code_expectation_(const PWMSymbol* bits, size_t 
   const uint32_t left_shift = (4U - (bit_count % 4U)) % 4U;
   const uint32_t aligned = complemented << left_shift;
   char buffer[32];
-  snprintf(buffer, sizeof(buffer), "{%u}%x", static_cast<unsigned>(bit_count), aligned);
+  snprintf(buffer, sizeof(buffer), "{%u}%" PRIx32, static_cast<unsigned>(bit_count), aligned);
   return std::string(buffer);
 }
 
@@ -516,7 +521,7 @@ static bool native_group_air_bits_(const NativePWMGroup& group, std::string& air
   return true;
 }
 
-static std::string native_group_run_lengths_(const std::string& air_bits) {
+[[maybe_unused]] static std::string native_group_run_lengths_(const std::string& air_bits) {
   if (air_bits.empty()) {
     return "";
   }
@@ -544,7 +549,7 @@ static std::string native_group_run_lengths_(const std::string& air_bits) {
   return out;
 }
 
-static std::string rtl433_style_code_expectation_from_string_(const std::string& bits) {
+[[maybe_unused]] static std::string rtl433_style_code_expectation_from_string_(const std::string& bits) {
   std::array<PWMSymbol, PROFLAME_NATIVE_MAX_EMIT_BITS_PER_GROUP + 1U> symbols{};
   if (bits.size() > symbols.size()) {
     return "{invalid}";
@@ -561,14 +566,14 @@ static std::string rtl433_style_code_expectation_from_string_(const std::string&
   return rtl433_style_code_expectation_(symbols.data(), bits.size());
 }
 
-static std::string right_shift_bits_(const std::string& bits) {
+[[maybe_unused]] static std::string right_shift_bits_(const std::string& bits) {
   if (bits.empty()) {
     return bits;
   }
   return std::string("0") + bits.substr(0, bits.size() - 1U);
 }
 
-static std::string left_shift_bits_(const std::string& bits) {
+[[maybe_unused]] static std::string left_shift_bits_(const std::string& bits) {
   if (bits.empty()) {
     return bits;
   }
@@ -643,12 +648,9 @@ static bool derive_native_group_emit_bits_(const NativePWMGroup& group,
 }
 
 static bool decode_native_pwm_groups_(const uint8_t* payload, uint32_t payload_bit_length,
-                                      std::array<NativePWMGroup, PROFLAME_NATIVE_GROUP_COUNT>& groups,
+                                      std::array<NativePWMGroup, PROFLAME_EXTENDED_WORD_COUNT>& groups,
                                       size_t& group_count, size_t& trailing_symbol_count,
                                       std::string* failure_reason = nullptr) {
-  constexpr size_t SYMBOLS_PER_WORD = 13;
-  constexpr size_t WORD_SYMBOL_COUNT = PROFLAME_NATIVE_GROUP_COUNT * SYMBOLS_PER_WORD;
-
   std::array<PWMSymbol, PWM_SYMBOL_MAX_SYMBOLS> symbols{};
   size_t symbol_count = 0;
   if (!decode_pwm_symbols_(payload, payload_bit_length, symbols, symbol_count)) {
@@ -657,20 +659,20 @@ static bool decode_native_pwm_groups_(const uint8_t* payload, uint32_t payload_b
     }
     return false;
   }
-  if (symbol_count < WORD_SYMBOL_COUNT) {
+  NativePayloadLayout layout{};
+  if (!derive_native_payload_layout(symbol_count, layout)) {
     if (failure_reason != nullptr) {
       char buffer[64];
-      snprintf(buffer, sizeof(buffer), "symbol_count_too_small:%u<%u", static_cast<unsigned>(symbol_count),
-               static_cast<unsigned>(WORD_SYMBOL_COUNT));
+      snprintf(buffer, sizeof(buffer), "unsupported_symbol_count:%u", static_cast<unsigned>(symbol_count));
       *failure_reason = buffer;
     }
     return false;
   }
 
-  group_count = PROFLAME_NATIVE_GROUP_COUNT;
-  trailing_symbol_count = symbol_count - WORD_SYMBOL_COUNT;
+  group_count = layout.word_count;
+  trailing_symbol_count = layout.trailing_symbol_count;
   for (size_t group_index = 0; group_index < group_count; group_index++) {
-    const size_t base = group_index * SYMBOLS_PER_WORD;
+    const size_t base = group_index * PROFLAME_SYMBOLS_PER_WORD;
     if (symbols[base] != PWMSymbol::SYNC) {
       if (failure_reason != nullptr) {
         char buffer[64];
@@ -721,12 +723,13 @@ static bool decode_native_pwm_groups_(const uint8_t* payload, uint32_t payload_b
     }
   }
 
-  for (size_t symbol_index = WORD_SYMBOL_COUNT; symbol_index < symbol_count; symbol_index++) {
+  const size_t word_symbol_count = group_count * PROFLAME_SYMBOLS_PER_WORD;
+  for (size_t symbol_index = word_symbol_count; symbol_index < symbol_count; symbol_index++) {
     if (symbols[symbol_index] != PWMSymbol::TRAILER) {
       if (failure_reason != nullptr) {
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "trailer_invalid[%u]=%c",
-                 static_cast<unsigned>(symbol_index - WORD_SYMBOL_COUNT), pwm_symbol_to_char_(symbols[symbol_index]));
+                 static_cast<unsigned>(symbol_index - word_symbol_count), pwm_symbol_to_char_(symbols[symbol_index]));
         *failure_reason = buffer;
       }
       return false;
@@ -1191,7 +1194,7 @@ bool RadioCC1101::transmit_async_ook(const uint8_t* payload, size_t length, uint
 #endif
 
   if (tx_mode == TXMode::PROFLAME_NATIVE_GROUPS) {
-    std::array<NativePWMGroup, PROFLAME_NATIVE_GROUP_COUNT> groups{};
+    std::array<NativePWMGroup, PROFLAME_EXTENDED_WORD_COUNT> groups{};
     size_t group_count = 0;
     size_t trailing_symbol_count = 0;
     std::string native_group_failure_reason;
@@ -1897,8 +1900,10 @@ void RadioCC1101::log_bit_timing_trace_(const TXTimingDiagnostics& timing) {
   for (uint8_t i = 0; i < timing.bit_timing_trace_count; i++) {
     const auto& sample = timing.bit_timing_trace[i];
     ESP_LOGI(
-        TAG, "TX bit[%u] value=%u target_offset_us=%" PRId64 " actual_offset_us=%" PRId64 " timing_error_us=%" PRIu32,
-        sample.bit_index, sample.bit_value, sample.target_offset_us, sample.actual_offset_us, sample.timing_error_us);
+        TAG, "TX bit[%" PRIu32 "] value=%u target_offset_us=%" PRId64 " actual_offset_us=%" PRId64
+             " timing_error_us=%" PRIu32,
+        sample.bit_index, static_cast<unsigned>(sample.bit_value), sample.target_offset_us, sample.actual_offset_us,
+        sample.timing_error_us);
   }
 }
 
@@ -1981,8 +1986,10 @@ bool RadioCC1101::drain_debug_tx_diagnostics(const TXTimingDiagnostics& timing, 
     if (bit_index < timing.bit_timing_trace_count) {
       const auto& sample = timing.bit_timing_trace[bit_index++];
       ESP_LOGI(
-          TAG, "TX bit[%u] value=%u target_offset_us=%" PRId64 " actual_offset_us=%" PRId64 " timing_error_us=%" PRIu32,
-          sample.bit_index, sample.bit_value, sample.target_offset_us, sample.actual_offset_us, sample.timing_error_us);
+          TAG, "TX bit[%" PRIu32 "] value=%u target_offset_us=%" PRId64 " actual_offset_us=%" PRId64
+               " timing_error_us=%" PRIu32,
+          sample.bit_index, static_cast<unsigned>(sample.bit_value), sample.target_offset_us, sample.actual_offset_us,
+          sample.timing_error_us);
       return true;
     }
     phase = 5;

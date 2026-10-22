@@ -173,15 +173,7 @@ def frame_to_symbol_string(frame: ProflameFrame) -> str:
     - ``https://github.com/JoelB/smartfire``
     """
 
-    words = [
-        _word_bits((frame.serial_id >> 16) & 0xFF, trailing_bit=1),
-        _word_bits((frame.serial_id >> 8) & 0xFF, trailing_bit=0),
-        _word_bits(frame.serial_id & 0xFF, trailing_bit=0),
-        _word_bits(frame.cmd1, trailing_bit=0),
-        _word_bits(frame.cmd2, trailing_bit=0),
-        _word_bits(frame.err1, trailing_bit=0),
-        _word_bits(frame.err2, trailing_bit=0),
-    ]
+    words = [_word_bits(value, trailing_bit=1 if index == 0 else 0) for index, value in enumerate(frame.wire_words)]
     symbols = []
     for word in words:
         parity_bit = str(word.count("1") % 2)

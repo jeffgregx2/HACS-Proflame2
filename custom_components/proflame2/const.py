@@ -12,6 +12,11 @@ CONF_C1 = "c1"
 CONF_C2 = "c2"
 CONF_D1 = "d1"
 CONF_D2 = "d2"
+CONF_PROTOCOL_VARIANT = "protocol_variant"
+CONF_EXTENDED_W4_BASE = "extended_w4_base"
+CONF_EXTENDED_W6 = "extended_w6"
+CONF_EXTENDED_W7 = "extended_w7"
+CONF_EXTENDED_W8 = "extended_w8"
 CONF_REMOTE_ID = "remote_id"
 CONF_RTL433_SAMPLES = "rtl433_samples"
 CONF_CONFIG_ENTRY_ID = "config_entry_id"
@@ -42,6 +47,9 @@ CONF_FIREPLACE_SHORT_NAME = "fireplace_short_name"
 BACKEND_FAKE = "fake"
 BACKEND_ESPHOME = "lilygo_cc1101"
 BACKEND_YARDSTICK = "yardstick"
+
+PROTOCOL_VARIANT_LEGACY_7_WORD = "legacy_7_word"
+PROTOCOL_VARIANT_EXTENDED_10_WORD = "extended_10_word"
 
 
 def available_backend_types() -> tuple[str, ...]:

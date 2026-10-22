@@ -1,4 +1,4 @@
-.PHONY: test lint-python format-python-check format-cpp-check esphome-setup esphome-stage esphome-config esphome-compile esphome-validate esphome-clean
+.PHONY: test firmware-unit-test lint-python format-python-check format-cpp-check esphome-setup esphome-stage esphome-config esphome-compile esphome-validate esphome-clean
 
 PYTHON ?= ./.venv/bin/python
 BLACK ?= ./.venv/bin/black
@@ -14,6 +14,9 @@ ESPHOME_STAGE_CLI ?= $(ESPHOME_WORK_ROOT)/esphome
 
 test:
 	$(PYTHON) -m pytest -q
+
+firmware-unit-test:
+	$(PYTHON) -m pytest -q tests/test_esphome_cpp_unit.py
 
 lint-python:
 	$(RUFF) check custom_components tools tests
@@ -38,7 +41,8 @@ esphome-stage:
 esphome-config: esphome-setup esphome-stage
 	cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" config $(ESPHOME_STAGE_EXAMPLE)
 
-esphome-compile: esphome-setup esphome-stage
+esphome-compile: esphome-config
+	find "$(ESPHOME_STAGE)/esphome/.esphome/external_components" -type d -path '*/esphome/components/proflame2_tembed' -prune -exec rm -rf {} \; -exec cp -R "$(ESPHOME_STAGE)/esphome/components/proflame2_tembed" {} \;
 	cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" compile $(ESPHOME_STAGE_EXAMPLE)
 
 esphome-validate: esphome-config esphome-compile

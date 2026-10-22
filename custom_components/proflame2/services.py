@@ -648,6 +648,9 @@ async def async_apply_observed_packet(
         confidence=STATE_CONFIDENCE_OBSERVED,
         packet=packet,
     )
+    # Remote activity must update the controller display immediately. The
+    # periodic sync below remains responsible for reconnect convergence.
+    await _async_push_runtime_display_state(runtime_entry)
 
 
 async def _async_stop_rx(runtime_entry: Proflame2RuntimeEntry) -> None:
@@ -853,6 +856,24 @@ async def async_sync_runtime_display_state(
     await async_sync_runtime_rx_policy(runtime_entry)
     if runtime_entry.active_listening_enabled:
         await async_start_active_listener(hass, runtime_entry)
+    await _async_push_runtime_display_state(
+        runtime_entry,
+        action_label=action_label,
+        force=force,
+    )
+
+
+async def _async_push_runtime_display_state(
+    runtime_entry: Proflame2RuntimeEntry,
+    *,
+    action_label: str | None = None,
+    force: bool = False,
+) -> None:
+    """Push current runtime state without changing receive policy."""
+
+    backend = runtime_entry.backend
+    if backend is None:
+        return
     update_display_state = getattr(backend, "update_display_state", None)
     if not callable(update_display_state):
         return
@@ -1299,10 +1320,11 @@ def _log_pre_send_packet(runtime_entry: Proflame2RuntimeEntry, prepared_request:
     packet = prepared_request.packet
     _log_control_event(
         runtime_entry,
-        "PROFLAME_TX_PRESEND source=%s controller_id=%s linked_entry_id=%s state=power=%s flame=%s fan=%s light=%s front=%s aux=%s thermostat=%s cpi=%s serial_id=%06x c1=%s d1=%s c2=%s d2=%s cmd1=0x%02X err1=0x%02X cmd2=0x%02X err2=0x%02X air_payload_hex=%s payload_bit_length=%s repeat_count=%s",
+        "PROFLAME_TX_PRESEND source=%s controller_id=%s linked_entry_id=%s protocol_variant=%s state=power=%s flame=%s fan=%s light=%s front=%s aux=%s thermostat=%s cpi=%s serial_id=%06x c1=%s d1=%s c2=%s d2=%s cmd1=0x%02X err1=0x%02X cmd2=0x%02X err2=0x%02X wire_words=%s air_payload_hex=%s payload_bit_length=%s repeat_count=%s",
         prepared_request.source,
         runtime_entry.backend_type,
         _linked_backend_entry_id(runtime_entry),
+        runtime_entry.remote_profile.protocol_variant,
         requested_state.power,
         requested_state.flame,
         requested_state.fan,
@@ -1320,6 +1342,7 @@ def _log_pre_send_packet(runtime_entry: Proflame2RuntimeEntry, prepared_request:
         packet.frame.err1,
         packet.frame.cmd2,
         packet.frame.err2,
+        " ".join(f"{word:02X}" for word in packet.frame.wire_words),
         packet.transmission_plan.air_payload.hex(),
         packet.transmission_plan.air_payload_bit_length,
         packet.transmission_plan.repeat_count,

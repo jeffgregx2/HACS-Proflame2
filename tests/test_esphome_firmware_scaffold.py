@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ESPHOME_ROOT = REPO_ROOT / "esphome"
@@ -45,8 +48,12 @@ def test_esphome_firmware_tree_contains_expected_source_files() -> None:
         "components/proflame2_tembed/radio_cc1101.cpp",
         "components/proflame2_tembed/radio_cc1101_rx.cpp",
         "components/proflame2_tembed/radio_cc1101_tx.cpp",
+        "components/proflame2_tembed/rmt_ook_receiver.h",
+        "components/proflame2_tembed/rmt_ook_receiver.cpp",
         "components/proflame2_tembed/telemetry_publisher.h",
         "components/proflame2_tembed/telemetry_publisher.cpp",
+        "components/proflame2_tembed/tx_payload_layout.h",
+        "components/proflame2_tembed/tx_payload_layout.cpp",
         "components/proflame2_tembed/tx_controller.h",
         "components/proflame2_tembed/tx_controller.cpp",
         "components/proflame2_tembed/display_state.h",
@@ -56,6 +63,17 @@ def test_esphome_firmware_tree_contains_expected_source_files() -> None:
     assert expected.issubset(
         {str(path.relative_to(ESPHOME_ROOT)) for path in ESPHOME_ROOT.rglob("*") if path.is_file()}
     )
+
+
+def test_esphome_ci_compiles_the_checked_out_component_revision() -> None:
+    """CI must not combine its package YAML with a component fetched from main."""
+
+    workflow = (REPO_ROOT / ".github/workflows/esphome.yml").read_text(encoding="utf-8")
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert "run: make esphome-validate" in workflow
+    assert "esphome-stage:" in makefile
+    assert 'cp -R "$(ESPHOME_STAGE)/esphome/components/proflame2_tembed"' in makefile
 
 
 def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
@@ -73,8 +91,69 @@ def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
     assert "# LilyGO CC1101 Controller Developer Notes" in developer_notes
     assert "## TX Model" in developer_notes
     assert "## RX Model" in developer_notes
-    assert "The abandoned RX path used GDO edge-interval capture" in developer_notes
+    assert "The normal RX path configures the CC1101 for asynchronous OOK data on GDO0" in developer_notes
+    assert "`proflame2_active_listener_rx_path_default`, which is `rmt_pulse`" in developer_notes
+    assert "only as a fallback when RMT has compatibility problems" in developer_notes
     assert "The timing-critical transmit loop is intentionally monolithic" in developer_notes
+
+
+def test_tx_debug_symbol_logging_uses_the_native_payload_layout() -> None:
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    start = component.index("static void log_air_payload_symbols_")
+    end = component.index("template <size_t N> static void copy_string_", start)
+    logger = component[start:end]
+
+    assert '#include "tx_payload_layout.h"' in component
+    assert "derive_native_payload_layout(effective_symbols.size(), layout)" in logger
+    assert "word_index < layout.word_count" in logger
+    assert "layout.word_count * PROFLAME_SYMBOLS_PER_WORD" in logger
+    assert "PROFLAME_WORD_COUNT" not in logger
+
+
+def test_firmware_logs_the_stamped_version_at_info_level() -> None:
+    header = _read("components/proflame2_tembed/proflame2_tembed.h")
+    implementation = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    component = _read("components/proflame2_tembed/__init__.py")
+    base = _read("packages/proflame2_tembed_base.yaml")
+
+    assert "void set_firmware_version(const std::string& value)" in header
+    assert 'std::string firmware_version_{"unknown"}' in header
+    assert 'CONF_FIRMWARE_VERSION = "firmware_version"' in component
+    assert 'cv.Optional(CONF_FIRMWARE_VERSION, default="unknown"): cv.string' in component
+    assert "cg.add(var.set_firmware_version(config[CONF_FIRMWARE_VERSION]))" in component
+    assert 'CONF_FIRMWARE_VERSION_TEXT = "firmware_version_text"' in component
+    assert "set_firmware_version_text_sensor" in component
+    setup_start = implementation.index("void Proflame2TEmbedComponent::setup()")
+    setup = implementation[setup_start : setup_start + 300]
+    assert 'ESP_LOGI(TAG, "Proflame2 firmware version: %s", this->firmware_version_.c_str());' in setup
+    assert "this->publish_firmware_version_();" in setup
+    api_connected_start = implementation.index("void Proflame2TEmbedComponent::handle_api_client_connected")
+    api_connected = implementation[api_connected_start : api_connected_start + 600]
+    assert 'this->set_timeout("firmware_version_log", 500, [this]()' in api_connected
+    assert "this->log_firmware_version_if_due_();" in api_connected
+    assert "this->publish_firmware_version_();" in api_connected
+    assert "void Proflame2TEmbedComponent::publish_firmware_version_()" in implementation
+    assert "void Proflame2TEmbedComponent::log_firmware_version_if_due_()" in implementation
+    assert "FIRMWARE_VERSION_API_LOG_INTERVAL_MS" in implementation
+    assert "firmware_version: ${proflame2_firmware_version}" in base
+    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
+    assert (
+        yaml.load(base, Loader=yaml.BaseLoader)["substitutions"]["proflame2_firmware_version"]
+        == f"v{manifest['version']}"
+    )
+    assert "name: Proflame2 Firmware Version" in base
+
+
+def test_rmt_empty_capture_discards_do_not_flood_debug_logs() -> None:
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    start = component.index("void Proflame2TEmbedComponent::poll_rmt_pulse_capture_()")
+    end = component.index("void Proflame2TEmbedComponent::publish_rmt_pulse_capture_", start)
+    poll = component[start:end]
+
+    assert 'error.empty() || error == "rmt_pcm_empty"' in poll
+    assert "RX_RMT_PULSE_DISCARD_LOG_INTERVAL_MS" in poll
+    assert "rx_rmt_pulse_discard_suppressed_count_" in poll
+    assert 'RX RMT pulse capture discarded reason=%s suppressed=%" PRIu32' in poll
 
 
 def test_esphome_external_component_uses_codegen_schema_and_action() -> None:
@@ -107,6 +186,8 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     ) in example
     assert "proflame2_tembed_base: !include packages/proflame2_tembed_base.yaml" in validation
     assert "proflame2_tembed_display: !include packages/proflame2_tembed_display.yaml" in validation
+    assert "type: local" in validation
+    assert "path: components" in validation
     assert "proflame2_asset_base_url: assets/icons" in validation
     assert "type: git" in base
     assert "url: https://github.com/jeffgregx2/HACS-Proflame2" in base
@@ -125,7 +206,8 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "set_api_connected(false)" not in base
     assert "proflame2_tembed:" in base
     assert "id: proflame2_radio" in base
-    assert 'proflame2_payload_bit_length_override: "182"' in base
+    assert 'proflame2_payload_bit_length_override: "0"' in base
+    assert "182\n  # bits for legacy remotes and 260 bits for supported extended remotes." in base
     assert "payload_bit_length_override: ${proflame2_payload_bit_length_override}" in base
     assert 'proflame2_tx_mode_override: "proflame_native_groups"' in base
     assert 'proflame2_native_group_timing_profile_override: "native_remote"' in base
@@ -143,11 +225,21 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "id: proflame2_display_dim_timeout_state" in base
     assert "id: proflame2_display_wake_on_activity_state" in base
     assert "id: proflame2_display_short_name_state" in base
+    assert "id: proflame2_active_listener_rx_path_state" in base
+    assert 'proflame2_active_listener_rx_path_default: "rmt_pulse"' in base
+    assert "initial_value: '\"${proflame2_active_listener_rx_path_default}\"'" in base
     assert "restore_value: yes" in base
     assert "min_value: 0" in base
     assert "max_value: 10" in base
     assert 'initial_value: "3"' in base
     assert "name: Display Dim Timeout" in base
+    assert "name: Active Listener RX Path" in base
+    assert '      - "rmt_pulse"' in base
+    assert "id(proflame2_radio).set_active_listener_rx_path(x);" in base
+    assert "id(proflame2_radio).set_active_listener_rx_path(id(proflame2_active_listener_rx_path_state));" in base
+    assert "id(proflame2_radio).set_firmware_version(id(proflame2_firmware_version));" not in base
+    assert "id: proflame2_firmware_version" not in base
+    assert "firmware_version: ${proflame2_firmware_version}" in base
     assert 'initial_value: "1"' in base
     assert "select:" in base
     assert "platform: template" in base
@@ -204,8 +296,8 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "endpoint_status:" in base
     assert "last_tx_result:" in base
     assert "tx_success_count:" in base
-    assert "TX, guided FIFO learning, and FIFO active listening" in base
-    assert "FIFO active listening" in base
+    assert "RMT pulse" in base
+    assert "FIFO is a persistent rollback option" in base
     assert "homeassistant.event" not in base
     for removed_edge_control in (
         "proflame2_rx_polarity_mode",
@@ -575,11 +667,77 @@ def test_esphome_cpp_tx_path_stays_transport_only() -> None:
         assert forbidden not in combined
 
 
+def test_rmt_rx_failure_paths_restore_or_report_errors() -> None:
+    """Keep radio arbitration fail-closed when RMT is the selected RX path.
+
+    ESP-IDF RMT lifecycle calls require hardware/Builder validation, so this
+    source-contract test guards the two failure paths that must not silently
+    leave the default listener stopped or unarmed.
+    """
+
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    receiver = _read("components/proflame2_tembed/rmt_ook_receiver.cpp")
+
+    queue_failure_start = component.index("if (xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE)")
+    queue_failure_end = component.index("  this->tx_in_progress_ = true;", queue_failure_start)
+    queue_failure_block = component[queue_failure_start:queue_failure_end]
+    assert "this->restore_rx_after_tx_if_needed_();" in queue_failure_block
+    assert "this->refresh_status_text_();" in queue_failure_block
+
+    poll_start = receiver.index("bool RmtOokReceiver::poll(")
+    poll_end = receiver.index("bool RmtOokReceiver::on_receive_done_", poll_start)
+    poll_block = receiver[poll_start:poll_end]
+    assert "if (!this->arm_(arm_error)) {" in poll_block
+    assert "error = arm_error;" in poll_block
+    assert "!this->arm_(arm_error) && converted" not in poll_block
+
+
+def test_tx_completion_restores_rx_before_reporting_controller_ready() -> None:
+    """Prevent a native remote press from racing completion UI after HA TX."""
+
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    completion_start = component.index("void Proflame2TEmbedComponent::consume_radio_runtime_events_()")
+    completion_end = component.index("bool Proflame2TEmbedComponent::initialize_radio_", completion_start)
+    completion_block = component[completion_start:completion_end]
+
+    restore_index = completion_block.index("this->restore_rx_after_tx_if_needed_();")
+    assert restore_index < completion_block.index("if (!result.ok)")
+    assert restore_index < completion_block.index('this->update_display_runtime_state_("Sent OK"')
+    assert completion_block.count("this->restore_rx_after_tx_if_needed_();") == 1
+
+
+def test_tx_debug_format_strings_match_fixed_width_diagnostic_types() -> None:
+    """Keep optional timing diagnostics warning-free across ESP-IDF toolchains."""
+
+    component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
+    radio_tx = _read("components/proflame2_tembed/radio_cc1101_tx.cpp")
+
+    assert "[[maybe_unused]] static const char* tx_mode_to_string_" in component
+    assert '"{%u}%" PRIx32' in radio_tx
+    assert radio_tx.count('"TX bit[%" PRIu32 "] value=%u') == 2
+    assert radio_tx.count("static_cast<unsigned>(sample.bit_value)") == 2
+
+
 def test_esphome_native_group_serializer_supports_variable_emit_lengths() -> None:
     radio = _read("components/proflame2_tembed/radio_cc1101_tx.cpp")
+    layout = _read("components/proflame2_tembed/tx_payload_layout.h")
+    component = _read("components/proflame2_tembed/__init__.py")
 
     assert "PROFLAME_NATIVE_SOURCE_BITS_PER_GROUP = 9" in radio
     assert "PROFLAME_NATIVE_MAX_EMIT_BITS_PER_GROUP = 16" in radio
+    assert "PROFLAME_EXTENDED_WORD_COUNT" in radio
+    assert "derive_native_payload_layout(symbol_count, layout)" in radio
+    assert "group_count = layout.word_count" in radio
+    assert "group_index < group_count" in radio
+    assert "group_index + 1U == group_count" in radio
+    assert "PROFLAME_NATIVE_MAX_TRANSITIONS_PER_FRAME" in radio
+    assert "Native TX schedule must hold a complete extended frame" in radio
+    assert "unsupported_symbol_count" in radio
+    assert "group_index * PROFLAME_SYMBOLS_PER_WORD" in radio
+    assert "WORD_SYMBOL_COUNT" not in radio
+    assert "PROFLAME_LEGACY_WORD_COUNT = 7" in layout
+    assert "PROFLAME_EXTENDED_WORD_COUNT = 10" in layout
+    assert "CONF_PAYLOAD_BIT_LENGTH_OVERRIDE, default=0" in component
     assert "group3_derive_failed" not in radio
     assert "unexpected_high_run:" in radio
     assert "emit_overflow" in radio

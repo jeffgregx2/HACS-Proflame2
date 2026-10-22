@@ -8,7 +8,13 @@ import pytest
 
 from custom_components.proflame2.const import BACKEND_ESPHOME
 from custom_components.proflame2.protocol.encoder import encode_packet
-from custom_components.proflame2.protocol.models import ECCProfile, FireplaceState, RemoteProfile
+from custom_components.proflame2.protocol.models import (
+    PROTOCOL_VARIANT_EXTENDED_10_WORD,
+    ECCProfile,
+    ExtendedFrameTemplate,
+    FireplaceState,
+    RemoteProfile,
+)
 from custom_components.proflame2.protocol.packet import ProflameFrame
 from custom_components.proflame2.rf.base import SendResult
 from custom_components.proflame2.rf.capture import frame_to_air_bytes
@@ -178,6 +184,30 @@ async def test_backend_active_listening_policy_and_stop_are_explicit() -> None:
 
     assert transport.active_listening_updates == [False, True, False]
     assert transport.rx_stop_count == 1
+
+
+@pytest.mark.asyncio
+async def test_extended_profile_uses_raw_firmware_listener_and_sends_260_bits() -> None:
+    """Extended frames are decoded in HA rather than legacy firmware filtering."""
+
+    profile = RemoteProfile(
+        serial_id=0x08E905,
+        ecc=ECCProfile(c1=0, d1=0, c2=0, d2=0),
+        protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
+        extended_template=ExtendedFrameTemplate(w4_base=0x80, w6=0x15, w7=0xC8, w8=0x00),
+    )
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport, remote_profile=profile)
+    packet = _prepared_packet(profile)
+
+    await backend.set_active_listening_enabled(True, profile)
+    await backend.connect()
+    await backend.send(packet)
+
+    assert transport.active_listening_profiles
+    assert all(item is None for item in transport.active_listening_profiles)
+    assert transport.tx_requests[-1].air_payload_bit_length == 260
+    assert len(transport.tx_requests[-1].air_payload) == 35
 
 
 @pytest.mark.asyncio

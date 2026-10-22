@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_INTEGRATION_VERSION = "0.5.5"
+DEFAULT_INTEGRATION_VERSION = "0.6.0-beta5"
 BUILD_DEV = "dev"
 BUILD_PROD = "prod"
 ENABLE_FAKE_BACKEND_ENV = "PROFLAME2_ENABLE_FAKE_BACKEND"
@@ -18,7 +18,7 @@ ENABLE_FAKE_BACKEND_ENV = "PROFLAME2_ENABLE_FAKE_BACKEND"
 
 def _derive_build_from_version(version: str) -> str:
     text = str(version).strip().lower()
-    if any(token in text for token in ("dev", "alpha", "beta", "rc")):
+    if any(token in text for token in ("dev", "alpha")):
         return BUILD_DEV
     return BUILD_PROD
 
@@ -33,8 +33,9 @@ def build_flavor() -> str:
     """Return the active build flavor.
 
     ``PROFLAME2_BUILD`` can force ``dev`` or ``prod``. If unset, the build
-    flavor is derived from the version string so prerelease builds behave as
-    development builds by default.
+    flavor is derived from the version string. Beta and release-candidate
+    versions are production-like releases; only development and alpha builds
+    enable dev-only UX by default.
     """
 
     explicit = os.getenv("PROFLAME2_BUILD")

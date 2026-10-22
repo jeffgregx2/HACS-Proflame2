@@ -29,22 +29,31 @@ from custom_components.proflame2.const import (
     CONF_D1,
     CONF_D2,
     CONF_DEBUG_LOGGING,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
+    CONF_FLAME,
     CONF_FRONT,
     CONF_INITIAL_FRAME,
     CONF_INITIAL_PACKET_SOURCE,
     CONF_LIGHT,
+    CONF_POWER,
+    CONF_PROTOCOL_VARIANT,
     CONF_REMOTE_ID,
     DATA_ACTIVE_LISTENING,
     DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS,
     DATA_CONFIRMATION_WINDOW_SECONDS,
     DATA_CONTROL_DEBOUNCE_SECONDS,
     DOMAIN,
+    PROTOCOL_VARIANT_EXTENDED_10_WORD,
     STATE_CONFIDENCE_OBSERVED,
     STATE_CONFIDENCE_REQUESTED,
     STATE_CONFIDENCE_RESTORED,
 )
 from custom_components.proflame2.packet_debug import PacketDebugLogPaths
+from custom_components.proflame2.protocol.ecc import build_extended_integrity_words
 from custom_components.proflame2.protocol.models import FireplaceState
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.base import BackendCapabilities, SendResult
@@ -68,6 +77,7 @@ def _add_entry(
     title: str = "Living Room Fireplace",
     remote_id: int = 0x3B3F02,
     options: dict | None = None,
+    profile_data: dict | None = None,
 ) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -80,6 +90,7 @@ def _add_entry(
             CONF_D1: 7,
             CONF_C2: 1,
             CONF_D2: 8,
+            **(profile_data or {}),
         },
         options=options
         or {
@@ -92,6 +103,51 @@ def _add_entry(
     )
     entry.add_to_hass(hass)
     return entry
+
+
+async def test_extended_profile_control_emits_ten_word_frame(hass) -> None:
+    """A learned extended profile must traverse the normal HA control path."""
+
+    w9, w10 = build_extended_integrity_words(0x81, 0x04, 0x15, 0xC8, 0x00)
+    entry = _add_entry(
+        hass,
+        remote_id=0x08E905,
+        profile_data={
+            CONF_PROTOCOL_VARIANT: PROTOCOL_VARIANT_EXTENDED_10_WORD,
+            CONF_EXTENDED_W4_BASE: 0x80,
+            CONF_EXTENDED_W6: 0x15,
+            CONF_EXTENDED_W7: 0xC8,
+            CONF_EXTENDED_W8: 0x00,
+            CONF_INITIAL_FRAME: {
+                "serial_id": 0x08E905,
+                "cmd1": 0x81,
+                "err1": 0x15,
+                "cmd2": 0x04,
+                "err2": 0xC8,
+                "extension_words": [0x00, w9, w10],
+            },
+        },
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
+    assert runtime_entry.last_packet is not None
+    assert runtime_entry.last_packet.frame.is_extended
+
+    await hass.services.async_call(
+        DOMAIN,
+        "set_state",
+        {CONF_POWER: True, CONF_FLAME: 5},
+        blocking=True,
+    )
+
+    backend = runtime_entry.backend
+    assert isinstance(backend, FakeRFBackend)
+    assert runtime_entry.last_packet is not None
+    assert runtime_entry.last_packet.frame.is_extended
+    frame = backend.sent_packets[-1].frame
+    assert frame.wire_words[:8] == (0x08, 0xE9, 0x05, 0x81, 0x05, 0x15, 0xC8, 0x00)
+    assert frame.is_extended
+    assert backend.sent_packets[-1].transmission_plan.air_payload_bit_length == 260
 
 
 def _sensor_entity_id(title: str) -> str:

@@ -106,6 +106,18 @@ remain the controllers used after learning.
 For more detail on the setup choices, see
 [Add fireplace profile](docs/add_fireplace_profile.md).
 
+## Remote Compatibility
+
+The following Proflame2 remote part numbers have been tested with this project
+and appear to work:
+
+- `0.584.040`
+- `0.584.043`
+- `0.584.080`
+
+Other Proflame2 remotes may also work. These are simply the remote models for
+which this project has explicit test evidence.
+
 Remember: If you are using a LilyGO controller, you must install it first before adding the fireplace.
 
 ## Range

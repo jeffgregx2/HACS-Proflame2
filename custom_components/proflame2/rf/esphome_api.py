@@ -28,6 +28,7 @@ from .esphome.contract import (
     ESPHomeTXResponse,
 )
 from .esphome.transport import ESPHomeTransport
+from .pulse import find_proflame_pcm_candidates
 
 ESPHOME_CONNECT_TIMEOUT_SECONDS = 10.0
 ESPHOME_CLOSE_TIMEOUT_SECONDS = 5.0
@@ -40,7 +41,7 @@ ESPHOME_LEARN_MIN_UNIQUE_CMD2_SAMPLES = 2
 ESPHOME_FIFO_EVENT_WAIT_POLL_SECONDS = 0.75
 ESPHOME_FIFO_MAX_SCAN_PAYLOAD_BYTES = 16_384
 
-_FIFO_RX_EVENT_KINDS = {"fifo_capture", "rx_packet"}
+_FIFO_RX_EVENT_KINDS = {"fifo_capture", "pulse_capture", "rx_packet"}
 
 _LOGGER = logging.getLogger(__name__)
 _LearningReceiveEvent = Callable[..., Awaitable[ESPHomeRXEvent | None]]
@@ -124,7 +125,7 @@ class ESPHomeAPIBackend(RFBackend):
             await asyncio.wait_for(
                 self.transport.set_active_listening(
                     self.active_listening_enabled,
-                    self.active_listening_profile if self.active_listening_enabled else None,
+                    self._firmware_active_listening_profile(),
                 ),
                 timeout=self._connect_timeout_seconds,
             )
@@ -363,10 +364,16 @@ class ESPHomeAPIBackend(RFBackend):
                 learning_accepted=False,
             )
             self._log_debug(
-                "receive decoded rx event controller_id=%s event_id=%s remote_id=%06x payload_length_bytes=%s payload_hex_preview=%s",
+                "receive decoded rx event controller_id=%s event_id=%s remote_id=%06x cmd1=%02x cmd2=%02x err1=%02x err2=%02x "
+                "validation_notes=%s payload_length_bytes=%s payload_hex_preview=%s",
                 self.name,
                 event.event_id,
                 packet.remote_id,
+                packet.frame.cmd1,
+                packet.frame.cmd2,
+                packet.frame.err1,
+                packet.frame.err2,
+                candidate.validation_notes,
                 len(event.raw_payload),
                 _abbreviate_hex(event.raw_payload_hex),
             )
@@ -387,8 +394,10 @@ class ESPHomeAPIBackend(RFBackend):
         set_active_listening = getattr(self.transport, "set_active_listening", None)
         if not callable(set_active_listening):
             return
+        # Firmware strict filtering understands only the legacy C/D profile.
+        # Extended RMT frames are validated by this HA-side decoder instead.
         await asyncio.wait_for(
-            set_active_listening(enabled, self.active_listening_profile if enabled else None),
+            set_active_listening(enabled, self._firmware_active_listening_profile()),
             timeout=self._send_timeout_seconds,
         )
         transport_diagnostics = (
@@ -402,6 +411,14 @@ class ESPHomeAPIBackend(RFBackend):
             f"{profile.serial_id:06x}" if profile is not None else None,
             transport_diagnostics,
         )
+
+    def _firmware_active_listening_profile(self) -> RemoteProfile | None:
+        """Return the profile that can safely be supplied to firmware filtering."""
+
+        if not self.active_listening_enabled:
+            return None
+        profile = self.active_listening_profile
+        return None if profile is not None and profile.is_extended else profile
 
     async def stop_rx(self) -> None:
         if self.transport is None:
@@ -739,6 +756,8 @@ class ESPHomeAPIBackend(RFBackend):
         return True
 
     def _scan_fifo_event(self, event: ESPHomeRXEvent) -> tuple[DecodeCandidate, ...]:
+        if event.capture_metadata.get("event_kind") == "pulse_capture":
+            return self._scan_pulse_event(event)
         if len(event.raw_payload) > ESPHOME_FIFO_MAX_SCAN_PAYLOAD_BYTES:
             self.last_fifo_debug_failure = {
                 "event_id": event.event_id,
@@ -762,6 +781,68 @@ class ESPHomeAPIBackend(RFBackend):
                 "reason": "no_valid_proflame_candidate",
                 "payload_length_bytes": len(event.raw_payload),
                 "raw_payload_hex": event.raw_payload_hex,
+                "capture_metadata": event.capture_metadata,
+            }
+        return tuple(candidates)
+
+    def _scan_pulse_event(self, event: ESPHomeRXEvent) -> tuple[DecodeCandidate, ...]:
+        """Decode the bounded GDO0/RMT PCM event without treating it as FIFO data."""
+
+        bit_length = _parse_decimal_event_int(event.capture_metadata.get("pcm_bit_length"))
+        if bit_length is None or bit_length <= 0 or bit_length > len(event.raw_payload) * 8:
+            self.last_fifo_debug_failure = {
+                "event_id": event.event_id,
+                "reason": "pulse_pcm_bit_length_invalid",
+                "payload_length_bytes": len(event.raw_payload),
+                "pcm_bit_length": event.capture_metadata.get("pcm_bit_length"),
+                "capture_metadata": event.capture_metadata,
+            }
+            return ()
+        bit_stream = "".join(f"{byte:08b}" for byte in event.raw_payload)[:bit_length]
+        pulse_candidates = find_proflame_pcm_candidates(bit_stream)
+        candidates: list[DecodeCandidate] = []
+        for pulse_candidate in pulse_candidates:
+            sample = CaptureSample(
+                remote_id=pulse_candidate.frame.serial_id,
+                cmd1=pulse_candidate.frame.cmd1,
+                err1=pulse_candidate.frame.err1,
+                cmd2=pulse_candidate.frame.cmd2,
+                err2=pulse_candidate.frame.err2,
+                raw_payload=event.raw_payload,
+                symbols="",
+                extension_words=pulse_candidate.extension_words,
+                frame_format=pulse_candidate.frame_format,
+            )
+            notes = [
+                "decode_path=cc1101_gdo0_rmt_pcm",
+                f"frame_format={pulse_candidate.frame_format}",
+                f"repeat_gap_bits={pulse_candidate.repeat_gap_bits}",
+            ]
+            if pulse_candidate.extension_words:
+                notes.append("extension_hex=" + bytes(pulse_candidate.extension_words).hex())
+                notes.append("extended_integrity=valid")
+            candidates.append(
+                DecodeCandidate(
+                    bit_offset=pulse_candidate.bit_offset % 8,
+                    symbol_offset=pulse_candidate.bit_offset // 2,
+                    absolute_bit_offset=pulse_candidate.bit_offset,
+                    raw_slice=event.raw_payload,
+                    sample=sample,
+                    frame=pulse_candidate.frame,
+                    packet=sample.as_packet(),
+                    confidence=120,
+                    trailing_guard_valid=True,
+                    trailing_guard_observed="0" * pulse_candidate.repeat_gap_bits,
+                    validation_notes=tuple(notes),
+                    occurrence_offsets=((pulse_candidate.bit_offset % 8, pulse_candidate.bit_offset // 2),),
+                )
+            )
+        if not candidates:
+            self.last_fifo_debug_failure = {
+                "event_id": event.event_id,
+                "reason": "no_valid_proflame_pulse_candidate",
+                "payload_length_bytes": len(event.raw_payload),
+                "pcm_bit_length": bit_length,
                 "capture_metadata": event.capture_metadata,
             }
         return tuple(candidates)
@@ -968,3 +1049,16 @@ def _parse_event_int(value: Any) -> int | None:
     if not text:
         return None
     return int(text[2:] if text.startswith("0x") else text, 16)
+
+
+def _parse_decimal_event_int(value: Any) -> int | None:
+    """Parse firmware counters and lengths, which are emitted as decimal text."""
+
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text or not text.isdecimal():
+        return None
+    return int(text, 10)

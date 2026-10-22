@@ -65,3 +65,14 @@ def test_stamp_script_uses_same_manifest_documentation_url() -> None:
         "https://github.com/jeffgregx2/HACS-Proflame2"
         "/blob/dev/docs/add_fireplace_profile.md#add-fireplace-profile-options"
     )
+
+
+def test_stamp_script_supports_immutable_release_tags() -> None:
+    """Release links may target the tag that contains the shipped docs."""
+
+    stamp_docs_ref = _load_stamp_docs_ref_module()
+
+    assert stamp_docs_ref.documentation_url("v0.6.0-beta1") == (
+        "https://github.com/jeffgregx2/HACS-Proflame2"
+        "/blob/v0.6.0-beta1/docs/add_fireplace_profile.md#add-fireplace-profile-options"
+    )

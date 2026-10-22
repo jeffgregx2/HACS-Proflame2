@@ -118,7 +118,7 @@ ESPHOME_RX_TRANSPORT_UNAVAILABLE_COUNT_ENTITY_OBJECT_ID = "proflame2_rx_transpor
 ESPHOME_RX_LAST_REJECTION_SNAPSHOT_ENTITY_OBJECT_ID = "proflame2_rx_last_rejection_snapshot"
 ESPHOME_RX_EVENT_TYPE = "esphome.proflame2_rx_packet"
 _SUPPORTED_RX_SCHEMA_VERSIONS = {"1", "2"}
-_SUPPORTED_RX_EVENT_KINDS = {"rx_packet", "rx_debug_sample", "fifo_capture"}
+_SUPPORTED_RX_EVENT_KINDS = {"rx_packet", "rx_debug_sample", "fifo_capture", "pulse_capture"}
 _RX_CAPTURE_METADATA_STRING_KEYS = (
     "schema_version",
     "protocol",
@@ -142,6 +142,8 @@ _RX_CAPTURE_METADATA_VALUE_KEYS = (
     "rolling_history_overflow",
     "dropped_required_window_byte",
     "post_last_byte_quiet_ms",
+    "pcm_bit_length",
+    "symbol_count",
     "remote_id",
     "cmd1",
     "cmd2",
@@ -953,6 +955,7 @@ class MockESPHomeTransport:
         self.tx_responses: list[ESPHomeTXResponse] = []
         self.display_state_updates: list[ESPHomeDisplayState] = []
         self.active_listening_updates: list[bool] = []
+        self.active_listening_profiles: list[Any | None] = []
         self.rx_stop_count = 0
         self.rx_end_confirmation_count = 0
         self.learning_mode_updates: list[dict[str, object]] = []
@@ -1017,6 +1020,7 @@ class MockESPHomeTransport:
                 except asyncio.QueueEmpty:
                     break
         self.active_listening_updates.append(enabled)
+        self.active_listening_profiles.append(profile)
 
     async def stop_rx(self) -> None:
         self.rx_stop_count += 1

@@ -29,15 +29,8 @@ jobs:
             prerelease="${{ github.event.release.prerelease }}"
           fi
 
-          if [[ "${tag_name}" == *-beta* ]]; then
-            documentation_ref="${tag_name}"
-          else
-            documentation_ref="main"
-          fi
-
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
-          echo "documentation_ref=${documentation_ref}" >> "$GITHUB_OUTPUT"
 
       - name: Check out release tag
         uses: actions/checkout@v5
@@ -49,54 +42,4 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
           RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
         shell: bash
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          from pathlib import Path
-
-          tag = os.environ["RELEASE_TAG"].strip()
-          prerelease = os.environ["RELEASE_PRERELEASE"].strip().lower() == "true"
-
-          match = re.fullmatch(r"v(?P<version>\d+\.\d+\.\d+(?:-beta\d+)?)", tag)
-          if match is None:
-              raise SystemExit(
-                  f"Invalid release tag {tag!r}. Use vX.Y.Z or vX.Y.Z-betaN."
-              )
-
-          version = match.group("version")
-          is_beta = "-beta" in version
-          if is_beta and not prerelease:
-              raise SystemExit(f"Beta release tag {tag!r} must be marked as a GitHub prerelease.")
-          # A final version may be published as a GitHub prerelease while it
-          # receives final validation. Promoting that release later does not
-          # change its version or tag.
-
-          manifest = json.loads(Path("custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
-          manifest_version = manifest.get("version")
-          if manifest_version != version:
-              raise SystemExit(
-                  f"manifest.json version mismatch: expected {version!r}, found {manifest_version!r}."
-              )
-
-          version_text = Path("custom_components/proflame2/version.py").read_text(encoding="utf-8")
-          version_match = re.search(
-              r'^DEFAULT_INTEGRATION_VERSION = "(?P<version>[^"]+)"$',
-              version_text,
-              flags=re.MULTILINE,
-          )
-          if version_match is None:
-              raise SystemExit("DEFAULT_INTEGRATION_VERSION not found in version.py.")
-
-          default_version = version_match.group("version")
-          if default_version != version:
-              raise SystemExit(
-                  f"version.py mismatch: expected {version!r}, found {default_version!r}."
-              )
-
-          print(f"Release {tag} is valid.")
-          PY
-
-      - name: Validate release documentation links
-        run: python3 scripts/stamp_docs_ref.py --check --ref "${{ steps.release.outputs.documentation_ref }}"
+        run: python3 scripts/validate_release_source.py --tag "$RELEASE_TAG" --prerelease "$RELEASE_PRERELEASE"

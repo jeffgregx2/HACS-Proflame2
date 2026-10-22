@@ -56,6 +56,7 @@ from custom_components.proflame2.const import (
     DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
     DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
+    PROTOCOL_VARIANT_EXTENDED_10_WORD,
 )
 from custom_components.proflame2.learning import LearnSession
 from custom_components.proflame2.packet_debug import PacketDebugLogPaths
@@ -103,6 +104,23 @@ def _packet(
     )
 
 
+def _extended_packet(*, remote_id: int, cmd1: int, cmd2: int, w6: int = 0x15, w7: int = 0xE1) -> ProflamePacket:
+    from custom_components.proflame2.protocol.ecc import build_extended_integrity_words
+
+    w9, w10 = build_extended_integrity_words(cmd1, cmd2, w6, w7, 0x00)
+    return ProflamePacket.from_frame(
+        ProflameFrame(
+            serial_id=remote_id,
+            cmd1=cmd1,
+            err1=w6,
+            cmd2=cmd2,
+            err2=w7,
+            extension_words=(0x00, w9, w10),
+        ),
+        source="fake_extended",
+    )
+
+
 class DelayedFakeRFBackend(FakeRFBackend):
     """Fake backend that delays each queued receive result for timing tests."""
 
@@ -114,6 +132,24 @@ class DelayedFakeRFBackend(FakeRFBackend):
         if self._delays:
             await asyncio.sleep(self._delays.pop(0))
         return await super().receive(timeout)
+
+
+class ExtendedFrameFakeRFBackend(FakeRFBackend):
+    """Fake backend that supplies RMT extended-frame diagnostic metadata."""
+
+    async def receive(self, timeout: float | None = None) -> ProflamePacket | None:
+        packet = await super().receive(timeout)
+        if packet is not None:
+            self.last_fifo_semantic_artifact = {
+                "event_id": f"extended-{len(self.sent_packets) + len(self.receive_queue)}",
+                "capture_metadata": {"pcm_bit_length": "259"},
+                "raw_payload_hex": "e55959",
+                "validation_notes": (
+                    "frame_format=extended_10_word_truncated_end_guard",
+                    "extension_hex=004177",
+                ),
+            }
+        return packet
 
 
 def _backend_factory(*backends: FakeRFBackend):
@@ -187,8 +223,14 @@ async def _advance_guided_learning(
 
     for _ in range(100):
         if current["type"] is FlowResultType.SHOW_PROGRESS:
-            await asyncio.sleep(0.01)
-            current = await hass.config_entries.flow.async_configure(flow_id)
+            flow = hass.config_entries.flow._progress[flow_id]
+            progress_task = flow.async_get_progress_task()
+            if progress_task is not None:
+                await progress_task
+                await hass.async_block_till_done()
+                current = flow.cur_step
+            else:
+                current = await hass.config_entries.flow.async_configure(flow_id)
             continue
         if current["type"] is FlowResultType.SHOW_PROGRESS_DONE:
             current = await hass.config_entries.flow.async_configure(flow_id)
@@ -341,9 +383,9 @@ async def test_manual_rtl433_learning_captures_buttons_then_confirms_remote_lear
     assert result["step_id"] == "manual_rtl433_prompt"
     assert "**Power**" in result["description_placeholders"]["instruction"]
     assert result["description_placeholders"]["rtl433_command"] == "rtl_433 -f 315M -R 207 -M level -F json"
-    assert "rtl_433-assisted manual learning guide" in result["description_placeholders"][
-        "rtl433_manual_learning_guide"
-    ]
+    assert (
+        "rtl_433-assisted manual learning guide" in result["description_placeholders"]["rtl433_manual_learning_guide"]
+    )
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -1056,6 +1098,92 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass, monkeypatch)
     assert result["data"][CONF_C2] == 1
     assert result["data"][CONF_D2] == 8
     assert result["options"][CONF_PROFILES] == {}
+
+
+async def test_extended_rmt_learning_creates_manual_profile(hass, monkeypatch) -> None:
+    """Extended RMT frames should create an extended manual TX profile."""
+
+    _enable_fake_backend(monkeypatch)
+    backend = ExtendedFrameFakeRFBackend()
+    backend.queue_packets(
+        _extended_packet(remote_id=0x08E905, cmd1=0x81, cmd2=0x06),
+        _extended_packet(remote_id=0x08E905, cmd1=0x80, cmd2=0x06),
+        _extended_packet(remote_id=0x08E905, cmd1=0x81, cmd2=0x06),
+        _extended_packet(remote_id=0x08E905, cmd1=0x81, cmd2=0x05),
+    )
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.01
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={"next_step_id": "learn"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"name": "Extended Remote", CONF_BACKEND_TYPE: "fake"},
+    )
+
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "learn_features"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_FRONT: False,
+            CONF_AUX: False,
+            CONF_CPI: False,
+            CONF_DEBUG_LOGGING: False,
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_REMOTE_ID] == 0x08E905
+    assert result["data"]["protocol_variant"] == PROTOCOL_VARIANT_EXTENDED_10_WORD
+    assert result["data"]["extended_w4_base"] == 0x80
+    assert result["data"]["extended_w6"] == 0x15
+    assert result["data"]["extended_w7"] == 0xC8
+    assert result["data"]["extended_w8"] == 0x00
+
+
+async def test_guided_learning_prompt_reuses_pending_capture_task(hass, monkeypatch) -> None:
+    """Repeated progress callbacks must not start concurrent backend receives."""
+
+    _enable_fake_backend(monkeypatch)
+    backend = FakeRFBackend()
+    backend.queue_packets(
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x00, err1=0x57, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x06, err2=0xDE),
+        _packet(remote_id=0x3B3F02, cmd1=0x01, err1=0x76, cmd2=0x05, err2=0xBD),
+    )
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.05
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={"next_step_id": "learn"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={"name": "Concurrent Prompt", CONF_BACKEND_TYPE: "fake"},
+    )
+    flow = hass.config_entries.flow._progress[result["flow_id"]]
+    original_task = flow._learn_task
+    assert original_task is not None
+
+    duplicate_result = await flow.async_step_learn_prompt()
+
+    assert duplicate_result["type"] is FlowResultType.SHOW_PROGRESS
+    assert flow._learn_task is original_task
+    assert len(backend.receive_queue) == 4
+
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "learn_features"
 
 
 async def test_guided_learning_timeout_is_per_prompt_not_overall(hass, monkeypatch) -> None:

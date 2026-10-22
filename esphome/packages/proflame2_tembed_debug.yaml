@@ -72,6 +72,7 @@ select:
     options:
       - "off"
       - "fifo_trailing_window"
+      - "rmt_pulse"
     lambda: |-
       return id(proflame2_capture_mode_state);
     set_action:

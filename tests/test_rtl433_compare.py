@@ -9,6 +9,8 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO_ROOT / "tools" / "compare_rtl433_captures.py"
 SPEC = importlib.util.spec_from_file_location("compare_rtl433_captures", MODULE_PATH)
@@ -233,6 +235,7 @@ def test_missing_sections_do_not_crash() -> None:
     assert "timing_distribution" in result.missing_sections
 
 
+@pytest.mark.rtl433_source
 def test_rtl433_proflame2_pcm_debug_instrumentation_is_present() -> None:
     pulse_slicer = (_rtl433_source_root() / "src" / "pulse_slicer.c").read_text(encoding="utf-8")
 

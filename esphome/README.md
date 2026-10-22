@@ -13,12 +13,13 @@ state policy, scenes, profiles, and user-facing control behavior.
 The current LilyGO firmware supports:
 
 - Proflame2 transmit from Home Assistant-generated payloads.
-- Guided FIFO learning through the Home Assistant learning flow.
+- Guided RMT pulse learning through the Home Assistant learning flow.
 - Active listening for packets matching the learned serial/profile.
 - Display and diagnostic entities for normal operation.
 
-The old LilyGO GDO edge-interval ownership path is not part of the production
-RX model. RX uses CC1101 FIFO byte windows and Proflame2 candidate scanning.
+Production RX uses CC1101 asynchronous serial output on GDO0, ESP32 RMT
+capture, and host-side PCM decoding. The previous FIFO byte-window path is
+used only as a fallback when RMT has compatibility problems.
 
 ## Source-Only Distribution
 
@@ -62,6 +63,22 @@ Debug firmware may additionally include:
 The debug package exposes manual FIFO capture/profile controls and other
 low-level RF diagnostics. It is intentionally omitted from the normal overlay.
 
+## Receive Path Selection
+
+The base package defaults guided learning and active listening to `rmt_pulse`.
+The `Active Listener RX Path` config entity persists the selected path across
+reboots. For an internal rollback to the original receiver, select `fifo` in
+that entity, or set this substitution before the first boot:
+
+```yaml
+substitutions:
+  proflame2_active_listener_rx_path_default: "fifo"
+```
+
+Because the entity is persistent, changing the substitution does not replace an
+existing saved selection; select `fifo` once in Home Assistant or erase the
+device preferences.
+
 ## Release-Pinned Package Example
 
 For normal users after releases are tagged:
@@ -82,6 +99,13 @@ packages:
   proflame2_tembed_base: !include ../packages/proflame2_tembed_base.yaml
   proflame2_tembed_display: !include ../packages/proflame2_tembed_display.yaml
 ```
+
+At boot, the ESPHome log reports the firmware version at `INFO` level, for
+example `Proflame2 firmware version: v0.6.0-beta4`. The release workflow stamps
+this value into the package, independently of the configured source reference.
+The line is emitted during startup and again shortly after an ESPHome API client
+connects. Home Assistant also exposes it as the diagnostic entity **Proflame2
+Firmware Version**.
 
 ## Hardware Target
 
@@ -128,14 +152,15 @@ TX flow:
 
 RX flow:
 
-1. Firmware configures the CC1101 as an ASK/OOK FIFO byte source.
-2. Firmware drains FIFO bytes into a bounded rolling buffer.
-3. Guided learning or active listening scans FIFO windows for Proflame2
-   candidates.
-4. Only decoded packets matching the learned profile are published to Home
-   Assistant during active listening.
-5. Home Assistant remains the owner of fireplace state updates and learning
-   persistence.
+1. Firmware configures the CC1101 for ASK/OOK asynchronous serial output on
+   GDO0.
+2. ESP32 RMT records bounded GDO0 transitions and quantizes them into 417 us
+   PCM bits.
+3. Home Assistant validates the PCM row and decodes the Proflame2 frame.
+4. Only packets matching the learned profile are accepted during active
+   listening.
+5. Home Assistant immediately returns accepted observed state to the LilyGO
+   display and remains the owner of learning persistence.
 
 TX always has priority over RX. If active listening is enabled, TX pauses RX and
 the firmware restores the previous RX state after transmit.
@@ -150,7 +175,7 @@ Validated TX defaults:
 - `tx_mode: proflame_native_groups`
 - `native_group_timing_profile: native_remote`
 - `native_group_repeat_boundary_mode: continuous_tx`
-- `payload_bit_length_override: 182`
+- `payload_bit_length_override: 0` (use the Home Assistant-provided length)
 - `inter_frame_gap_us: 0`
 - `post_frame_idle_gap_us: 0`
 
@@ -158,9 +183,14 @@ Validated RX defaults:
 
 - `rx_frequency_hz: 314973000`
 - `data_rate_bps: 2400`
-- `RX FIFO Profile: rfcat_fixed_none_rfcat_wide`
-- `Export window: 6000 ms`
-- `Active listener scan interval: 1500 ms`
+- `Active Listener RX Path: rmt_pulse`
+- RMT resolution: `1000000` Hz
+- RMT PCM unit: `417` us
+- RMT idle completion: `30` ms
+
+FIFO rollback settings remain `RX FIFO Profile:
+rfcat_fixed_none_rfcat_wide`, a `6000` ms export window, and a `1500` ms
+active-listener scan interval.
 
 The detailed TX/RX register and waveform reference is documented in:
 
@@ -172,6 +202,13 @@ Python tests do not require ESPHome to be installed:
 
 ```bash
 ./.venv/bin/python -m pytest -q
+```
+
+The firmware's transport-only C++ TX helpers also have host-executed `gcov`
+coverage tests:
+
+```bash
+make firmware-unit-test
 ```
 
 ESPHome validation uses a dedicated virtualenv because ESPHome and Home
@@ -187,7 +224,10 @@ make esphome-validate
 
 The `make` targets stage a temporary no-space copy of the `esphome/` tree under
 `/tmp/proflame2-esphome/repo` before running ESPHome. This avoids ESP-IDF path
-failures when the working checkout path contains whitespace.
+failures when the working checkout path contains whitespace. After ESPHome
+resolves the package metadata, the target overlays the staged checkout's
+external component so C++ validation covers local, uncommitted changes rather
+than the GitHub ref.
 
 Compile success is not RF validation. Use an independent R820T/`rtl_433`
 witness for RF checks. For release or hardware changes, validate:
