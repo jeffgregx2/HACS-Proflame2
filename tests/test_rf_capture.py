@@ -55,7 +55,7 @@ def test_air_packet_round_trip(remote_profile) -> None:
 def test_frame_to_capture_sample_preserves_extended_words() -> None:
     """Generic capture conversion must not silently downgrade ten-word frames."""
 
-    w9, w10 = build_extended_integrity_words(0x81, 0x06, 0x15, 0xC8, 0x00)
+    w9, w10 = build_extended_integrity_words(0x08E905, 0x81, 0x06, 0x15, 0xC8, 0x00)
     frame = ProflameFrame(
         serial_id=0x08E905,
         cmd1=0x81,

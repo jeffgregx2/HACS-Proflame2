@@ -45,7 +45,7 @@ from .packet_debug import (
     get_packet_debug_logger,
 )
 from .protocol.ecc import derive_ecc_profile
-from .protocol.models import PROTOCOL_VARIANT_EXTENDED_10_WORD
+from .protocol.models import EXTENDED_W4_FIXED_MASK, PROTOCOL_VARIANT_EXTENDED_10_WORD
 from .protocol.packet import ProflameFrame, ProflamePacket
 from .rf.base import RFBackend
 from .rf.esphome.transport import HomeAssistantESPHomeTransport
@@ -856,7 +856,7 @@ def _derive_extended_learn_result(
     # profile, so W5 is proven to be the manual state word.
     if len(manual_frames) < 2 or len({frame.cmd2 for frame in manual_frames}) < 2:
         return None
-    w4_base_values = {frame.cmd1 & 0x80 for frame in manual_frames}
+    w4_base_values = {frame.cmd1 & EXTENDED_W4_FIXED_MASK for frame in manual_frames}
     w6_values = {frame.err1 for frame in manual_frames}
     w8_values = {frame.extension_words[0] for frame in manual_frames}
     if len(w4_base_values) != 1 or len(w6_values) != 1 or len(w8_values) != 1:

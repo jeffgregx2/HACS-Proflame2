@@ -14,17 +14,28 @@ reporter validation.
 
 The ten on-air words are `W1 W2 W3 W4 W5 W6 W7 W8 W9 W10`. `W1-W3` are the
 remote identifier. In manual mode, `W4` uses the existing power/light bit
-layout with bit 7 retained from the learned manual frame, and `W5` uses the
+layout with fixed bits 2, 3 and 7 retained from the learned manual frame, and `W5` uses the
 existing flame/fan/front/aux bit layout. `W6` and `W8` are learned fixed fields.
 
 ```text
 T(value) = build_err_byte(value, 0, 0)
-W9  = T(T(W5)) ^ T(W7) ^ 0x23
-W10 = T(T(T(W4))) ^ T(T(W6)) ^ T(W8) ^ 0x65
+W9  = T(T(T(T(W1) ^ W3) ^ W5) ^ W7)
+W10 = T(T(T(T(W2) ^ W4) ^ W6) ^ W8)
 ```
 
 Both integrity lanes must validate before a received extended frame is
 accepted.
+
+Issue #26 established that the earlier reduced-lane constants `0x23/0x65`
+represented Alex's serial `08E905`, not universal protocol constants. The
+serial-inclusive lanes above reproduce his captures unchanged and also validate
+Willy's serial `338705`. See [Issue #26 regression evidence](issue_26_extended_integrity.md).
+
+Some native extended frames have flame level zero while the power bit remains
+set. Receive preserves both fields without guessing whether this represents
+full shutdown or flame-only shutdown. Thermostat mode can also use flame zero.
+HA transmit validation remains unchanged; accepting a native observation does
+not enable new thermostat or flame-zero commands.
 
 ## Profile And Learning
 

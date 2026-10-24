@@ -108,7 +108,7 @@ def _add_entry(
 async def test_extended_profile_control_emits_ten_word_frame(hass) -> None:
     """A learned extended profile must traverse the normal HA control path."""
 
-    w9, w10 = build_extended_integrity_words(0x81, 0x04, 0x15, 0xC8, 0x00)
+    w9, w10 = build_extended_integrity_words(0x08E905, 0x81, 0x04, 0x15, 0xC8, 0x00)
     entry = _add_entry(
         hass,
         remote_id=0x08E905,

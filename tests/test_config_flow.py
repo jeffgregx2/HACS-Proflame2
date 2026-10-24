@@ -107,7 +107,7 @@ def _packet(
 def _extended_packet(*, remote_id: int, cmd1: int, cmd2: int, w6: int = 0x15, w7: int = 0xE1) -> ProflamePacket:
     from custom_components.proflame2.protocol.ecc import build_extended_integrity_words
 
-    w9, w10 = build_extended_integrity_words(cmd1, cmd2, w6, w7, 0x00)
+    w9, w10 = build_extended_integrity_words(remote_id, cmd1, cmd2, w6, w7, 0x00)
     return ProflamePacket.from_frame(
         ProflameFrame(
             serial_id=remote_id,

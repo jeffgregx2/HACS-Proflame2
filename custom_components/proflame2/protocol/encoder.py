@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .ecc import build_extended_integrity_words, err1_for, err2_for
-from .models import FireplaceState, RemoteProfile
+from .models import EXTENDED_W4_FIXED_MASK, FireplaceState, RemoteProfile
 from .packet import ProflameFrame, ProflamePacket
 
 
@@ -44,11 +44,9 @@ def encode_state(
     if profile.is_extended:
         template = profile.extended_template
         assert template is not None
-        # The high control bit is fixed by the learned manual-mode frame. The
-        # remaining state bits retain the established legacy command layout.
-        w4 = (template.w4_base & 0x80) | cmd1
+        w4 = (template.w4_base & EXTENDED_W4_FIXED_MASK) | cmd1
         w5 = cmd2
-        w9, w10 = build_extended_integrity_words(w4, w5, template.w6, template.w7, template.w8)
+        w9, w10 = build_extended_integrity_words(profile.serial_id, w4, w5, template.w6, template.w7, template.w8)
         return ProflameFrame(
             serial_id=profile.serial_id,
             cmd1=w4,

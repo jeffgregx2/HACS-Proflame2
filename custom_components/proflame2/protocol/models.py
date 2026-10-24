@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 
 from ..const import PROTOCOL_VARIANT_EXTENDED_10_WORD, PROTOCOL_VARIANT_LEGACY_7_WORD
 
+# Known dynamic W4 fields are power, thermostat and light. Preserve the rest
+# as learned extended-frame flags; their meanings are not yet established.
+EXTENDED_W4_FIXED_MASK = 0x8C
+
 
 @dataclass(frozen=True)
 class ECCProfile:
@@ -111,15 +115,15 @@ class FireplaceState:
         if self.thermostat and not allow_thermostat:
             raise ValueError("Native thermostat mode is disabled for v1.")
 
-    def validate_observed(self, *, allow_thermostat: bool = False) -> None:
+    def validate_observed(self, *, allow_thermostat: bool = False, allow_flame_off: bool = False) -> None:
         """Validate a received/observed state decoded from protocol bytes."""
 
         if not self.power:
             if not 0 <= self.flame <= 6:
                 raise ValueError("Observed flame must be between 0 and 6 when power is off.")
-        elif self.thermostat and allow_thermostat:
+        elif allow_flame_off or (self.thermostat and allow_thermostat):
             if not 0 <= self.flame <= 6:
-                raise ValueError("Thermostat flame must be between 0 and 6.")
+                raise ValueError("Observed flame must be between 0 and 6.")
         elif not 1 <= self.flame <= 6:
             raise ValueError("Flame must be between 1 and 6 when power is on.")
 

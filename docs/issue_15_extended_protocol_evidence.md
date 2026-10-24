@@ -4,6 +4,12 @@ This document records reproducible observations for the Issue #15 SIT TMFSLA
 extended-frame investigation. It is not a protocol specification. Claims not
 backed by a committed fixture or cited source remain hypotheses.
 
+Issue #26 subsequently supplied a second extended remote identifier. The
+historical `0x23/0x65` formulas below remain correct for Alex's captures but
+are not universal constants. The current serial-inclusive implementation and
+cross-remote regressions are documented in
+[Issue #26 extended integrity](issue_26_extended_integrity.md).
+
 ## Baseline
 
 | Field | Value |
