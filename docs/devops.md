@@ -53,6 +53,18 @@ The Makefile already defaults `PYTHON`, `RUFF`, and `BLACK` to `./.venv/bin/*`,
 so `make test`, `make lint-python`, and `make format-python-check` are safe
 entrypoints.
 
+The default suite includes the offline RF capture tests. The check for local
+`rtl_433` source instrumentation is opt-in because it requires the separately
+modified development source tree, not a standard `rtl_433` checkout:
+
+```bash
+PROFLAME2_RTL433_SOURCE=/path/to/instrumented/rtl_433 \
+  ./.venv/bin/python -m pytest -q -m rtl433_source tests/test_rtl433_compare.py
+```
+
+When explicitly selected, this check fails if the source tree or required
+instrumentation is missing.
+
 ESPHome validation uses a separate virtual environment:
 
 ```bash

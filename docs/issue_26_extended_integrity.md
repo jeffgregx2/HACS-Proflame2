@@ -100,3 +100,10 @@ Final verification: **1,078 passed, 2 deselected**, with the external rtl_433
 source configured and only those two confirmed parent failures excluded.
 Ruff, Black and `git diff --check` passed. The corpus file alone runs 530
 parameterized tests. No RF transmissions or hardware acceptance tests were run.
+
+Before opening the PR into `dev`, its test-portability improvements were merged
+into this branch. Conflicts were resolved without dropping the alpha-version
+checks, and the default build-flavor test was made alpha-aware. Both earlier
+metadata exclusions are now removed: **1,079 passed, 1 optional external-source
+test deselected**. That external rtl_433 instrumentation test was also run
+explicitly against the available source tree and passed separately.

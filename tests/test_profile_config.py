@@ -396,15 +396,16 @@ def test_build_profile_id_slugifies_display_name() -> None:
 
 
 def test_build_metadata_defaults_to_current_release_with_fake_disabled(monkeypatch) -> None:
-    """The declared default release should keep Fake hidden."""
+    """Stamped alpha/development and production versions keep Fake opt-in."""
 
     monkeypatch.delenv("PROFLAME2_VERSION", raising=False)
     monkeypatch.delenv("PROFLAME2_BUILD", raising=False)
     monkeypatch.delenv(ENABLE_FAKE_BACKEND_ENV, raising=False)
 
     assert integration_version() == DEFAULT_INTEGRATION_VERSION
-    assert build_flavor() == "prod"
-    assert is_dev_build() is False
+    expected_dev = any(token in DEFAULT_INTEGRATION_VERSION.lower() for token in ("alpha", "dev"))
+    assert build_flavor() == ("dev" if expected_dev else "prod")
+    assert is_dev_build() is expected_dev
     assert fake_backend_enabled() is False
     assert available_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
     assert available_learning_backend_types() == (BACKEND_YARDSTICK, BACKEND_ESPHOME)
