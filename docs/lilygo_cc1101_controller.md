@@ -99,6 +99,19 @@ device identity settings. It also updates the ESP32 framework to the current
 validated LilyGO firmware framework, adds the Proflame2 package references, and
 adds a restart switch if one is not already present.
 
+## Radio Band
+
+The default LilyGO radio band is 315 MHz. If the label on the original remote
+states 433.92 MHz, add this setting to the top-level `substitutions:` block in
+the device YAML before building the firmware:
+
+```yaml
+proflame2_rf_band: "433"
+```
+
+Use `"315"` for 315 MHz remotes. A LilyGO can use only one radio band at a
+time, so fireplaces on different bands need separate LilyGO controllers.
+
 To manually update your YAML file instead, see
 [manual LilyGO YAML setup](lilygo_cc1101_manual_yaml.md).
 

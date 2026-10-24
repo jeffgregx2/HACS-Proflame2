@@ -417,6 +417,27 @@
           warnings.push('Added payload bit-length override "0" for automatic legacy/extended frame lengths.');
         }
 
+        function ensureRfBand(lines, warnings) {
+          const block = findBlock(lines, "substitutions");
+          if (!block) {
+            throw new Error("substitutions: block was not created.");
+          }
+
+          const bandPattern = /^(\s*)proflame2_rf_band\s*:/;
+          for (let i = block.start + 1; i < block.end; i += 1) {
+            if (bandPattern.test(lines[i])) {
+              if (!/proflame2_rf_band\s*:\s*"(?:315|433)"\s*(?:#.*)?$/.test(lines[i])) {
+                lines[i] = lines[i].replace(/^\s*proflame2_rf_band\s*:.*$/, '  proflame2_rf_band: "315"');
+                warnings.push('Updated RF band to the default "315". Supported values are "315" and "433".');
+              }
+              return;
+            }
+          }
+
+          insertLines(lines, block.start + 1, ['  proflame2_rf_band: "315"']);
+          warnings.push('Added RF band default "315".');
+        }
+
         function ensureArduinoFramework(lines, doc, warnings) {
           const block = findBlock(lines, "esp32");
           if (!block) {
@@ -621,6 +642,9 @@
           if (!isMapping(doc.substitutions) || doc.substitutions.proflame2_package_ref !== "main") {
             throw new Error("Generated YAML is missing substitutions.proflame2_package_ref.");
           }
+          if (!isMapping(doc.substitutions) || !["315", "433"].includes(String(doc.substitutions.proflame2_rf_band))) {
+            throw new Error("Generated YAML is missing a valid substitutions.proflame2_rf_band.");
+          }
           if (!isMapping(doc.esp32) || !isMapping(doc.esp32.framework) || doc.esp32.framework.type !== "arduino") {
             throw new Error("Generated YAML is missing esp32.framework.type: arduino.");
           }
@@ -661,6 +685,7 @@
             const lines = text.split(/\r?\n/);
 
             ensureSubstitution(lines, warnings);
+            ensureRfBand(lines, warnings);
             ensurePayloadBitLengthOverride(lines, warnings);
             ensureArduinoFramework(lines, originalDoc, warnings);
 

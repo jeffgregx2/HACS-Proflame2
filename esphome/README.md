@@ -165,11 +165,24 @@ RX flow:
 TX always has priority over RX. If active listening is enabled, TX pauses RX and
 the firmware restores the previous RX state after transmit.
 
-## Validated RF Settings
+## RF Band Configuration
+
+The base package selects the 315 MHz band by default:
+
+```yaml
+substitutions:
+  proflame2_rf_band: "315"
+```
+
+For a remote labeled 433.92 MHz, set `proflame2_rf_band` to `"433"` before
+building. The firmware selects the matching CC1101 frequency and T-Embed RF
+switch path for both TX and RX. One LilyGO can operate on only one band at a
+time.
+
+## Validated 315 MHz RF Settings
 
 Validated TX defaults:
 
-- `tx_frequency_hz: 314973000`
 - `data_rate_bps: 2400`
 - `tx_repeat_count: 5`
 - `tx_mode: proflame_native_groups`
@@ -181,7 +194,6 @@ Validated TX defaults:
 
 Validated RX defaults:
 
-- `rx_frequency_hz: 314973000`
 - `data_rate_bps: 2400`
 - `Active Listener RX Path: rmt_pulse`
 - RMT resolution: `1000000` Hz

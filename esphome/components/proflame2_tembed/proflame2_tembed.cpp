@@ -442,17 +442,30 @@ void Proflame2TEmbedComponent::setup() {
   this->publish_firmware_version_();
   this->spi_setup();
 
+  if (!resolve_rf_band_configuration(this->rf_band_, this->rf_band_configuration_)) {
+    this->status_text_ = "fault";
+    this->last_error_ = "invalid_rf_band";
+    this->last_tx_result_ = "error:invalid_rf_band";
+    ESP_LOGE(TAG, "Proflame2 T-Embed invalid RF band configuration");
+    return;
+  }
+  this->tx_frequency_hz_ = this->rf_band_configuration_.frequency_hz;
+  this->rx_frequency_hz_ = this->rf_band_configuration_.frequency_hz;
+  ESP_LOGI(TAG, "RF band selected: %s frequency_hz=%" PRIu32 " sw1=%s sw0=%s", this->rf_band_configuration_.name,
+           this->rf_band_configuration_.frequency_hz, YESNO(this->rf_band_configuration_.rf_switch_sw1_high),
+           YESNO(this->rf_band_configuration_.rf_switch_sw0_high));
+
   if (this->board_power_enable_pin_ != nullptr) {
     this->board_power_enable_pin_->setup();
     this->board_power_enable_pin_->digital_write(true);
   }
   if (this->rf_switch_sw1_pin_ != nullptr) {
     this->rf_switch_sw1_pin_->setup();
-    this->rf_switch_sw1_pin_->digital_write(true);
+    this->rf_switch_sw1_pin_->digital_write(this->rf_band_configuration_.rf_switch_sw1_high);
   }
   if (this->rf_switch_sw0_pin_ != nullptr) {
     this->rf_switch_sw0_pin_->setup();
-    this->rf_switch_sw0_pin_->digital_write(false);
+    this->rf_switch_sw0_pin_->digital_write(this->rf_band_configuration_.rf_switch_sw0_high);
   }
   if (this->cc1101_gdo0_pin_ != nullptr) {
     this->cc1101_gdo0_pin_->setup();
@@ -489,6 +502,9 @@ void Proflame2TEmbedComponent::setup() {
   ESP_LOGD(TAG, "Initial UI refresh requested");
   ESP_LOGCONFIG(TAG, "  Build marker: %s", PROFLAME_BUILD_MARKER);
   ESP_LOGCONFIG(TAG, "Proflame2 T-Embed TX skeleton ready");
+  ESP_LOGCONFIG(TAG, "  RF band: %s (SW1=%s SW0=%s)", this->rf_band_configuration_.name,
+                YESNO(this->rf_band_configuration_.rf_switch_sw1_high),
+                YESNO(this->rf_band_configuration_.rf_switch_sw0_high));
   ESP_LOGCONFIG(TAG, "  TX frequency: %" PRIu32 " Hz", this->tx_frequency_hz_);
   ESP_LOGCONFIG(TAG, "  RX frequency: %" PRIu32 " Hz", this->rx_frequency_hz_);
   ESP_LOGCONFIG(TAG, "  data rate: %" PRIu32 " bps", this->data_rate_bps_);
@@ -802,6 +818,9 @@ void Proflame2TEmbedComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "Proflame2 T-Embed CC1101 endpoint");
   ESP_LOGCONFIG(TAG, "  mode: TX with FIFO learning and active listening");
   ESP_LOGCONFIG(TAG, "  status: %s", this->status_text_.c_str());
+  ESP_LOGCONFIG(TAG, "  RF band: %s (%" PRIu32 " Hz, SW1=%s SW0=%s)", this->rf_band_configuration_.name,
+                this->rf_band_configuration_.frequency_hz, YESNO(this->rf_band_configuration_.rf_switch_sw1_high),
+                YESNO(this->rf_band_configuration_.rf_switch_sw0_high));
   ESP_LOGCONFIG(TAG, "  RX FIFO profile: %s", this->rx_fifo_profile_name_());
   ESP_LOGCONFIG(TAG, "  RX FIFO capture enabled: %s", YESNO(this->rx_fifo_capture_enabled_));
   ESP_LOGCONFIG(TAG, "  TX path: cc1101_async_gdo0_msb_first");
@@ -1830,8 +1849,8 @@ void Proflame2TEmbedComponent::set_api_connected(bool value) {
 }
 
 void Proflame2TEmbedComponent::handle_api_client_connected(const std::string& client_info) {
-  // API log clients attach after component setup, so repeat the immutable build
-  // version once the client has had time to subscribe to log messages.
+  // API log clients attach after component setup, so repeat immutable build and
+  // radio-band identity once the client has had time to subscribe to logs.
   this->set_timeout("firmware_version_log", 500, [this]() {
     this->log_firmware_version_if_due_();
   });
@@ -1860,6 +1879,7 @@ void Proflame2TEmbedComponent::log_firmware_version_if_due_() {
   this->firmware_version_api_last_log_ms_ = now;
   this->firmware_version_api_log_initialized_ = true;
   ESP_LOGI(TAG, "Proflame2 firmware version: %s", this->firmware_version_.c_str());
+  ESP_LOGI(TAG, "Proflame2 RF band: %s", this->rf_band_configuration_.name);
 }
 
 void Proflame2TEmbedComponent::handle_api_client_disconnected(const std::string& client_info) {

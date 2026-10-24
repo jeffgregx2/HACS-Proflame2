@@ -109,23 +109,8 @@ class CaptureSessionRunner:
 
         session_context = self._create_session_context()
         run_state = self._initialize_run_state()
-        self._start_collectors_for_session(session_context)
-        self._write_session_manifest(
-            session_context,
-            valid_samples=run_state.valid_samples,
-            attempts=run_state.attempts,
-            outcomes=run_state.outcomes,
-        )
-
-        while self._should_continue_run(run_state):
-            run_state.attempts += 1
-            prepared = self._prepare_sample(session_context, run_state)
-            self._start_collectors_for_sample(prepared.sample_context)
-            self._prompt_operator_for_sample(session_context, prepared)
-            self._wait_for_collectors()
-
-            evaluation = self._finalize_sample(prepared)
-            self._record_sample_evaluation(session_context, run_state, prepared, evaluation)
+        try:
+            self._start_collectors_for_session(session_context)
             self._write_session_manifest(
                 session_context,
                 valid_samples=run_state.valid_samples,
@@ -133,9 +118,27 @@ class CaptureSessionRunner:
                 outcomes=run_state.outcomes,
             )
 
-        summary = self._build_run_summary(session_context, run_state)
-        self._write_run_summary(session_context, summary)
-        return summary
+            while self._should_continue_run(run_state):
+                run_state.attempts += 1
+                prepared = self._prepare_sample(session_context, run_state)
+                self._start_collectors_for_sample(prepared.sample_context)
+                self._prompt_operator_for_sample(session_context, prepared)
+                self._wait_for_collectors()
+
+                evaluation = self._finalize_sample(prepared)
+                self._record_sample_evaluation(session_context, run_state, prepared, evaluation)
+                self._write_session_manifest(
+                    session_context,
+                    valid_samples=run_state.valid_samples,
+                    attempts=run_state.attempts,
+                    outcomes=run_state.outcomes,
+                )
+
+            summary = self._build_run_summary(session_context, run_state)
+            self._write_run_summary(session_context, summary)
+            return summary
+        finally:
+            self._close_collectors()
 
     def _create_session_context(self) -> SessionContext:
         started_at = utc_now()
@@ -171,6 +174,10 @@ class CaptureSessionRunner:
     def _start_collectors_for_session(self, session_context: SessionContext) -> None:
         for collector in self._collectors:
             collector.start_session(session_context)
+
+    def _close_collectors(self) -> None:
+        for collector in reversed(self._collectors):
+            collector.close()
 
     def _should_continue_run(self, run_state: _RunState) -> bool:
         targets_reached = self._target_reached(run_state.valid_samples, run_state.semantic_target_counts)

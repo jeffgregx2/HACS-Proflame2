@@ -98,7 +98,7 @@ def test_extended_encoder_builds_manual_ten_word_frame() -> None:
     )
 
     frame = encode_state(FireplaceState(power=True, flame=5), profile)
-    w9, w10 = build_extended_integrity_words(0x81, 0x05, 0x15, 0xC8, 0x00)
+    w9, w10 = build_extended_integrity_words(0x08E905, 0x81, 0x05, 0x15, 0xC8, 0x00)
 
     assert frame.wire_words == (0x08, 0xE9, 0x05, 0x81, 0x05, 0x15, 0xC8, 0x00, w9, w10)
     assert frame.is_extended

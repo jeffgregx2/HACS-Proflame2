@@ -33,6 +33,9 @@ class Collector(Protocol):
     def write_artifacts(self, sample_dir: Path) -> tuple[CollectorArtifact, ...]:
         """Persist sample artifacts and return their metadata."""
 
+    def close(self) -> None:
+        """Release session-wide resources after the capture run ends."""
+
 
 @dataclass
 class StubCollector:
@@ -97,6 +100,9 @@ class StubCollector:
                 kind="stub_status",
             ),
         )
+
+    def close(self) -> None:
+        """Stubs do not allocate resources that need explicit cleanup."""
 
 
 class StubLilyGoCollector(StubCollector):

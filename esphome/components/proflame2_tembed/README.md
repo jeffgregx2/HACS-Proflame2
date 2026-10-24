@@ -326,7 +326,7 @@ gap away from the native target.
 
 ## CC1101 Configuration Required for Working TX
 
-The currently validated CC1101 async OOK configuration is:
+The currently validated 315 MHz CC1101 async OOK configuration is:
 
 - frequency `314973000 Hz`
 - data rate `2400 bps`
@@ -334,6 +334,10 @@ The currently validated CC1101 async OOK configuration is:
 - MCU drives the async data input pin
 - `PATABLE[0] = 0x00`
 - `PATABLE[1..7] = 0xC6`
+
+For a 433.92 MHz remote, select `rf_band: 433`; the component applies the
+matching carrier frequency and RF-switch path while retaining the same OOK
+configuration.
 
 Important register values:
 
@@ -379,8 +383,8 @@ For the LilyGO T-Embed CC1101 board, the reference wiring is:
 - `CC1101 GDO0 -> GPIO3`
 - `CC1101 GDO2 -> GPIO38`
 - `CC1101 CS -> GPIO12`
-- `RF switch SW1 -> GPIO47` set high for 315 MHz path
-- `RF switch SW0 -> GPIO48` set low for 315 MHz path
+- `RF switch SW1 -> GPIO47`, selected by `rf_band`
+- `RF switch SW0 -> GPIO48`, selected by `rf_band`
 
 A different hardware implementation does not need these exact GPIO numbers, but
 it does need an async OOK data path with equivalent externally visible
@@ -422,7 +426,7 @@ These are the settings that matter for the compliant path:
 
 ```yaml
 proflame2_tembed:
-  tx_frequency_hz: 314973000
+  rf_band: 315
   data_rate_bps: 2400
   tx_repeat_count: 5
   tx_mode: proflame_native_groups
@@ -510,7 +514,7 @@ selected candidate inside that FIFO export.
 The default validated profile is:
 
 ```text
-rx_frequency_hz: 314973000
+rf_band: 315  # Use 433 for a 433.92 MHz remote.
 data_rate_bps: 2400
 RX FIFO Profile: rfcat_fixed_none_rfcat_wide
 Enable Capture: fifo_trailing_window
@@ -695,8 +699,8 @@ semantic data.
 A CC1101 implementation that wants to reproduce this RX path should:
 
 1. Use a CC1101-class radio as an ASK/OOK slicer and FIFO byte source.
-2. Configure approximately 315 MHz receive at 2400 bps with sync, whitening,
-   CRC, and hardware Manchester disabled.
+2. Configure the selected `rf_band` receive frequency at 2400 bps with sync,
+   whitening, CRC, and hardware Manchester disabled.
 3. Use the FIFO profile above as the starting register set.
 4. Drain `RXFIFO` continuously and quickly enough to avoid hardware FIFO
    overflow.

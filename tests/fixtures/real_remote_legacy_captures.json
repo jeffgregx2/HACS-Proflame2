@@ -1,0 +1,18 @@
+{
+  "remotes": [
+    {
+      "serial_id": "3B3F02",
+      "ecc": [5, 7, 1, 8],
+      "description": "Jeff's legacy remote; decoded native Power On/Off",
+      "source": "analysis/preserved/legacy_comparison_text/native_on_A.txt and native_off_A.txt",
+      "words": [[59, 63, 2, 1, 6, 118, 222], [59, 63, 2, 0, 6, 87, 222]]
+    },
+    {
+      "serial_id": "0D4602",
+      "ecc": [4, 2, 10, 5],
+      "description": "docgh wall-mounted SIT 0.584.043; rtl_433 Power On/Off",
+      "source": "https://github.com/jeffgregx2/HACS-Proflame2/issues/11#issuecomment-5158248072",
+      "words": [[13, 70, 2, 225, 6, 77, 99], [13, 70, 2, 224, 6, 108, 99]]
+    }
+  ]
+}

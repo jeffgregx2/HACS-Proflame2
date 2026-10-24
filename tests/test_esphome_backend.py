@@ -29,6 +29,7 @@ from custom_components.proflame2.rf.esphome.transport import MockESPHomeTranspor
 from custom_components.proflame2.rf.esphome_api import (
     ESPHOME_FIFO_MAX_SCAN_PAYLOAD_BYTES,
     ESPHomeAPIBackend,
+    _is_esphome_api_connection_error,
     _stringify_enum_values,
 )
 from custom_components.proflame2.rf.waveform import build_transmission_plan
@@ -184,6 +185,30 @@ async def test_backend_active_listening_policy_and_stop_are_explicit() -> None:
 
     assert transport.active_listening_updates == [False, True, False]
     assert transport.rx_stop_count == 1
+
+
+@pytest.mark.asyncio
+async def test_backend_defers_active_listener_policy_when_native_api_disconnects() -> None:
+    """A boot/reconnect race must not fail periodic display synchronization."""
+
+    class APIConnectionError(Exception):
+        pass
+
+    APIConnectionError.__module__ = "aioesphomeapi.core"
+
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport)
+    await backend.connect()
+
+    async def disconnected_set_active_listening(*_args, **_kwargs) -> None:
+        raise APIConnectionError("Not connected")
+
+    transport.set_active_listening = disconnected_set_active_listening  # type: ignore[method-assign]
+
+    await backend.set_active_listening_enabled(True)
+
+    assert backend.active_listening_enabled is True
+    assert _is_esphome_api_connection_error(APIConnectionError("Not connected"))
 
 
 @pytest.mark.asyncio

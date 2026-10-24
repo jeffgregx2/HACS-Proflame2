@@ -89,7 +89,6 @@ def _rtl433_override() -> CollectorPlanEntry:
             line, host_monotonic=base + 0.01 + index * 0.001, host_received_at_utc="2026-05-11T12:00:00+00:00"
         )
     collector = Rtl433Collector(source=source)
-    collector.source_mode = "subprocess"
     return CollectorPlanEntry(
         source_name="rtl433",
         mode="subprocess",
@@ -132,7 +131,7 @@ def test_stub_sources_plus_rtl433_overrides_only_rtl433(tmp_path: Path) -> None:
     assert [entry.mode for entry in plan] == ["stub", "subprocess", "stub"]
     assert summary["valid_samples_collected"] == 1
     assert session_manifest["collector_modes"]["rtl433"] == "subprocess"
-    assert sample_manifest["collector_results"]["rtl433"]["mode"] == "subprocess"
+    assert sample_manifest["collector_results"]["rtl433"]["mode"] == "injected"
     assert sample_manifest["collector_results"]["rtl433"]["artifact_dir"] == "rtl433"
 
 

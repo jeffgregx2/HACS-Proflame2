@@ -168,5 +168,5 @@ def state_from_frame(frame: ProflameFrame) -> FireplaceState:
         fan=(frame.cmd2 >> 4) & 0x07,
         front=bool(frame.cmd2 & 0x80),
     )
-    state.validate_observed(allow_thermostat=True)
+    state.validate_observed(allow_thermostat=True, allow_flame_off=frame.is_extended)
     return state
