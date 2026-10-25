@@ -13,6 +13,10 @@
 #include <limits>
 #include <string>
 
+#ifndef PROFLAME2_RADIO_TRACE
+#define PROFLAME2_RADIO_TRACE 0
+#endif
+
 #ifndef PROFLAME2_TEMBED_TX_DEBUG
 #define PROFLAME2_TEMBED_TX_DEBUG 1
 #endif
@@ -269,6 +273,11 @@ public:
   void log_rf_output_path(GPIOPin* gdo0_pin, GPIOPin* gdo2_pin, TXMode tx_mode, uint32_t payload_length,
                           uint32_t payload_bit_length, uint8_t repeat_count, uint32_t repeat_gap_us);
   void log_runtime_register_snapshot(const char* stage);
+#if PROFLAME2_RADIO_TRACE
+  void trace_radio_registers(const char* stage, const char* request_id);
+#else
+  void trace_radio_registers(const char*, const char*) {}
+#endif
 
   bool is_radio_initialized() const {
     return this->initialized_;
@@ -284,6 +293,9 @@ public:
   }
 
 protected:
+#if PROFLAME2_RADIO_TRACE
+  uint32_t radio_trace_sequence_{0};
+#endif
   bool write_register_(uint8_t address, uint8_t value);
   uint8_t read_register_(uint8_t address);
   uint8_t read_status_register_(uint8_t address);
