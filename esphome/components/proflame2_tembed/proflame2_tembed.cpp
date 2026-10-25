@@ -1,5 +1,6 @@
 #include "proflame2_tembed.h"
 #include "tx_payload_layout.h"
+#include "delayed_tx_retry.h"
 
 #include <algorithm>
 #include <cstring>
@@ -305,6 +306,8 @@ static constexpr UBaseType_t RADIO_RUNTIME_TASK_PRIORITY = tskIDLE_PRIORITY + 1;
 #endif
 
 struct RadioRuntimeCommand {
+  bool is_retransmission{false};
+  uint32_t retry_generation{0};
   RadioRuntimeCommandKind kind{RadioRuntimeCommandKind::NONE};
   char request_id[RADIO_RUNTIME_MAX_REQUEST_ID]{};
   char air_payload_hex[RADIO_RUNTIME_MAX_PAYLOAD_HEX]{};
@@ -328,6 +331,9 @@ struct RadioRuntimeCommand {
 };
 
 struct RadioRuntimeEvent {
+  bool is_retransmission{false};
+  uint32_t retry_generation{0};
+  uint32_t finished_ms{0};
   RadioRuntimeEventKind kind{RadioRuntimeEventKind::NONE};
   bool ok{false};
   char request_id[RADIO_RUNTIME_MAX_REQUEST_ID]{};
@@ -364,6 +370,7 @@ struct Proflame2TEmbedComponent::RadioRuntime {
   bool worker_started{false};
   RadioRuntimeCommand command_buffer{};
   RadioRuntimeEvent event_buffer{};
+  DelayedTxRetry<RadioRuntimeCommand> retry;
 };
 
 static void radio_runtime_task_entry_(void* context) {
@@ -384,6 +391,8 @@ static void radio_runtime_task_entry_(void* context) {
 
     auto& event = runtime->event_buffer;
     event = RadioRuntimeEvent{};
+    event.is_retransmission = command.is_retransmission;
+    event.retry_generation = command.retry_generation;
     event.kind = command.kind == RadioRuntimeCommandKind::TEST_PATTERN ? RadioRuntimeEventKind::TEST_PATTERN_COMPLETE
                                                                        : RadioRuntimeEventKind::TX_COMPLETE;
     copy_string_(event.request_id, std::string(command.request_id));
@@ -405,6 +414,7 @@ static void radio_runtime_task_entry_(void* context) {
 #if PROFLAME2_TEMBED_RADIO_RUNTIME_STUB
       event.ok = true;
       event.elapsed_ms = 0;
+      event.finished_ms = millis();
       runtime->state = RadioRuntimeState::IDLE;
 #else
       event.cc1101_partnum = runtime->owner->read_partnum();
@@ -427,6 +437,7 @@ static void radio_runtime_task_entry_(void* context) {
         event.ok = false;
         radio_error = "unsupported_command";
       }
+      event.finished_ms = millis();
       event.marcstate_after_tx = runtime->owner->read_marcstate();
 #if PROFLAME2_RADIO_TRACE
       event.trace_after_tx = runtime->owner->capture_radio_registers();
@@ -577,6 +588,7 @@ void Proflame2TEmbedComponent::loop() {
   if (this->rx_rmt_pulse_capture_enabled_) {
     this->poll_rmt_pulse_capture_();
   }
+  this->process_delayed_retransmission_();
   if (this->display_.active_operation && this->display_.active_operation_expires_millis > 0 &&
       millis() >= this->display_.active_operation_expires_millis) {
     this->display_.active_operation = false;
@@ -635,6 +647,7 @@ void Proflame2TEmbedComponent::set_active_listener_rx_path(const std::string& va
 void Proflame2TEmbedComponent::configure_active_listener(bool enabled, uint32_t serial_id, uint8_t c1, uint8_t d1,
                                                          uint8_t c2, uint8_t d2) {
   if (!enabled) {
+    this->cancel_delayed_retransmission_("listener_disabled");
     const bool changed = this->rx_active_listener_requested_ || this->rx_active_listener_filter_configured_ ||
                          this->rx_active_listener_profile_.serial_id != 0U;
     this->rx_active_listener_requested_ = false;
@@ -657,6 +670,9 @@ void Proflame2TEmbedComponent::configure_active_listener(bool enabled, uint32_t 
                        this->rx_active_listener_profile_.serial_id != (serial_id & 0xFFFFFFU) ||
                        this->rx_active_listener_profile_.c1 != c1 || this->rx_active_listener_profile_.d1 != d1 ||
                        this->rx_active_listener_profile_.c2 != c2 || this->rx_active_listener_profile_.d2 != d2;
+  if (changed) {
+    this->cancel_delayed_retransmission_("listener_profile_changed");
+  }
   this->rx_active_listener_requested_ = true;
   this->rx_active_listener_filter_configured_ = profile_valid;
   this->rx_active_listener_profile_ = Proflame2DecodeProfile{profile_valid, serial_id, c1, d1, c2, d2};
@@ -1103,6 +1119,10 @@ void Proflame2TEmbedComponent::poll_rmt_pulse_capture_() {
 }
 
 void Proflame2TEmbedComponent::publish_rmt_pulse_capture_(const RmtOokCapture& capture) {
+  // RMT semantic acceptance belongs to HA. Conservatively suppress a retry on
+  // usable RF activity rather than risk replaying stale state before HA replies.
+  // This does not promote the raw capture to semantic state.
+  this->cancel_delayed_retransmission_("rmt_activity_pending_ha_validation");
   const uint32_t export_id = ++this->rx_rmt_pulse_capture_sequence_;
   const uint16_t byte_count = static_cast<uint16_t>((capture.pcm_bit_count + 7U) / 8U);
   std::string payload_hex;
@@ -1340,6 +1360,7 @@ bool Proflame2TEmbedComponent::dump_rx_fifo_rolling_capture_(const char* reason)
                                       complete_ms, post_last_byte_quiet_ms);
       return true;
     case ActiveListenerOutcomeType::DUPLICATE:
+      this->cancel_delayed_retransmission_("accepted_native_repeat");
       ESP_LOGD(TAG,
                "RX active listener duplicate suppressed serial=%06" PRIx32
                " cmd1=%02x cmd2=%02x err1=%02x err2=%02x age_ms=%" PRIu32,
@@ -1590,6 +1611,7 @@ void Proflame2TEmbedComponent::record_rx_idle_noise_(const char* reason) {
 
 void Proflame2TEmbedComponent::record_rx_accepted_packet_(const Proflame2DecodedPacket& decoded, uint32_t complete_ms,
                                                           uint16_t selected_count) {
+  this->cancel_delayed_retransmission_("accepted_native_packet");
   this->rx_accepted_packet_count_++;
   ESP_LOGD(TAG,
            "RX active listener accepted count=%" PRIu32 " bytes=%u serial=%06" PRIx32
@@ -1857,6 +1879,9 @@ void Proflame2TEmbedComponent::set_wifi_connected(bool value) {
 }
 
 void Proflame2TEmbedComponent::set_api_connected(bool value) {
+  if (!value) {
+    this->cancel_delayed_retransmission_("ha_disconnected");
+  }
   if (this->display_.api_connected == value) {
     return;
   }
@@ -2244,6 +2269,9 @@ std::string Proflame2TEmbedComponent::get_display_right_panel_text() const {
 
 void Proflame2TEmbedComponent::set_learn_mode(bool active, const std::string& step_title,
                                               const std::string& instruction, const std::string& status) {
+  if (active) {
+    this->cancel_delayed_retransmission_("learning_started");
+  }
   const bool changed = this->display_.learn_active != active ||
                        (!step_title.empty() && this->display_.learn_step_title != step_title) ||
                        (!instruction.empty() && this->display_.learn_instruction != instruction) ||
@@ -2374,6 +2402,20 @@ void Proflame2TEmbedComponent::display_state_update(int intended_power, int inte
                                                     int intended_front, int intended_aux,
                                                     const std::string& intended_action_label,
                                                     const std::string& fireplace_name) {
+  const bool state_changed =
+      (intended_power >= 0 &&
+       (!this->display_.fireplace_power_known || (intended_power != 0) != this->display_.fireplace_power)) ||
+      (intended_flame >= 0 && intended_flame != this->display_.fireplace_flame) ||
+      (intended_fan >= 0 && intended_fan != this->display_.fireplace_fan) ||
+      (intended_light >= 0 && intended_light != this->display_.fireplace_light) ||
+      (intended_pilot >= 0 && intended_pilot != this->display_.fireplace_pilot) ||
+      (intended_front >= 0 && intended_front != this->display_.fireplace_front) ||
+      (intended_aux >= 0 && intended_aux != this->display_.fireplace_aux) ||
+      (intended_thermostat >= 0 && (!this->display_.fireplace_thermostat_known ||
+                                    (intended_thermostat != 0) != this->display_.fireplace_thermostat));
+  if (state_changed) {
+    this->cancel_delayed_retransmission_("ha_state_changed");
+  }
   if (this->display_.display_debug_mode) {
     ESP_LOGD(TAG,
              "Display state update received fireplace_name=%s action_label=%s power=%d flame=%d fan=%d light=%d "
@@ -2673,22 +2715,11 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
     this->publish_telemetry_();
     return false;
   }
-  if (this->rx_rmt_pulse_capture_enabled_) {
-    this->rx_rmt_pulse_paused_for_tx_ = true;
-    this->increment_rx_suppressed_for_tx_();
-    ESP_LOGI(TAG, "TX request pauses RMT pulse capture");
-    this->set_rmt_pulse_capture_enabled_(false);
-  }
-  if (this->rx_fifo_capture_enabled_) {
-    this->rx_fifo_paused_for_tx_ = true;
-    this->rx_fifo_capture_configured_ = false;
-    this->increment_rx_suppressed_for_tx_();
-    this->strobe_(CC1101_SIDLE);
-    this->strobe_(CC1101_SFRX);
-  }
+  this->pause_rx_for_tx_();
 
   RadioRuntimeCommand command;
   command.kind = RadioRuntimeCommandKind::TX;
+  command.retry_generation = this->radio_runtime_->retry.next_generation();
   copy_string_(command.request_id, request_id);
   copy_string_(command.air_payload_hex, air_payload_hex);
   copy_string_(command.status_text, status_text);
@@ -2732,6 +2763,10 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
     this->publish_telemetry_();
     return false;
   }
+  if (this->radio_runtime_->retry.pending()) {
+    ESP_LOGI(TAG, "TX retransmission cancelled reason=new_tx_queued");
+  }
+  this->radio_runtime_->retry.accepted(command);
   this->tx_in_progress_ = true;
   this->radio_runtime_state_ = RadioRuntimeState::TX_ACTIVE;
   this->refresh_status_text_();
@@ -2790,6 +2825,7 @@ bool Proflame2TEmbedComponent::enqueue_test_pattern_(const std::string& request_
   this->update_display_runtime_state_("Sending...", !status_text.empty() ? status_text : std::string("Test pattern"),
                                       0U);
   this->mark_display_activity_(this->display_wake_on_activity_);
+  this->pause_rx_for_tx_();
   if (xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE) {
     this->display_.active_operation = false;
     this->display_.active_operation_expires_millis = 0U;
@@ -2799,9 +2835,11 @@ bool Proflame2TEmbedComponent::enqueue_test_pattern_(const std::string& request_
     this->last_error_ = "tx_busy";
     this->last_tx_result_ = "error:tx_busy";
     ESP_LOGW(TAG, "Test pattern rejected request_id=%s reason=tx_busy", request_id.c_str());
+    this->restore_rx_after_tx_if_needed_();
     this->publish_telemetry_();
     return false;
   }
+  this->cancel_delayed_retransmission_("test_pattern_queued");
   this->tx_in_progress_ = true;
   this->radio_runtime_state_ = RadioRuntimeState::TX_ACTIVE;
   this->refresh_status_text_();
@@ -2811,6 +2849,71 @@ bool Proflame2TEmbedComponent::enqueue_test_pattern_(const std::string& request_
            PROFLAME_BUILD_MARKER, request_id.c_str(), test_pattern_mode_to_string_(mode), duration_ms, period_us);
   this->publish_telemetry_();
   return true;
+}
+
+void Proflame2TEmbedComponent::set_delayed_retransmission_enabled(bool value) {
+  if (value && !this->ensure_radio_runtime_(RadioRuntimeStartReason::DIAGNOSTIC)) {
+    ESP_LOGW(TAG, "Cannot enable delayed retransmission: radio runtime unavailable");
+    return;
+  }
+  if (this->radio_runtime_ != nullptr) {
+    this->radio_runtime_->retry.set_enabled(value);
+  }
+  ESP_LOGI(TAG, "TX delayed retransmission %s delay_ms=2000", value ? "ON" : "OFF");
+}
+
+bool Proflame2TEmbedComponent::is_delayed_retransmission_enabled() const {
+  return this->radio_runtime_ != nullptr && this->radio_runtime_->retry.enabled();
+}
+
+void Proflame2TEmbedComponent::cancel_delayed_retransmission_(const char* reason) {
+  if (this->radio_runtime_ == nullptr) {
+    return;
+  }
+  if (this->radio_runtime_->retry.pending()) {
+    ESP_LOGI(TAG, "TX retransmission cancelled reason=%s", reason);
+  }
+  this->radio_runtime_->retry.cancel();
+}
+
+void Proflame2TEmbedComponent::pause_rx_for_tx_() {
+  if (this->rx_rmt_pulse_capture_enabled_) {
+    this->rx_rmt_pulse_paused_for_tx_ = true;
+    this->increment_rx_suppressed_for_tx_();
+    this->set_rmt_pulse_capture_enabled_(false);
+  }
+  if (this->rx_fifo_capture_enabled_) {
+    this->rx_fifo_paused_for_tx_ = true;
+    this->rx_fifo_capture_configured_ = false;
+    this->increment_rx_suppressed_for_tx_();
+    this->strobe_(CC1101_SIDLE);
+    this->strobe_(CC1101_SFRX);
+  }
+}
+
+void Proflame2TEmbedComponent::process_delayed_retransmission_() {
+  if (this->radio_runtime_ == nullptr || this->tx_in_progress_) {
+    return;
+  }
+  if (!this->display_.api_connected || this->display_.learn_active) {
+    this->cancel_delayed_retransmission_("ha_disconnected_or_learning");
+    return;
+  }
+  RadioRuntimeCommand command;
+  if (!this->radio_runtime_->retry.take_due(millis(), command)) {
+    return;
+  }
+  command.is_retransmission = true;
+  this->pause_rx_for_tx_();
+  if (xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE) {
+    ESP_LOGW(TAG, "TX retransmission dropped original_request_id=%s reason=queue_full", command.request_id);
+    this->restore_rx_after_tx_if_needed_();
+    return;
+  }
+  this->tx_in_progress_ = true;
+  this->radio_runtime_state_ = RadioRuntimeState::TX_ACTIVE;
+  ESP_LOGI(TAG, "TX retransmission queued original_request_id=%s repeat_count=%u payload_bits=%" PRIu32,
+           command.request_id, static_cast<unsigned>(command.repeat_count), command.payload_bit_length);
 }
 
 void Proflame2TEmbedComponent::log_rf_path_for_tx_(uint32_t payload_length, uint32_t effective_payload_bit_length,
@@ -2907,11 +3010,6 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
   }
   this->tx_in_progress_ = false;
   this->radio_runtime_state_ = result.ok ? RadioRuntimeState::IDLE : RadioRuntimeState::ERROR;
-  this->last_tx_elapsed_ms_ = result.elapsed_ms;
-  this->cc1101_partnum_ = format_hex_byte_(result.cc1101_partnum);
-  this->cc1101_version_ = format_hex_byte_(result.cc1101_version);
-  this->last_marcstate_before_tx_ = format_hex_byte_(result.marcstate_before_tx);
-  this->last_marcstate_after_tx_ = format_hex_byte_(result.marcstate_after_tx);
   // The radio worker has completed. Restore the selected listener before any
   // completion UI/logging exposes the controller as ready for remote input.
   this->restore_rx_after_tx_if_needed_();
@@ -2922,6 +3020,25 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
   this->log_radio_registers(result.trace_before_tx, "tx_prepared", result.request_id);
   this->log_radio_registers(result.trace_after_tx, "tx_complete", result.request_id);
 #endif
+
+  if (result.is_retransmission) {
+    // Never replace the original request's HA confirmation telemetry or apply
+    // an old display intent, even if this best-effort extra burst fails.
+    ESP_LOGI(TAG, "TX retransmission result status=%s original_request_id=%s elapsed_ms=%" PRIu32 " error=%s",
+             result.ok ? "ok" : "failed", result.request_id, result.elapsed_ms, result.radio_error);
+    this->refresh_status_text_();
+    return;
+  }
+  if (this->radio_runtime_->retry.complete(result.retry_generation,
+                                           result.ok && result.kind == RadioRuntimeEventKind::TX_COMPLETE, false,
+                                           result.finished_ms)) {
+    ESP_LOGI(TAG, "TX retransmission scheduled original_request_id=%s delay_ms=2000", result.request_id);
+  }
+  this->last_tx_elapsed_ms_ = result.elapsed_ms;
+  this->cc1101_partnum_ = format_hex_byte_(result.cc1101_partnum);
+  this->cc1101_version_ = format_hex_byte_(result.cc1101_version);
+  this->last_marcstate_before_tx_ = format_hex_byte_(result.marcstate_before_tx);
+  this->last_marcstate_after_tx_ = format_hex_byte_(result.marcstate_after_tx);
 
   if (!result.ok) {
     this->tx_failure_count_++;
@@ -3004,8 +3121,11 @@ bool Proflame2TEmbedComponent::initialize_radio_(std::string* error) {
     this->cc1101_partnum_ = format_hex_byte_(this->read_partnum());
     this->cc1101_version_ = format_hex_byte_(this->read_version());
 #if PROFLAME2_RADIO_TRACE
-    ESP_LOGI(TAG, "RFTRACE diagnostic build base_version=%s schema=3 worker_logs=deferred runtime_controls=YES",
-             this->firmware_version_.c_str());
+    ESP_LOGI(TAG,
+             "RFTRACE diagnostic build base_version=%s schema=4 worker_logs=deferred readiness_timeout_us=%" PRIu32
+             " spi_ready_check=%s",
+             this->firmware_version_.c_str(), this->get_radio_ready_timeout_us(),
+             this->spi_miso_pin_ != nullptr ? "YES" : "NO");
 #endif
     this->trace_radio_registers("radio_initialized", "-");
     this->publish_telemetry_();

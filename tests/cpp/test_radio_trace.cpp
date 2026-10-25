@@ -24,6 +24,14 @@ int main() {
   radio.trace_radio_registers("radio_initialized", "-");
   assert(spi::commands.empty() && trace_logs.empty());
   radio.initialized(true);
+#if PROFLAME2_RADIO_TRACE
+  assert(!radio.is_radio_trace_enabled());
+  assert(radio.get_pre_tx_settle_delay_us() == 20000);
+  radio.trace_radio_registers("initialized-defaults", "-");
+  assert(spi::commands.empty() && trace_logs.empty());
+  radio.set_radio_trace_enabled(true);
+  trace_logs.clear();
+#endif
   for (size_t i = 0; i < spi::registers.size(); i++) {
     spi::registers[i] = static_cast<uint8_t>(i);
   }
@@ -89,7 +97,7 @@ int main() {
   assert(trace_logs.empty() && spi::commands.empty());
 
   assert(radio.is_radio_trace_enabled());
-  assert(radio.get_pre_tx_settle_delay_us() == 0);
+  assert(radio.get_pre_tx_settle_delay_us() == 20000);
   radio.set_radio_trace_enabled(false);
   trace_logs.clear(); // The one-time setting-change acknowledgment is expected.
   const auto disabled = radio.capture_radio_registers();

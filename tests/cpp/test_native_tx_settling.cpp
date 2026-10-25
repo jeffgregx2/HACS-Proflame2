@@ -24,7 +24,7 @@ struct RunResult {
 };
 
 static RunResult run(const std::vector<uint8_t>& payload, uint32_t bits, uint32_t delay_us,
-                     NativeGroupRepeatBoundaryMode boundary) {
+                     NativeGroupRepeatBoundaryMode boundary, uint32_t startup_us = 750, bool never_ready = false) {
   test_clock_us = 0;
   test_pin_edges.clear();
   spi::commands.clear();
@@ -32,6 +32,8 @@ static RunResult run(const std::vector<uint8_t>& payload, uint32_t bits, uint32_
   spi::allow_radio_operations = true;
   spi::stx_count = 0;
   spi::stx_times.clear();
+  spi::tx_startup_delay_us = startup_us;
+  spi::tx_never_ready = never_ready;
   trace_logs.clear();
   InternalGPIOPin pin;
   BenchRadio radio;
@@ -47,11 +49,16 @@ static RunResult run(const std::vector<uint8_t>& payload, uint32_t bits, uint32_
                                            timing, error, radio.get_pre_tx_settle_delay_us());
   assert(ok && error.empty());
   assert(!test_pin_edges.empty() && test_pin_edges.front().second);
-  assert(test_pin_edges.front().first >= spi::stx_times.front() + 750 + delay_us);
+  assert(test_pin_edges.front().first >= spi::stx_times.front() + (never_ready ? 10000 : startup_us) + delay_us);
   assert(spi::stx_count == (boundary == NativeGroupRepeatBoundaryMode::REENTER_TX ? 5U : 1U));
   assert(timing.payload_bits == bits);
   assert(timing.inter_repeat_gap_samples == 4);
-  assert(trace_logs.empty()); // No newly added logging inside the TX loop.
+  if (never_ready) {
+    assert(!trace_logs.empty());
+    assert(trace_logs.front().find("TX readiness timeout after 10000 us") != std::string::npos);
+  } else {
+    assert(trace_logs.empty()); // Normal readiness adds no logging in the TX loop.
+  }
   return {test_pin_edges, timing};
 }
 
@@ -83,6 +90,13 @@ int main(int argc, char** argv) {
     }
     const auto reset = run(payload, bits, 0, boundary);
     assert(reset.edges == baseline.edges);
+    // Startup beyond the old 1.5 ms timeout now waits for confirmed TX.
+    run(payload, bits, 0, boundary, 3000);
+    run(payload, bits, 20000, boundary, 9000);
+    // Never-ready still emits the complete legacy/extended waveform after a
+    // bounded 10 ms wait, with an explicit warning instead of silent success.
+    const auto fallback = run(payload, bits, 20000, boundary, 0, true);
+    assert(fallback.edges.size() == baseline.edges.size());
   }
   // A nonzero setting must not be silently ignored by experimental TX modes.
   test_pin_edges.clear();

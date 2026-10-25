@@ -7,10 +7,14 @@ Compare CC1101 hardware readbacks from two isolated diagnostic branches:
 - `issue-26-alpha1-radio-trace`, based on `v0.7.0-alpha1`.
 - `issue-26-beta1-radio-trace`, based on `v0.7.0-beta1`.
 
-The initial branches used identical instrumentation. Beta1 now uses schema 3
-with deferred worker snapshots and runtime experiment controls; the alpha1 diagnostic branch remains on
-schema 1. Neither modifies the RF register values, packet encoder,
-individual-symbol timings, repeat gaps, calibration policy, or TX/RX state commands.
+The initial branches used identical instrumentation. Beta1 now uses schema 4
+with deferred worker snapshots, runtime experiment controls, bounded radio
+readiness checks, and an optional delayed retransmission. The alpha1 diagnostic
+branch remains on schema 1. Beta1 preserves the RF register values, packet
+encoder, individual-symbol timings, and normal repeat-gap targets. It now checks
+SO before SPI headers, confirms IDLE after SIDLE, and waits longer for confirmed
+TX. Timeout/recovery paths can extend handoff and repeat-gap times; these builds
+are no longer an instrumentation-only comparison.
 The diagnostic branch base package enables `PROFLAME2_RADIO_TRACE=1`
 automatically. These are investigation builds, not replacement release tags.
 
@@ -31,29 +35,89 @@ variable. Avoid additional debug packages or settings that differ between builds
 
 INFO logging for `proflame2_cc1101` is sufficient; no manual capture mode is
 required. The ordinary startup version still identifies the original release,
-but `RFTRACE diagnostic build base_version=... schema=3 worker_logs=deferred runtime_controls=YES`
+but `RFTRACE diagnostic build base_version=... schema=4 worker_logs=deferred readiness_timeout_us=10000 spi_ready_check=YES`
 identifies the current beta1 instrumentation. Each snapshot also ends with
 `RFTRACE seq=N end=1`.
 New traces require rebuilding and flashing, not just changing the HA integration.
 
 ## Runtime Experiment Controls
 
-Both controls are in the ESPHome device's Configuration section in HA. They
+The controls are in the ESPHome device's Configuration section in HA. They
 require this diagnostic firmware, not the optional debug YAML package.
 
-- **Radio Register Trace Logging** defaults to ON. OFF skips both snapshot
+- **Radio Register Trace Logging** defaults to OFF. OFF skips both snapshot
   register reads and RFTRACE output, including previously captured records
   awaiting output. Normal radio-operation SPI traffic, TX results, and existing
   receive logging are not disabled. A single confirmation logs each setting
   change. Re-enabling resumes tracing without rebooting.
-- **Pre-TX Settling Delay** defaults to 0 ms (disabled), with a range of
+- **Pre-TX Settling Delay** defaults to 20 ms, with a range of
   0-100 ms in 0.1 ms steps. The setting is copied into each queued TX request,
   so a later edit does not alter an in-flight command. TX result logs include
   the applied `pre_tx_settle_us` value even when tracing is OFF.
 
-Neither setting persists over a reboot: each boot restores trace ON / delay 0.
+Neither setting persists over a reboot: each boot restores trace OFF / delay 20 ms.
 Change controls only while the radio is idle so a capture is not intentionally
 split between tracing ON and OFF. The trace switch is atomic across tasks.
+
+- **Delayed Retransmission** defaults to OFF and resets OFF at reboot. When
+  enabled, a successful normal command can send one extra full burst two seconds
+  after the worker finishes the original burst, subject to main-loop scheduling.
+  This uses the exact cached payload, frame count, timing profile, and settling
+  delay from the original command. It does not alter the five repetitions
+  already inside that burst, and the extra burst cannot schedule another retry.
+- RX remains active during the two-second wait. Only the actual retry pauses RX,
+  using the same handoff as a normal command and restoring it at completion.
+- Any successfully queued newer normal command replaces the pending retry and
+  starts a fresh window when that new command finishes. Rejected/unqueued
+  commands do not replace it. A queued test pattern cancels it without arming
+  another retry. Cancellation invalidates an in-flight original completion too.
+- Accepted FIFO packets (including deduplicated repeats), changed HA display
+  state, learning, listener disable/profile changes, and HA disconnect cancel it.
+  RMT captures are validated by HA, so **any usable RMT capture conservatively
+  cancels it before HA validation**. This favors avoiding stale commands over
+  retrying through RF activity; a noise capture can suppress the optional retry.
+  This policy does not make raw captures semantic evidence.
+- Retry scheduling, cancellation, queue failure, and result have separate INFO
+  or warning messages. The extra burst never overwrites original-request HA TX
+  confirmation telemetry, reapplies an old display intent, or increments normal
+  request success/failure counters. A failed retry is logged, not retried again.
+
+## Radio Readiness And SPI Audit
+
+ESPHome 2026.8.2 `SPIDelegateHw::begin_transaction()` acquires the bus and asserts
+CS through `SPIDelegate::begin_transaction()`. It does not implement the CC1101
+SO/CHIP_RDYn handshake. The component now borrows the existing SPI bus MISO pin
+from code generation (no second GPIO setup or changed wiring) and checks it
+after chip selection, before every register/status/burst/strobe header. The bus
+remains acquired throughout. A timeout logs a warning and proceeds best-effort;
+a continuously stuck SO reports once until a successful handshake rearms the
+warning. Required readiness reads remain active when diagnostic tracing is OFF.
+
+All SIDLE strobes now wait for two consecutive `MARCSTATE=IDLE` reads before
+callers flush FIFOs or update configuration. A timeout logs and reissues SIDLE
+once, then performs another bounded wait. If IDLE is still unconfirmed, it logs
+the last state and proceeds as explicitly requested for this experiment. No
+automatic reset or speculative register changes are performed. Applying the TX
+configuration also explicitly enters IDLE first.
+
+After STX, the TX path requires two consecutive TX-state reads. On timeout it
+logs the last state and proceeds best-effort, preserving the fallback policy.
+This is **not a guarantee that an unready radio transmits correctly**; software
+`status=ok` still means the emission routine completed, not fireplace acceptance.
+
+The YAML substitution `proflame2_radio_ready_timeout_us: "10000"` configures
+`radio_ready_timeout_us` for each SPI, IDLE, and TX readiness wait. Supported
+values are 100-100000 microseconds. The default is 10 ms per attempt; IDLE can
+use two attempts, and a stalled SPI handshake can extend a state-poll attempt.
+This timeout is separate from the runtime **Pre-TX Settling Delay** setting.
+TI Table 34 gives typical calibrated IDLE-to-TX times around 799 us, not a
+universal worst-case deadline. Ten milliseconds is a conservative diagnostic
+timeout, not a datasheet-mandated constant.
+
+References: TI CC1101 datasheet Sections 10, 19, and Table 42:
+https://www.ti.com/lit/ds/symlink/cc1101.pdf
+
+## Settling Delay Experiment
 
 The delay adds the configured time to the first RF-edge deadline after the
 existing TX-ready check and pre-burst/pre-frame guard calculations.
@@ -64,8 +128,8 @@ continuous-TX and reenter-TX repeat modes. Other experimental TX modes reject
 a nonzero setting instead of silently ignoring it. Diagnostic test patterns
 are outside this command-path experiment.
 
-Use **20 ms** for the first deliberately generous test, not as a production
-default or guarantee of readiness. TI's CC1101 datasheet Table 34 gives typical
+The diagnostic default of **20 ms** is a deliberately generous test setting,
+not a production recommendation or guarantee of readiness. TI's CC1101 datasheet Table 34 gives typical
 IDLE-to-TX times of about 75 us without calibration and 799 us with calibration
 (26 MHz crystal, no PA ramping). The extra 20 ms exceeds those typical times
 substantially but cannot repair a rejected strobe or invalid state.
@@ -74,7 +138,8 @@ Source: https://www.ti.com/lit/ds/symlink/cc1101.pdf
 ### Controlled Test
 
 1. Keep the same firmware, controller placement, SDR placement/gain, HA
-   integration, and commanded light/fan sequence throughout.
+   integration, and commanded light/fan sequence throughout. Leave Delayed
+   Retransmission OFF while comparing readiness/settling behavior.
 2. Reproduce rejection with trace ON / delay 0. Save complete logs and raw I/Q.
 3. Change only the delay to 20 ms. Repeat the same sequence and record acceptance
    counts and request IDs, not just whether one command worked.
@@ -85,9 +150,16 @@ Source: https://www.ti.com/lit/ds/symlink/cc1101.pdf
 6. Separately repeat the 0/20 ms comparison with trace OFF to measure the effect
    of snapshot reads and logging. Standard TX logs still identify the delay.
 
-No commands are generated automatically. Rebuilding adds code and can change
+No extra commands are generated unless Delayed Retransmission is enabled.
+Rebuilding adds code and can change
 binary layout even with default settings; reproduce the baseline on this build
 before treating the experiment as causal.
+
+Separately enable Delayed Retransmission, verify an original burst plus one
+burst about two seconds after completion, then issue a new command during that
+window and verify only the newer command gets its extra burst. Repeat with a
+native-remote change and verify cancellation instead of replaying old state.
+Keep SDR capture and INFO logs running to correlate the separate retry messages.
 
 ### Root-Cause Follow-Up
 
@@ -102,6 +174,25 @@ before treating the experiment as causal.
 - Keep the delay experimental until its effect is reproducible. The desired
   final solution is an understood readiness/state transition, not an arbitrary
   permanent pause.
+
+## Validation Scope
+
+Host tests execute the real SPI/register driver and real legacy/extended TX
+scheduler against a deterministic fake radio. They cover slow IDLE, SIDLE
+recovery, permanent IDLE/SO/TX failures with bounded logged fallbacks, SPI
+handshake ordering on all access forms, TX startup beyond the previous 1.5 ms
+limit, and unchanged normal symbol scheduling. The main-task retry policy is
+compiled and executed for both frame lengths, queue-generation supersession,
+in-flight cancellation, toggle changes, failure, one-shot consumption, owned
+payload copies, and millisecond-clock rollover. Source-contract tests guard
+main-loop RX ordering and original HA telemetry isolation.
+`make firmware-unit-test` includes these checks in the existing ESPHome CI job.
+It enforces 100% host-side line coverage of `delayed_tx_retry.h`; this does not
+claim full component, FreeRTOS scheduling, or hardware-driver coverage.
+
+These are software checks, not proof of analog radio readiness or fireplace
+acceptance. ESPHome source generation checks configuration/code generation;
+the Builder compile and controlled hardware comparison are still required.
 
 ## Snapshots
 

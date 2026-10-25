@@ -269,6 +269,17 @@ public:
                                   uint8_t& repeat_index, uint8_t& bit_index) const;
   /// Put the CC1101 into IDLE without changing higher-level component state.
   void set_idle();
+  /// Bounded best-effort readiness waits. Configure before starting the worker.
+  void set_radio_ready_timeout_us(uint32_t value) {
+    this->radio_ready_timeout_us_ = value;
+  }
+  uint32_t get_radio_ready_timeout_us() const {
+    return this->radio_ready_timeout_us_;
+  }
+  /// Borrow the SPI bus MISO pin; never reconfigure it as a GPIO.
+  void set_spi_miso_pin(GPIOPin* pin) {
+    this->spi_miso_pin_ = pin;
+  }
   /// Capture a bounded raw FIFO byte window for diagnostics/manual probing.
   bool rx_fifo_probe(uint32_t frequency_hz, uint32_t data_rate_bps, uint32_t duration_ms, RXFifoProbeResult& result,
                      std::string& error);
@@ -304,10 +315,16 @@ public:
   }
 
 protected:
+  void begin_ready_transaction_();
+  bool wait_for_marcstate_(uint8_t expected, uint8_t& last_state);
+  uint8_t strobe_unchecked_(uint8_t command);
+  GPIOPin* spi_miso_pin_{nullptr};
+  uint32_t radio_ready_timeout_us_{10000};
+  bool spi_ready_warning_logged_{false};
 #if PROFLAME2_RADIO_TRACE
   uint32_t radio_trace_sequence_{0};
-  std::atomic<bool> radio_trace_enabled_{true};
-  std::atomic<uint32_t> pre_tx_settle_delay_us_{0};
+  std::atomic<bool> radio_trace_enabled_{false};
+  std::atomic<uint32_t> pre_tx_settle_delay_us_{20000};
 #endif
   bool write_register_(uint8_t address, uint8_t value);
   uint8_t read_register_(uint8_t address);

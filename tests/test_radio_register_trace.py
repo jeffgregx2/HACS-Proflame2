@@ -1,6 +1,7 @@
 """Compile and execute the real register-trace implementation with a mock SPI bus."""
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -9,6 +10,98 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = ROOT / "esphome/components/proflame2_tembed"
+
+
+@pytest.mark.parametrize("test_name", ["radio_readiness", "delayed_tx_retry"])
+def test_radio_readiness_and_retry_policy(tmp_path: Path, test_name: str) -> None:
+    compiler = shutil.which("g++")
+    assert compiler
+    executable = tmp_path / test_name
+    sources = [str(ROOT / f"tests/cpp/test_{test_name}.cpp")]
+    if test_name == "radio_readiness":
+        sources.append(str(COMPONENT / "radio_cc1101.cpp"))
+    result = subprocess.run(
+        [
+            compiler,
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "--coverage",
+            f"-I{ROOT / 'tests/cpp/radio_trace_stubs'}",
+            f"-I{COMPONENT}",
+            *sources,
+            "-o",
+            str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    if test_name == "delayed_tx_retry":
+        gcov = shutil.which("gcov")
+        assert gcov, "gcov is required for retry-policy coverage"
+        result = subprocess.run(
+            [
+                gcov,
+                "-b",
+                "-o",
+                str(tmp_path / "delayed_tx_retry-test_delayed_tx_retry.gcno"),
+                str(ROOT / "tests/cpp/test_delayed_tx_retry.cpp"),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        report = re.search(
+            rf"File '{re.escape(str(COMPONENT / 'delayed_tx_retry.h'))}'\nLines executed:([0-9.]+)%",
+            result.stdout,
+        )
+        assert report and float(report[1]) == 100.0, result.stdout
+
+
+def test_retry_runtime_wiring_keeps_rx_and_ha_authority() -> None:
+    component = (COMPONENT / "proflame2_tembed.cpp").read_text()
+    enqueue = component.split("bool Proflame2TEmbedComponent::enqueue_tx_(", 1)[1].split(
+        "bool Proflame2TEmbedComponent::enqueue_test_pattern_", 1
+    )[0]
+    assert enqueue.index("command.retry_generation =") < enqueue.index("xQueueSend(")
+    assert enqueue.index("xQueueSend(") < enqueue.index("retry.accepted(command)")
+    assert (
+        "retry.accepted(command)"
+        not in component.split("process_delayed_retransmission_() {", 1)[1].split(
+            "void Proflame2TEmbedComponent::log_rf_path_for_tx_", 1
+        )[0]
+    )
+    loop = component.split("void Proflame2TEmbedComponent::loop()", 1)[1].split("void Proflame2TEmbedComponent::", 1)[0]
+    assert loop.index("poll_rmt_pulse_capture_()") < loop.index("process_delayed_retransmission_()")
+    completion = component.split("RadioRuntimeEvent result;", 1)[1]
+    retry = completion.split("if (result.is_retransmission)", 1)[1].split("retry.complete(", 1)[0]
+    assert "return;" in retry
+    assert "apply_pending_display_intent_" not in retry
+    assert "last_tx_result_ =" not in retry
+    assert "tx_success_count_++" not in retry
+    for reason in (
+        "accepted_native_packet",
+        "rmt_activity_pending_ha_validation",
+        "ha_state_changed",
+        "listener_disabled",
+        "listener_profile_changed",
+        "ha_disconnected",
+        "test_pattern_queued",
+    ):
+        assert f'cancel_delayed_retransmission_("{reason}")' in component
+    worker = component.split("static void radio_runtime_task_entry_", 1)[1].split(
+        "void Proflame2TEmbedComponent::set_firmware_version", 1
+    )[0]
+    assert worker.index("event.finished_ms = millis()") < worker.index("event.marcstate_after_tx =")
+    package = (ROOT / "esphome/packages/proflame2_tembed_base.yaml").read_text()
+    switch = package.split("id: proflame2_delayed_retransmission", 1)[1].split("  - platform:", 1)[0]
+    assert "restore_mode: ALWAYS_OFF" in switch
+    assert 'proflame2_radio_ready_timeout_us: "10000"' in package
 
 
 @pytest.mark.parametrize("enabled", [0, 1])
@@ -123,8 +216,8 @@ def test_native_tx_settling_legacy_and_extended_real_scheduler(tmp_path: Path) -
 
 def test_runtime_controls_defaults_and_queued_delay_are_explicit() -> None:
     header = (COMPONENT / "radio_cc1101.h").read_text()
-    assert "std::atomic<bool> radio_trace_enabled_{true}" in header
-    assert "std::atomic<uint32_t> pre_tx_settle_delay_us_{0}" in header
+    assert "std::atomic<bool> radio_trace_enabled_{false}" in header
+    assert "std::atomic<uint32_t> pre_tx_settle_delay_us_{20000}" in header
     component = (COMPONENT / "proflame2_tembed.cpp").read_text()
     assert "command.pre_tx_settle_delay_us = this->get_pre_tx_settle_delay_us();" in component
     assert "event.pre_tx_settle_delay_us = command.pre_tx_settle_delay_us;" in component
@@ -139,6 +232,6 @@ def test_runtime_controls_defaults_and_queued_delay_are_explicit() -> None:
     delay = package.split("id: proflame2_pre_tx_settle_delay", 1)[1].split("  - platform:", 1)[0]
     assert "max_value: 100" in delay and "step: 0.1" in delay and "unit_of_measurement: ms" in delay
     toggle = package.split("id: proflame2_radio_trace_logging", 1)[1].split("  - platform:", 1)[0]
-    assert "restore_mode: ALWAYS_ON" in toggle
+    assert "restore_mode: ALWAYS_OFF" in toggle
     assert "set_radio_trace_enabled(false)" in toggle
     assert "set_radio_trace_enabled(true)" in toggle

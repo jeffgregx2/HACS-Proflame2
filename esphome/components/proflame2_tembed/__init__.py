@@ -7,7 +7,8 @@ import inspect
 import esphome.automation as automation
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.const import CONF_CS_PIN, CONF_DATA_RATE, CONF_ID, CONF_SPI_ID
+from esphome.const import CONF_CS_PIN, CONF_DATA_RATE, CONF_ID, CONF_MISO_PIN, CONF_SPI, CONF_SPI_ID
+from esphome.core import CORE
 
 from esphome import pins
 from esphome.components import i2c, sensor, spi, text_sensor
@@ -85,6 +86,7 @@ CONF_INTENDED_ACTION_LABEL = "intended_action_label"
 CONF_FIREPLACE_NAME = "fireplace_name"
 CONF_FIRMWARE_VERSION = "firmware_version"
 CONF_FIRMWARE_VERSION_TEXT = "firmware_version_text"
+CONF_RADIO_READY_TIMEOUT_US = "radio_ready_timeout_us"
 
 proflame2_tembed_ns = cg.esphome_ns.namespace("proflame2_tembed")
 TXMode = proflame2_tembed_ns.enum("TXMode", is_class=True)
@@ -125,6 +127,7 @@ CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(Proflame2TEmbedComponent),
         cv.GenerateID(CONF_SPI_ID): cv.use_id(spi.SPIComponent),
+        cv.Optional(CONF_RADIO_READY_TIMEOUT_US, default=10000): cv.int_range(min=100, max=100000),
         cv.Optional(CONF_RF_BAND, default="315"): cv.one_of("315", "433"),
         cv.Optional(CONF_DATA_RATE_BPS, default=2_400): cv.positive_int,
         cv.Optional(CONF_TX_REPEAT_COUNT, default=5): cv.int_range(min=1, max=20),
@@ -246,6 +249,12 @@ async def to_code(config):
             CONF_DATA_RATE: 4_000_000,
         },
     )
+
+    # Reuse the bus-owned pin: a second GPIO setup could disrupt hardware SPI.
+    bus = next(bus for bus in CORE.config[CONF_SPI] if bus[CONF_ID] == config[CONF_SPI_ID])
+    miso = await cg.get_variable(bus[CONF_MISO_PIN][CONF_ID])
+    cg.add(var.set_spi_miso_pin(miso))
+    cg.add(var.set_radio_ready_timeout_us(config[CONF_RADIO_READY_TIMEOUT_US]))
 
     cg.add(var.set_rf_band(RFBand.BAND_433 if config[CONF_RF_BAND] == "433" else RFBand.BAND_315))
     cg.add(var.set_data_rate_bps(config[CONF_DATA_RATE_BPS]))

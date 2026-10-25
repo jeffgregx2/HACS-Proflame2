@@ -103,6 +103,9 @@ public:
   void setup() override;
   void loop() override;
   void dump_config() override;
+  /// One extra full burst after two seconds of quiet; defaults OFF at boot.
+  void set_delayed_retransmission_enabled(bool value);
+  bool is_delayed_retransmission_enabled() const;
 
   void set_rf_band(RFBand value) {
     this->rf_band_ = value;
@@ -520,6 +523,9 @@ protected:
   void log_rf_path_for_test_pattern_(TestPatternMode mode, uint32_t duration_ms, uint32_t period_us) const;
   void process_pending_operation_();
   void consume_radio_runtime_events_();
+  void process_delayed_retransmission_();
+  void cancel_delayed_retransmission_(const char* reason);
+  void pause_rx_for_tx_();
   void drain_deferred_debug_trace_();
   void store_deferred_debug_trace_(const TXTimingDiagnostics& timing, TXMode tx_mode);
   void clear_deferred_debug_trace_();

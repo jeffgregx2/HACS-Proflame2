@@ -3,6 +3,8 @@
 #include <inttypes.h>
 
 #include "esphome/core/log.h"
+#include "esp_timer.h"
+#include "esp_rom_sys.h"
 
 #if PROFLAME2_RADIO_TRACE
 #include <cstdio>
@@ -159,7 +161,7 @@ void RadioCC1101::set_idle() {
 }
 
 bool RadioCC1101::write_register_(uint8_t address, uint8_t value) {
-  this->enable();
+  this->begin_ready_transaction_();
   this->write_byte(address);
   this->write_byte(value);
   this->disable();
@@ -167,7 +169,7 @@ bool RadioCC1101::write_register_(uint8_t address, uint8_t value) {
 }
 
 uint8_t RadioCC1101::read_register_(uint8_t address) {
-  this->enable();
+  this->begin_ready_transaction_();
   this->write_byte(address | CC1101_READ_SINGLE);
   const uint8_t value = this->read_byte();
   this->disable();
@@ -175,7 +177,7 @@ uint8_t RadioCC1101::read_register_(uint8_t address) {
 }
 
 uint8_t RadioCC1101::read_status_register_(uint8_t address) {
-  this->enable();
+  this->begin_ready_transaction_();
   this->write_byte(address | CC1101_READ_STATUS);
   const uint8_t value = this->read_byte();
   this->disable();
@@ -183,7 +185,7 @@ uint8_t RadioCC1101::read_status_register_(uint8_t address) {
 }
 
 void RadioCC1101::read_burst_register_(uint8_t address, uint8_t* data, size_t length) {
-  this->enable();
+  this->begin_ready_transaction_();
   this->write_byte(address | CC1101_READ_BURST);
   for (size_t index = 0; index < length; index++) {
     data[index] = this->read_byte();
@@ -192,16 +194,69 @@ void RadioCC1101::read_burst_register_(uint8_t address, uint8_t* data, size_t le
 }
 
 void RadioCC1101::write_burst_register_(uint8_t address, const uint8_t* data, size_t length) {
-  this->enable();
+  this->begin_ready_transaction_();
   this->write_byte(address | CC1101_WRITE_BURST);
   this->write_array(data, length);
   this->disable();
 }
 
-uint8_t RadioCC1101::strobe_(uint8_t command) {
+void RadioCC1101::begin_ready_transaction_() {
+  // ESPHome acquires the shared bus and asserts CS, but does not check SO.
   this->enable();
+  if (this->spi_miso_pin_ == nullptr) {
+    return; // Host probes and older hand-written integrations may omit it.
+  }
+  const int64_t started = esp_timer_get_time();
+  while (this->spi_miso_pin_->digital_read()) {
+    if (esp_timer_get_time() - started >= this->radio_ready_timeout_us_) {
+      if (!this->spi_ready_warning_logged_) {
+        ESP_LOGW(TAG, "CC1101 SPI CHIP_RDYn timeout after %" PRIu32 " us; proceeding best-effort",
+                 this->radio_ready_timeout_us_);
+        this->spi_ready_warning_logged_ = true;
+      }
+      return;
+    }
+    esp_rom_delay_us(10);
+  }
+  this->spi_ready_warning_logged_ = false;
+}
+
+bool RadioCC1101::wait_for_marcstate_(uint8_t expected, uint8_t& last_state) {
+  const int64_t started = esp_timer_get_time();
+  bool matched = false;
+  do {
+    last_state = this->read_marcstate();
+    // Hardware-updated status registers can be inconsistent during a transition.
+    if (last_state == expected && matched) {
+      return true;
+    }
+    matched = last_state == expected;
+    esp_rom_delay_us(10);
+  } while (esp_timer_get_time() - started < this->radio_ready_timeout_us_);
+  return false;
+}
+
+uint8_t RadioCC1101::strobe_unchecked_(uint8_t command) {
+  this->begin_ready_transaction_();
   const uint8_t response = this->transfer_byte(command);
   this->disable();
+  return response;
+}
+
+uint8_t RadioCC1101::strobe_(uint8_t command) {
+  const uint8_t response = this->strobe_unchecked_(command);
+  if (command == CC1101_SIDLE) {
+    uint8_t last_state = 0;
+    if (!this->wait_for_marcstate_(0x01, last_state)) {
+      ESP_LOGW(TAG, "CC1101 IDLE timeout MARCSTATE=0x%02X; retrying SIDLE", last_state);
+      this->strobe_unchecked_(CC1101_SIDLE);
+      if (!this->wait_for_marcstate_(0x01, last_state)) {
+        ESP_LOGW(TAG,
+                 "CC1101 IDLE unconfirmed after second %" PRIu32 " us wait MARCSTATE=0x%02X; proceeding best-effort",
+                 this->radio_ready_timeout_us_, last_state);
+      }
+    }
+  }
   return response;
 }
 
