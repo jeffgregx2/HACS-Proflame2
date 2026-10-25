@@ -39,17 +39,25 @@ def test_wifi_diagnostics_and_api_summary(tmp_path: Path) -> None:
     assert len(sensors) == 5
     assert all(sensor["entity_category"] == "diagnostic" for sensor in sensors)
     assert all(sensor["update_interval"] == "10s" for sensor in sensors)
+    wifi_connect = package.split("\nwifi:\n", 1)[1].split("  on_disconnect:", 1)[0]
+    assert "script.execute: proflame2_log_connection_summary" in wifi_connect
     text = yaml.safe_load("text_sensor:" + package.split("\ntext_sensor:", 1)[1].split("\nscript:", 1)[0])[
         "text_sensor"
     ]
     assert text[0]["bssid"]["entity_category"] == "diagnostic"
+    assert text[0]["ssid"]["entity_category"] == "diagnostic"
     assert text[1]["reset_reason"]["entity_category"] == "diagnostic"
     harness = (ROOT / "tests/cpp/test_wifi_diagnostics.cpp").read_text()
+    wifi = yaml.safe_load("wifi:" + package.split("\nwifi:", 1)[1].split("\ndebug:", 1)[0])["wifi"]
+    disconnect = wifi["on_disconnect"]["then"][0]["lambda"]
+    assert disconnect.count("ESP_LOGI(") == 1
     source = tmp_path / "wifi_diagnostics.cpp"
     source.write_text(
         harness.replace(
             "// INSERT_PRODUCTION_WIFI_METHOD", "void Proflame2TEmbedComponent::set_wifi_connected(" + method
-        ).replace("// INSERT_PRODUCTION_SUMMARY", summary)
+        )
+        .replace("// INSERT_PRODUCTION_SUMMARY", summary)
+        .replace("// INSERT_PRODUCTION_DISCONNECT", disconnect)
     )
     compiler = shutil.which("g++")
     assert compiler

@@ -45,17 +45,25 @@ static struct {
   float state{125};
 } proflame2_uptime;
 static struct {
-  float state{-47};
+  float state{-80}; // Summary must use the fresh raw sample, not a stale state.
+  float raw_state{-47};
 } proflame2_wifi_rssi;
 static struct {
   std::string state{"AA:BB:CC:DD:EE:FF"};
 } proflame2_wifi_bssid;
+static struct {
+  std::string state{"Home WiFi"};
+} proflame2_wifi_ssid;
 static struct {
   std::string state{"Software Reset CPU"};
 } proflame2_reset_reason;
 #define id(value) value
 static void api_summary() {
   // INSERT_PRODUCTION_SUMMARY
+}
+using esphome::millis;
+static void wifi_disconnect() {
+  // INSERT_PRODUCTION_DISCONNECT
 }
 
 int main() {
@@ -99,11 +107,18 @@ int main() {
   assert(trace_logs.size() == 1);
   const auto summary = trace_logs.back();
   assert(summary.find("connected=YES disconnects=1 reconnects=1 last_outage_ms=3500") != std::string::npos);
-  assert(summary.find("uptime_s=125 bssid=AA:BB:CC:DD:EE:FF rssi_dbm=-47") != std::string::npos);
+  assert(summary.find("uptime_s=125 ssid='Home WiFi' bssid=AA:BB:CC:DD:EE:FF rssi_dbm=-47") != std::string::npos);
   assert(summary.find("reset_reason='Software Reset CPU' retransmission=ON pre_tx_settle_ms=20.0") !=
          std::string::npos);
   proflame2_radio.retry = false;
   api_summary(); // An API reconnect alone does not create a Wi-Fi edge.
   assert(trace_logs.size() == 2 && trace_logs.back().find("retransmission=OFF") != std::string::npos);
   assert(stats.disconnect_count() == 1 && stats.reconnect_count() == 1 && stats.last_outage_ms() == 3500);
+  esphome::test_millis = 8000;
+  wifi_disconnect();
+  assert(!stats.connected() && stats.disconnect_count() == 2 && stats.reconnect_count() == 1);
+  assert(trace_logs.size() == 3);
+  assert(trace_logs.back().find(
+             "WiFi disconnected disconnects=2 reconnects=1 uptime_ms=8000 last_rssi_dbm=-47 retransmission=OFF") !=
+         std::string::npos);
 }

@@ -95,19 +95,32 @@ wifi:
     then:
       - lambda: |-
           id(proflame2_radio).set_wifi_connected(true);
+      - script.execute: proflame2_log_connection_summary
   on_disconnect:
     then:
       - lambda: |-
           id(proflame2_radio).set_wifi_connected(false);
+          const auto &wifi = id(proflame2_radio).get_wifi_diagnostics();
+          ESP_LOGI("proflame2.connection",
+                   "WiFi disconnected disconnects=%u reconnects=%u uptime_ms=%u last_rssi_dbm=%.0f retransmission=%s",
+                   static_cast<unsigned>(wifi.disconnect_count()),
+                   static_cast<unsigned>(wifi.reconnect_count()),
+                   static_cast<unsigned>(millis()),
+                   id(proflame2_wifi_rssi).raw_state,
+                   id(proflame2_radio).is_delayed_retransmission_enabled() ? "ON" : "OFF");
 
 debug:
   update_interval: 60s
 
 text_sensor:
   - platform: wifi_info
+    ssid:
+      id: proflame2_wifi_ssid
+      name: Proflame2 Wi-Fi Network
+      entity_category: diagnostic
     bssid:
       id: proflame2_wifi_bssid
-      name: Proflame2 Wi-Fi Access Point
+      name: Proflame2 Wi-Fi Access Point BSSID
       entity_category: diagnostic
   - platform: debug
     reset_reason:
@@ -129,14 +142,15 @@ script:
       - lambda: |-
           const auto &wifi = id(proflame2_radio).get_wifi_diagnostics();
           ESP_LOGI("proflame2.connection",
-                   "WiFi connected=%s disconnects=%u reconnects=%u last_outage_ms=%u uptime_s=%.0f bssid=%s rssi_dbm=%.0f reset_reason='%s' retransmission=%s pre_tx_settle_ms=%.1f",
+                   "WiFi connected=%s disconnects=%u reconnects=%u last_outage_ms=%u uptime_s=%.0f ssid='%s' bssid=%s rssi_dbm=%.0f reset_reason='%s' retransmission=%s pre_tx_settle_ms=%.1f",
                    wifi.connected() ? "YES" : "NO",
                    static_cast<unsigned>(wifi.disconnect_count()),
                    static_cast<unsigned>(wifi.reconnect_count()),
                    static_cast<unsigned>(wifi.last_outage_ms()),
                    id(proflame2_uptime).state,
+                   id(proflame2_wifi_ssid).state.c_str(),
                    id(proflame2_wifi_bssid).state.c_str(),
-                   id(proflame2_wifi_rssi).state,
+                   id(proflame2_wifi_rssi).raw_state,
                    id(proflame2_reset_reason).state.c_str(),
                    id(proflame2_radio).is_delayed_retransmission_enabled() ? "ON" : "OFF",
                    id(proflame2_radio).get_pre_tx_settle_delay_us() / 1000.0f);

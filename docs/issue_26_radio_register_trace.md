@@ -267,28 +267,51 @@ debug package or DEBUG-level logging:
   counted as drops.
 - **Proflame2 Last Wi-Fi Outage Duration**, in milliseconds, for the most recent
   completed disconnect/reconnect pair. Zero means no completed outage this boot.
-- **Proflame2 Wi-Fi Access Point**, the BSSID reported by ESPHome's Wi-Fi info
-  component, and **Proflame2 Wi-Fi Signal**, in dBm.
-- **Proflame2 Uptime**, in seconds, and **Proflame2 Reset Reason**, using ESPHome's
-  built-in uptime and debug text-sensor components.
+- **Proflame2 Wi-Fi Network**, the readable SSID, and **Proflame2 Wi-Fi Access
+  Point BSSID**, the specific AP identifier. Multiple APs can share one SSID;
+  the BSSID helps distinguish them when investigating roaming.
+- **Proflame2 Wi-Fi Signal**, in dBm, **Proflame2 Uptime**, in seconds, and
+  **Proflame2 Reset Reason**, using ESPHome's built-in sensors.
 
 Counters and outage timing are kept in RAM, without flash writes, and continue
 while HA is unreachable. They reset on reboot, not on API reconnection. Numeric
-entities update every ten seconds and are refreshed for the API log summary.
+entities remain live in HA, updating every ten seconds and refreshing for the
+connection summary. The summary uses the latest raw RSSI sample.
 Wi-Fi counters measure ESPHome connection transitions, not every low-level radio
 event; BSSID changes can help identify AP changes without proving a disconnect.
 The reset-reason sensor records the hardware/framework-reported reason, which
 may not identify the underlying cause of a software reset.
 
-Each API client connection, including a log viewer, schedules one INFO summary
-after one second so log subscription can complete. Restart-mode scheduling
-coalesces simultaneous clients. It does not block TX or perform CC1101 register
+Each Wi-Fi connection or API client connection, including a log viewer,
+schedules one INFO summary after one second so log subscription can complete.
+Restart-mode scheduling coalesces simultaneous connection events. A Wi-Fi
+reconnection also refreshes diagnostics if an API socket survives the outage.
+No periodic summary is generated. It does not block TX or perform CC1101 register
 reads. The line includes Wi-Fi connection state, both counters, last outage,
-uptime, BSSID, RSSI, reset reason, delayed retransmission state, and settling delay:
+uptime, SSID, BSSID, RSSI, reset reason, delayed retransmission state, and settling delay:
 
 ```text
-WiFi connected=YES disconnects=1 reconnects=1 last_outage_ms=3500 uptime_s=125 bssid=AA:BB:CC:DD:EE:FF rssi_dbm=-47 reset_reason='Software Reset CPU' retransmission=ON pre_tx_settle_ms=20.0
+WiFi connected=YES disconnects=1 reconnects=1 last_outage_ms=3500 uptime_s=125 ssid='Home WiFi' bssid=AA:BB:CC:DD:EE:FF rssi_dbm=-47 reset_reason='Software Reset CPU' retransmission=ON pre_tx_settle_ms=20.0
 ```
+
+Wi-Fi disconnect also emits one immediate INFO line with counters, uptime in
+milliseconds, the last sampled RSSI, and retransmission state. A dropped Wi-Fi
+link cannot reliably deliver that line over the API; USB serial logging can
+retain it. The reconnect summary exposes the counters and outage duration even
+when the API missed the disconnect line.
+
+ESPHome 2026.8.2's API log viewer separately renders entity updates as
+`[S][sensor]` lines. Those are not firmware INFO messages. Keep the diagnostic
+entities live while hiding these state lines in a CLI log capture with:
+
+```sh
+esphome logs device.yaml --no-states
+```
+
+Alternatively, set `ESPHOME_LOG_STATES=false` in the environment of the process
+running the ESPHome CLI/Builder log command, unless it explicitly requests
+`--states`. This controls the viewer only and does not affect HA subscriptions.
+Changing firmware logger levels cannot suppress these client-generated lines.
 
 An API-only reconnect leaves the Wi-Fi counters and uptime unchanged except for
 elapsed time. A Wi-Fi outage increments the counters without resetting uptime;
