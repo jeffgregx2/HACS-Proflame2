@@ -8,11 +8,15 @@ using namespace esphome;
 using namespace esphome::proflame2_tembed;
 
 // Other radio.cpp methods refer to the production TX pin accessor.
-GPIOPin* RadioCC1101::async_tx_pin_() const { return nullptr; }
+GPIOPin* RadioCC1101::async_tx_pin_() const {
+  return nullptr;
+}
 
 class TraceRadio : public RadioCC1101 {
 public:
-  void initialized(bool value) { initialized_ = value; }
+  void initialized(bool value) {
+    initialized_ = value;
+  }
 };
 
 int main() {
@@ -83,6 +87,36 @@ int main() {
   trace_logs.clear();
   radio.log_radio_registers(RadioTraceRecord{}, "tx_complete", "uninitialized");
   assert(trace_logs.empty() && spi::commands.empty());
+
+  assert(radio.is_radio_trace_enabled());
+  assert(radio.get_pre_tx_settle_delay_us() == 0);
+  radio.set_radio_trace_enabled(false);
+  trace_logs.clear(); // The one-time setting-change acknowledgment is expected.
+  const auto disabled = radio.capture_radio_registers();
+  radio.trace_radio_registers("rmt_rx_running", "disabled");
+  radio.log_radio_registers(copied_after, "tx_complete", "queued-before-disable");
+  assert(disabled.sequence == 0);
+  assert(trace_logs.empty() && spi::commands.empty());
+  radio.set_pre_tx_settle_delay_us(20000);
+  assert(radio.get_pre_tx_settle_delay_us() == 20000);
+  radio.set_pre_tx_settle_delay_us(999999);
+  assert(radio.get_pre_tx_settle_delay_us() == 100000);
+  radio.set_pre_tx_settle_delay_us(0);
+  assert(radio.get_pre_tx_settle_delay_us() == 0);
+  radio.set_radio_trace_enabled(true);
+  trace_logs.clear();
+  radio.trace_radio_registers("rmt_rx_running", "reenabled");
+  assert(spi::commands.size() == 58);
+  assert(trace_logs[0].find("seq=5 stage=rmt_rx_running") != std::string::npos);
+  assert(trace_logs.back() == "RFTRACE seq=5 end=1");
+
+  assert(radio_trace_pre_tx_deadline(1000, 500, 0, 0) == 1000);
+  assert(radio_trace_pre_tx_deadline(1000, 500, 0, 20000) == 21000);
+  assert(radio_trace_pre_tx_deadline(30000, 500, 0, 20000) == 50000);
+  assert(radio_trace_pre_tx_deadline(100, 500, 0, 20000) == 20500);
+  for (uint8_t repeat = 1; repeat < 5; repeat++) {
+    assert(radio_trace_pre_tx_deadline(1000, 500, repeat, 20000) == 1000);
+  }
 #else
   assert(spi::commands.empty() && trace_logs.empty());
 #endif

@@ -1,5 +1,6 @@
 """Compile and execute the real register-trace implementation with a mock SPI bus."""
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -71,3 +72,73 @@ def test_worker_snapshots_are_deferred_through_completion_on_success_and_failure
     after_output = completion.index('log_radio_registers(result.trace_after_tx, "tx_complete", result.request_id)')
     failure = completion.index("if (!result.ok)")
     assert restore < before_output < after_output < failure
+
+
+def test_native_tx_settling_legacy_and_extended_real_scheduler(tmp_path: Path) -> None:
+    from custom_components.proflame2.protocol.packet import ProflameFrame
+    from custom_components.proflame2.rf.waveform import frame_to_air_bytes
+
+    executable = tmp_path / "native_tx_settling"
+    compiler = shutil.which("g++")
+    assert compiler
+    result = subprocess.run(
+        [
+            compiler,
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            "-DPROFLAME2_RADIO_TRACE=1",
+            f"-I{ROOT / 'tests/cpp/radio_trace_stubs'}",
+            f"-I{COMPONENT}",
+            str(COMPONENT / "radio_cc1101.cpp"),
+            str(COMPONENT / "radio_cc1101_tx.cpp"),
+            str(COMPONENT / "tx_payload_layout.cpp"),
+            str(ROOT / "tests/cpp/test_native_tx_settling.cpp"),
+            "-o",
+            str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    fixture = json.loads((ROOT / "tests/fixtures/issue_26_mendota_extended_capture.json").read_text())
+    words = fixture["captures"][0]["words"]
+    extended = ProflameFrame(
+        serial_id=(words[0] << 16) | (words[1] << 8) | words[2],
+        cmd1=words[3],
+        cmd2=words[4],
+        err1=words[5],
+        err2=words[6],
+        extension_words=tuple(words[7:]),
+    )
+    legacy = ProflameFrame(serial_id=0x3B3F02, cmd1=0x61, cmd2=1, err1=0xD0, err2=0x39)
+    for frame, bits in ((legacy, 182), (extended, 260)):
+        result = subprocess.run(
+            [str(executable), frame_to_air_bytes(frame).hex(), str(bits)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+
+def test_runtime_controls_defaults_and_queued_delay_are_explicit() -> None:
+    header = (COMPONENT / "radio_cc1101.h").read_text()
+    assert "std::atomic<bool> radio_trace_enabled_{true}" in header
+    assert "std::atomic<uint32_t> pre_tx_settle_delay_us_{0}" in header
+    component = (COMPONENT / "proflame2_tembed.cpp").read_text()
+    assert "command.pre_tx_settle_delay_us = this->get_pre_tx_settle_delay_us();" in component
+    assert "event.pre_tx_settle_delay_us = command.pre_tx_settle_delay_us;" in component
+    assert "radio_error, command.pre_tx_settle_delay_us)" in component
+    tx = (COMPONENT / "radio_cc1101_tx.cpp").read_text()
+    call = tx.index("target_first_rising_edge_us = radio_trace_pre_tx_deadline(")
+    wait = tx.index("wait_until_(target_first_rising_edge_us);", call)
+    edge = tx.index("this->async_tx_pin_()->digital_write(true);", wait)
+    assert call < wait < edge
+    assert "if (transmission_index == 0 && pre_tx_settle_delay_us > 0)" in tx
+    package = (ROOT / "esphome/packages/proflame2_tembed_base.yaml").read_text()
+    delay = package.split("id: proflame2_pre_tx_settle_delay", 1)[1].split("  - platform:", 1)[0]
+    assert "max_value: 100" in delay and "step: 0.1" in delay and "unit_of_measurement: ms" in delay
+    toggle = package.split("id: proflame2_radio_trace_logging", 1)[1].split("  - platform:", 1)[0]
+    assert "restore_mode: ALWAYS_ON" in toggle
+    assert "set_radio_trace_enabled(false)" in toggle
+    assert "set_radio_trace_enabled(true)" in toggle

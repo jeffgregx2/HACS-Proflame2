@@ -24,9 +24,22 @@ static constexpr uint8_t CC1101_READ_BURST = 0xC0;
 static constexpr uint8_t CC1101_READ_STATUS = 0xC0;
 
 #if PROFLAME2_RADIO_TRACE
+void RadioCC1101::set_radio_trace_enabled(bool value) {
+  if (this->radio_trace_enabled_.exchange(value) != value) {
+    ESP_LOGI(TAG, "Radio register trace %s (output and snapshot reads)", value ? "ON" : "OFF");
+  }
+}
+
+void RadioCC1101::set_pre_tx_settle_delay_us(uint32_t value) {
+  const uint32_t bounded = value > RADIO_TRACE_MAX_PRE_TX_SETTLE_US ? RADIO_TRACE_MAX_PRE_TX_SETTLE_US : value;
+  if (this->pre_tx_settle_delay_us_.exchange(bounded) != bounded) {
+    ESP_LOGI(TAG, "Diagnostic pre-TX settling delay set to %" PRIu32 " us", bounded);
+  }
+}
+
 RadioTraceRecord RadioCC1101::capture_radio_registers() {
   RadioTraceRecord record;
-  if (!this->initialized_) {
+  if (!this->is_radio_trace_enabled() || !this->initialized_) {
     return record;
   }
   record.sequence = ++this->radio_trace_sequence_;
@@ -45,7 +58,7 @@ void RadioCC1101::trace_radio_registers(const char* stage, const char* request_i
 }
 
 void RadioCC1101::log_radio_registers(const RadioTraceRecord& record, const char* stage, const char* request_id) {
-  if (record.sequence == 0) {
+  if (!this->is_radio_trace_enabled() || record.sequence == 0) {
     return;
   }
   const auto& snapshot = record.snapshot;

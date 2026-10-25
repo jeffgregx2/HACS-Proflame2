@@ -324,6 +324,7 @@ struct RadioRuntimeCommand {
   uint32_t post_frame_idle_gap_us{0};
   uint32_t pre_burst_low_us{0};
   uint32_t pre_frame_low_us{0};
+  uint32_t pre_tx_settle_delay_us{0};
 };
 
 struct RadioRuntimeEvent {
@@ -346,6 +347,7 @@ struct RadioRuntimeEvent {
   NativeGroupRepeatBoundaryMode native_group_repeat_boundary_mode{NativeGroupRepeatBoundaryMode::CONTINUOUS_TX};
   TXTimingDiagnostics timing{};
   char radio_error[RADIO_RUNTIME_MAX_ERROR_TEXT]{};
+  uint32_t pre_tx_settle_delay_us{0};
 #if PROFLAME2_RADIO_TRACE
   RadioTraceRecord trace_before_tx{};
   RadioTraceRecord trace_after_tx{};
@@ -393,6 +395,7 @@ static void radio_runtime_task_entry_(void* context) {
     event.duration_ms = command.duration_ms;
     event.tx_mode = command.tx_mode;
     event.native_group_timing_profile = command.native_group_timing_profile;
+    event.pre_tx_settle_delay_us = command.pre_tx_settle_delay_us;
 
     std::string radio_error;
     if (!runtime->owner->is_radio_initialized()) {
@@ -415,7 +418,7 @@ static void radio_runtime_task_entry_(void* context) {
             command.payload.data(), command.payload_length, command.payload_bit_length, command.repeat_count,
             command.inter_frame_gap_us, command.tx_mode, command.native_group_timing_profile,
             command.native_group_repeat_boundary_mode, command.pre_burst_low_us, command.pre_frame_low_us,
-            command.post_frame_idle_gap_us, event.elapsed_ms, event.timing, radio_error);
+            command.post_frame_idle_gap_us, event.elapsed_ms, event.timing, radio_error, command.pre_tx_settle_delay_us);
       } else if (command.kind == RadioRuntimeCommandKind::TEST_PATTERN) {
         event.ok = runtime->owner->transmit_test_pattern_async_ook(command.test_pattern_mode, command.duration_ms,
                                                                    command.period_us, event.elapsed_ms, event.timing,
@@ -2703,6 +2706,9 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
   command.post_frame_idle_gap_us = this->post_frame_idle_gap_us_;
   command.pre_burst_low_us = this->pre_burst_low_us_;
   command.pre_frame_low_us = this->pre_frame_low_us_;
+#if PROFLAME2_RADIO_TRACE
+  command.pre_tx_settle_delay_us = this->get_pre_tx_settle_delay_us();
+#endif
 
   this->display_.last_action_text = !status_text.empty() ? status_text : "Sending";
   this->display_.last_action_millis = millis();
@@ -2960,10 +2966,10 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
           : 0;
   ESP_LOGI(TAG,
            "TX result status=ok request_id=%s tx_path=%s elapsed_ms=%" PRIu32 " repeat_count=%" PRIu32
-           " payload_bits=%" PRIu32 " marcstate_before=%s marcstate_after=%s",
+           " payload_bits=%" PRIu32 " marcstate_before=%s marcstate_after=%s pre_tx_settle_us=%" PRIu32,
            string_from_buffer_(result.request_id).c_str(), this->last_tx_path_.c_str(), this->last_tx_elapsed_ms_,
            repeat_count, result.payload_bit_length, this->last_marcstate_before_tx_.c_str(),
-           this->last_marcstate_after_tx_.c_str());
+           this->last_marcstate_after_tx_.c_str(), result.pre_tx_settle_delay_us);
   if (this->tx_debug_logging_enabled_()) {
     ESP_LOGI(TAG,
              "TX complete request_id=%s tx_path=%s elapsed_ms=%" PRIu32 " tx_mode=%s"
@@ -2998,7 +3004,8 @@ bool Proflame2TEmbedComponent::initialize_radio_(std::string* error) {
     this->cc1101_partnum_ = format_hex_byte_(this->read_partnum());
     this->cc1101_version_ = format_hex_byte_(this->read_version());
 #if PROFLAME2_RADIO_TRACE
-    ESP_LOGI(TAG, "RFTRACE diagnostic build base_version=%s schema=2 worker_logs=deferred", this->firmware_version_.c_str());
+    ESP_LOGI(TAG, "RFTRACE diagnostic build base_version=%s schema=3 worker_logs=deferred runtime_controls=YES",
+             this->firmware_version_.c_str());
 #endif
     this->trace_radio_registers("radio_initialized", "-");
     this->publish_telemetry_();

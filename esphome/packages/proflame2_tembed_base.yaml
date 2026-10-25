@@ -364,6 +364,22 @@ sensor:
 
 number:
   - platform: template
+    id: proflame2_pre_tx_settle_delay
+    name: Pre-TX Settling Delay
+    entity_category: config
+    icon: mdi:timer-sand
+    unit_of_measurement: ms
+    min_value: 0
+    max_value: 100
+    step: 0.1
+    mode: box
+    lambda: |-
+      return id(proflame2_radio).get_pre_tx_settle_delay_us() / 1000.0f;
+    set_action:
+      - lambda: |-
+          id(proflame2_radio).set_pre_tx_settle_delay_us(static_cast<uint32_t>(x * 1000.0f + 0.5f));
+          id(proflame2_pre_tx_settle_delay).publish_state(id(proflame2_radio).get_pre_tx_settle_delay_us() / 1000.0f);
+  - platform: template
     id: proflame2_display_dim_level
     name: Display Dim Level
     min_value: 0
@@ -380,6 +396,22 @@ number:
           }
           id(proflame2_radio).set_display_dim_level(static_cast<uint8_t>(value));
 switch:
+  - platform: template
+    id: proflame2_radio_trace_logging
+    name: Radio Register Trace Logging
+    entity_category: config
+    icon: mdi:bug
+    restore_mode: ALWAYS_ON
+    lambda: |-
+      return id(proflame2_radio).is_radio_trace_enabled();
+    turn_on_action:
+      - lambda: |-
+          id(proflame2_radio).set_radio_trace_enabled(true);
+          id(proflame2_radio_trace_logging).publish_state(true);
+    turn_off_action:
+      - lambda: |-
+          id(proflame2_radio).set_radio_trace_enabled(false);
+          id(proflame2_radio_trace_logging).publish_state(false);
   - platform: template
     id: proflame2_display_wake_on_activity
     name: Display Wake On Activity

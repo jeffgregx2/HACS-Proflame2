@@ -18,6 +18,7 @@
 #endif
 
 #if PROFLAME2_RADIO_TRACE
+#include <atomic>
 #include "radio_trace.h"
 #endif
 
@@ -259,7 +260,7 @@ public:
                           uint32_t repeat_gap_us, TXMode tx_mode, NativeGroupTimingProfile native_group_timing_profile,
                           NativeGroupRepeatBoundaryMode native_group_repeat_boundary_mode, uint32_t pre_burst_low_us,
                           uint32_t pre_frame_low_us, uint32_t post_frame_idle_gap_us, uint32_t& elapsed_ms,
-                          TXTimingDiagnostics& timing, std::string& error);
+                          TXTimingDiagnostics& timing, std::string& error, uint32_t pre_tx_settle_delay_us = 0);
   /// Emit a diagnostic RF pattern. This is not a Proflame2 command.
   bool transmit_test_pattern_async_ook(TestPatternMode mode, uint32_t duration_ms, uint32_t period_us,
                                        uint32_t& elapsed_ms, TXTimingDiagnostics& timing, std::string& error);
@@ -278,6 +279,10 @@ public:
                           uint32_t payload_bit_length, uint8_t repeat_count, uint32_t repeat_gap_us);
   void log_runtime_register_snapshot(const char* stage);
 #if PROFLAME2_RADIO_TRACE
+  void set_radio_trace_enabled(bool value);
+  bool is_radio_trace_enabled() const { return this->radio_trace_enabled_.load(); }
+  void set_pre_tx_settle_delay_us(uint32_t value);
+  uint32_t get_pre_tx_settle_delay_us() const { return this->pre_tx_settle_delay_us_.load(); }
   RadioTraceRecord capture_radio_registers();
   void log_radio_registers(const RadioTraceRecord& record, const char* stage, const char* request_id);
   void trace_radio_registers(const char* stage, const char* request_id);
@@ -301,6 +306,8 @@ public:
 protected:
 #if PROFLAME2_RADIO_TRACE
   uint32_t radio_trace_sequence_{0};
+  std::atomic<bool> radio_trace_enabled_{true};
+  std::atomic<uint32_t> pre_tx_settle_delay_us_{0};
 #endif
   bool write_register_(uint8_t address, uint8_t value);
   uint8_t read_register_(uint8_t address);

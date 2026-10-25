@@ -16,3 +16,7 @@ inline void trace_test_log(const char*, const char* format, ...) {
   trace_logs.emplace_back(buffer);
 }
 #define ESP_LOGI(...) trace_test_log(__VA_ARGS__)
+#define ESP_LOGCONFIG(...) trace_test_log(__VA_ARGS__)
+#define ESP_LOGW(...) trace_test_log(__VA_ARGS__)
+#define ESP_LOGE(...) trace_test_log(__VA_ARGS__)
+#define YESNO(value) ((value) ? "YES" : "NO")

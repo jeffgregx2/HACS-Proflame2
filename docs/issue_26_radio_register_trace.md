@@ -7,10 +7,10 @@ Compare CC1101 hardware readbacks from two isolated diagnostic branches:
 - `issue-26-alpha1-radio-trace`, based on `v0.7.0-alpha1`.
 - `issue-26-beta1-radio-trace`, based on `v0.7.0-beta1`.
 
-The initial branches used identical instrumentation. Beta1 now uses schema 2
-with deferred worker snapshot output; the alpha1 diagnostic branch remains on
-schema 1. Neither modifies the RF register values,
-packet encoder, waveform loops, calibration policy, or TX/RX state commands.
+The initial branches used identical instrumentation. Beta1 now uses schema 3
+with deferred worker snapshots and runtime experiment controls; the alpha1 diagnostic branch remains on
+schema 1. Neither modifies the RF register values, packet encoder,
+individual-symbol timings, repeat gaps, calibration policy, or TX/RX state commands.
 The diagnostic branch base package enables `PROFLAME2_RADIO_TRACE=1`
 automatically. These are investigation builds, not replacement release tags.
 
@@ -31,10 +31,77 @@ variable. Avoid additional debug packages or settings that differ between builds
 
 INFO logging for `proflame2_cc1101` is sufficient; no manual capture mode is
 required. The ordinary startup version still identifies the original release,
-but `RFTRACE diagnostic build base_version=... schema=2 worker_logs=deferred`
-identifies the corrected beta1 instrumentation. Each snapshot also ends with
+but `RFTRACE diagnostic build base_version=... schema=3 worker_logs=deferred runtime_controls=YES`
+identifies the current beta1 instrumentation. Each snapshot also ends with
 `RFTRACE seq=N end=1`.
 New traces require rebuilding and flashing, not just changing the HA integration.
+
+## Runtime Experiment Controls
+
+Both controls are in the ESPHome device's Configuration section in HA. They
+require this diagnostic firmware, not the optional debug YAML package.
+
+- **Radio Register Trace Logging** defaults to ON. OFF skips both snapshot
+  register reads and RFTRACE output, including previously captured records
+  awaiting output. Normal radio-operation SPI traffic, TX results, and existing
+  receive logging are not disabled. A single confirmation logs each setting
+  change. Re-enabling resumes tracing without rebooting.
+- **Pre-TX Settling Delay** defaults to 0 ms (disabled), with a range of
+  0-100 ms in 0.1 ms steps. The setting is copied into each queued TX request,
+  so a later edit does not alter an in-flight command. TX result logs include
+  the applied `pre_tx_settle_us` value even when tracing is OFF.
+
+Neither setting persists over a reboot: each boot restores trace ON / delay 0.
+Change controls only while the radio is idle so a capture is not intentionally
+split between tracing ON and OFF. The trace switch is atomic across tasks.
+
+The delay adds the configured time to the first RF-edge deadline after the
+existing TX-ready check and pre-burst/pre-frame guard calculations.
+It does not delay the STX command, modify symbol durations, or insert a delay
+between repetitions. It is applied once per burst to the production
+`proflame_native_groups` path, for both seven- and ten-word frames and both
+continuous-TX and reenter-TX repeat modes. Other experimental TX modes reject
+a nonzero setting instead of silently ignoring it. Diagnostic test patterns
+are outside this command-path experiment.
+
+Use **20 ms** for the first deliberately generous test, not as a production
+default or guarantee of readiness. TI's CC1101 datasheet Table 34 gives typical
+IDLE-to-TX times of about 75 us without calibration and 799 us with calibration
+(26 MHz crystal, no PA ramping). The extra 20 ms exceeds those typical times
+substantially but cannot repair a rejected strobe or invalid state.
+Source: https://www.ti.com/lit/ds/symlink/cc1101.pdf
+
+### Controlled Test
+
+1. Keep the same firmware, controller placement, SDR placement/gain, HA
+   integration, and commanded light/fan sequence throughout.
+2. Reproduce rejection with trace ON / delay 0. Save complete logs and raw I/Q.
+3. Change only the delay to 20 ms. Repeat the same sequence and record acceptance
+   counts and request IDs, not just whether one command worked.
+4. Return to 0, then 20 ms again to check that reliability follows the setting.
+   Do not change trace state during this comparison.
+5. If the effect is repeatable, sweep downward (10, 5, 2, 1, 0.5, 0.1, 0 ms),
+   retaining each setting's result counts and captured failed/successful bursts.
+6. Separately repeat the 0/20 ms comparison with trace OFF to measure the effect
+   of snapshot reads and logging. Standard TX logs still identify the delay.
+
+No commands are generated automatically. Rebuilding adds code and can change
+binary layout even with default settings; reproduce the baseline on this build
+before treating the experiment as causal.
+
+### Root-Cause Follow-Up
+
+- Correlate accepted/rejected identical payloads with actual SDR waveform
+  timing, repeat boundaries, carrier onset, and signal conditions.
+- Characterize STX-to-TX-ready and TX-ready-to-first-edge timing under different
+  workloads; distinguish MARCSTATE polling success from its timeout fallback.
+- Review SPI/chip readiness, strobe preconditions, calibration/PLL state, and
+  CPU/task scheduling before replacing a validated readiness policy with sleeps.
+- Verify legacy and extended hardware behavior before proposing a beta2
+  workaround. A delay that improves one setup is not proof of protocol support.
+- Keep the delay experimental until its effect is reproducible. The desired
+  final solution is an understood readiness/state transition, not an arbitrary
+  permanent pause.
 
 ## Snapshots
 
@@ -105,6 +172,9 @@ layout. They may mask a timing-sensitive defect. If diagnostic builds stop
 reproducing the failure, that is an inconclusive result, not a fix.
 Schema 2 also removes worker logging overhead before RF emission. Do not assume
 its timing effects are identical to the original schema 1 diagnostic build.
+Schema 3 preserves trace read placement when ON, and removes trace reads and
+output when OFF. Its delay-0 branch does not add a new wait or poll, but the
+new binary is not instruction-for-instruction identical to schema 2.
 There is no snapshot during RF emission or between individual repeats.
 Post-TX calibration registers need not equal their pre-TX values.
 
@@ -137,3 +207,17 @@ Schema 2 validation: 1,083 tests passed with one existing optional-source test
 deselected; Ruff, Black, whitespace checks and ESPHome 2026.8.2 source generation
 passed. Full ESP32 compilation and hardware/API-log delivery remain to be
 verified on the Builder/device.
+
+Schema 3 host tests also execute the actual `radio_cc1101_tx.cpp` implementation
+with a deterministic simulated clock, GPIO, and SPI radio. They cover seven-
+and ten-word payloads, both native repeat modes, delays of 0/0.1/1/20/100 ms,
+returning to 0, and rejection of unsupported TX modes. They verify first-edge
+settling and identical relative edge schedules/repeat gaps. These checks do
+not simulate analog settling or establish RF/fireplace acceptance.
+
+Schema 3 validation: 1,085 tests passed with one existing optional-source test
+deselected. Six focused diagnostic checks include trace-disabled SPI suppression
+and real-scheduler tests. Ruff, Black, whitespace checks and ESPHome 2026.8.2
+source generation pass. The native TX host compiler reports pre-existing unused
+diagnostic-variable warnings; these are outside this experimental change.
+Full ESP32 compilation and hardware acceptance still require Builder/device tests.
