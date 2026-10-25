@@ -17,6 +17,10 @@
 #define PROFLAME2_RADIO_TRACE 0
 #endif
 
+#if PROFLAME2_RADIO_TRACE
+#include "radio_trace.h"
+#endif
+
 #ifndef PROFLAME2_TEMBED_TX_DEBUG
 #define PROFLAME2_TEMBED_TX_DEBUG 1
 #endif
@@ -274,6 +278,8 @@ public:
                           uint32_t payload_bit_length, uint8_t repeat_count, uint32_t repeat_gap_us);
   void log_runtime_register_snapshot(const char* stage);
 #if PROFLAME2_RADIO_TRACE
+  RadioTraceRecord capture_radio_registers();
+  void log_radio_registers(const RadioTraceRecord& record, const char* stage, const char* request_id);
   void trace_radio_registers(const char* stage, const char* request_id);
 #else
   void trace_radio_registers(const char*, const char*) {}

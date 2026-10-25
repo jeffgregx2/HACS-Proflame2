@@ -7,7 +7,9 @@ Compare CC1101 hardware readbacks from two isolated diagnostic branches:
 - `issue-26-alpha1-radio-trace`, based on `v0.7.0-alpha1`.
 - `issue-26-beta1-radio-trace`, based on `v0.7.0-beta1`.
 
-Both use identical instrumentation. Neither modifies the RF register values,
+The initial branches used identical instrumentation. Beta1 now uses schema 2
+with deferred worker snapshot output; the alpha1 diagnostic branch remains on
+schema 1. Neither modifies the RF register values,
 packet encoder, waveform loops, calibration policy, or TX/RX state commands.
 The diagnostic branch base package enables `PROFLAME2_RADIO_TRACE=1`
 automatically. These are investigation builds, not replacement release tags.
@@ -29,7 +31,9 @@ variable. Avoid additional debug packages or settings that differ between builds
 
 INFO logging for `proflame2_cc1101` is sufficient; no manual capture mode is
 required. The ordinary startup version still identifies the original release,
-but `RFTRACE diagnostic build base_version=... schema=1` confirms instrumentation.
+but `RFTRACE diagnostic build base_version=... schema=2 worker_logs=deferred`
+identifies the corrected beta1 instrumentation. Each snapshot also ends with
+`RFTRACE seq=N end=1`.
 New traces require rebuilding and flashing, not just changing the HA integration.
 
 ## Snapshots
@@ -37,6 +41,16 @@ New traces require rebuilding and flashing, not just changing the HA integration
 Each snapshot has a sequence number, stage, request ID, uptime, and read duration.
 All continuation lines carry the sequence number. Configuration addresses and
 values are hexadecimal, in ascending order. The final config block ends at 0x2E.
+
+The worker collects pre/post-TX values without logging and copies both records
+through the existing completion queue. After restoring RX, the main task emits
+the saved records on both successful and failed transmissions. This avoids
+overflowing ESPHome's cross-task logging buffer, which previously dropped the
+post-TX records and the tail of pre-TX records from API logs.
+
+Sequence numbers and uptime identify capture order, not log delivery order.
+For example, the restored-RX snapshot can appear before the earlier pre/post-TX
+records. Deferred logging does not perform any additional register reads.
 
 - `radio_initialized`: radio setup completed, before normal RX begins.
 - `rmt_rx_running`: RX configuration applied and SRX issued.
@@ -89,6 +103,8 @@ or another LilyGO's mirrored state.
 Reads and logging add latency outside the waveform loop and change the binary
 layout. They may mask a timing-sensitive defect. If diagnostic builds stop
 reproducing the failure, that is an inconclusive result, not a fix.
+Schema 2 also removes worker logging overhead before RF emission. Do not assume
+its timing effects are identical to the original schema 1 diagnostic build.
 There is no snapshot during RF emission or between individual repeats.
 Post-TX calibration registers need not equal their pre-TX values.
 
@@ -100,13 +116,24 @@ acceptance. ESPHome source generation and host tests are not a firmware build.
 
 ## Local Validation
 
-- Beta1 diagnostic branch: 1,082 tests passed; one optional external-source
+- Beta1 diagnostic branch before schema 2: 1,082 tests passed; one optional external-source
   check was deselected by the existing suite configuration.
 - Alpha1 diagnostic branch: 551 tests passed with the rtl_433 source path
   configured. Two release-metadata tests were excluded after reproducing their
   failures on the untouched alpha1 tag (alpha prerelease flavor and stamped
   documentation links versus an expectation of development links).
-- The three new diagnostic checks pass on both branches, including host C++
+- The initial three diagnostic checks passed on both branches, including host C++
   compilation with tracing enabled and disabled.
 - ESPHome 2026.8.2 configuration validation and C++ generation succeed on both.
   Full ESP32 firmware compilation and hardware validation remain outstanding.
+
+Schema 2 adds a fourth diagnostic check. Host tests verify that capture emits
+no logs, queue-copy-compatible records retain pre/post-TX values after live
+registers change, deferred logging performs no SPI accesses, and both records
+have completion markers. Lifecycle assertions check capture surrounds TX and
+output occurs after RX restoration on success and failure.
+
+Schema 2 validation: 1,083 tests passed with one existing optional-source test
+deselected; Ruff, Black, whitespace checks and ESPHome 2026.8.2 source generation
+passed. Full ESP32 compilation and hardware/API-log delivery remain to be
+verified on the Builder/device.

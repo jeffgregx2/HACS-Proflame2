@@ -45,10 +45,29 @@ def test_trace_is_outside_waveform_and_enabled_by_diagnostic_package() -> None:
         "radio_initialized",
         "rmt_rx_stopping",
         "rmt_rx_stopped_tx_config",
-        "tx_prepared",
-        "tx_complete",
         "rmt_rx_running",
     ):
         assert f'trace_radio_registers("{stage}"' in component
     package = (ROOT / "esphome/packages/proflame2_tembed_base.yaml").read_text()
     assert "-DPROFLAME2_RADIO_TRACE=1" in package
+
+
+def test_worker_snapshots_are_deferred_through_completion_on_success_and_failure() -> None:
+    component = (COMPONENT / "proflame2_tembed.cpp").read_text()
+    worker = component.split("static void radio_runtime_task_entry_", 1)[1].split(
+        "void Proflame2TEmbedComponent::setup()", 1
+    )[0]
+    assert "trace_radio_registers(" not in worker
+    assert "log_radio_registers(" not in worker
+    before = worker.index("event.trace_before_tx = runtime->owner->capture_radio_registers()")
+    transmit = worker.index("event.ok = runtime->owner->transmit_async_ook(")
+    after = worker.index("event.trace_after_tx = runtime->owner->capture_radio_registers()")
+    error_branch = worker.index("if (!event.ok)")
+    queue = worker.index("xQueueSend(runtime->event_queue")
+    assert before < transmit < after < error_branch < queue
+    completion = component.split("RadioRuntimeEvent result;", 1)[1]
+    restore = completion.index("this->restore_rx_after_tx_if_needed_();")
+    before_output = completion.index('log_radio_registers(result.trace_before_tx, "tx_prepared", result.request_id)')
+    after_output = completion.index('log_radio_registers(result.trace_after_tx, "tx_complete", result.request_id)')
+    failure = completion.index("if (!result.ok)")
+    assert restore < before_output < after_output < failure

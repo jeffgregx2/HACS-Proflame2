@@ -346,6 +346,10 @@ struct RadioRuntimeEvent {
   NativeGroupRepeatBoundaryMode native_group_repeat_boundary_mode{NativeGroupRepeatBoundaryMode::CONTINUOUS_TX};
   TXTimingDiagnostics timing{};
   char radio_error[RADIO_RUNTIME_MAX_ERROR_TEXT]{};
+#if PROFLAME2_RADIO_TRACE
+  RadioTraceRecord trace_before_tx{};
+  RadioTraceRecord trace_after_tx{};
+#endif
 };
 
 struct Proflame2TEmbedComponent::RadioRuntime {
@@ -403,7 +407,9 @@ static void radio_runtime_task_entry_(void* context) {
       event.cc1101_partnum = runtime->owner->read_partnum();
       event.cc1101_version = runtime->owner->read_version();
       event.marcstate_before_tx = runtime->owner->read_marcstate();
-      runtime->owner->trace_radio_registers("tx_prepared", command.request_id);
+#if PROFLAME2_RADIO_TRACE
+      event.trace_before_tx = runtime->owner->capture_radio_registers();
+#endif
       if (command.kind == RadioRuntimeCommandKind::TX) {
         event.ok = runtime->owner->transmit_async_ook(
             command.payload.data(), command.payload_length, command.payload_bit_length, command.repeat_count,
@@ -419,7 +425,9 @@ static void radio_runtime_task_entry_(void* context) {
         radio_error = "unsupported_command";
       }
       event.marcstate_after_tx = runtime->owner->read_marcstate();
-      runtime->owner->trace_radio_registers("tx_complete", command.request_id);
+#if PROFLAME2_RADIO_TRACE
+      event.trace_after_tx = runtime->owner->capture_radio_registers();
+#endif
       if (!event.ok) {
         copy_string_(event.radio_error, radio_error.empty() ? std::string("radio_tx_failed") : radio_error);
         runtime->state = RadioRuntimeState::ERROR;
@@ -2902,6 +2910,13 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
   // completion UI/logging exposes the controller as ready for remote input.
   this->restore_rx_after_tx_if_needed_();
 
+#if PROFLAME2_RADIO_TRACE
+  // Worker snapshots travel with completion; emit on the main task only after
+  // restoring RX, avoiding ESPHome's bounded cross-task logging buffer.
+  this->log_radio_registers(result.trace_before_tx, "tx_prepared", result.request_id);
+  this->log_radio_registers(result.trace_after_tx, "tx_complete", result.request_id);
+#endif
+
   if (!result.ok) {
     this->tx_failure_count_++;
     this->last_error_ = string_from_buffer_(result.radio_error);
@@ -2983,7 +2998,7 @@ bool Proflame2TEmbedComponent::initialize_radio_(std::string* error) {
     this->cc1101_partnum_ = format_hex_byte_(this->read_partnum());
     this->cc1101_version_ = format_hex_byte_(this->read_version());
 #if PROFLAME2_RADIO_TRACE
-    ESP_LOGI(TAG, "RFTRACE diagnostic build base_version=%s schema=1", this->firmware_version_.c_str());
+    ESP_LOGI(TAG, "RFTRACE diagnostic build base_version=%s schema=2 worker_logs=deferred", this->firmware_version_.c_str());
 #endif
     this->trace_radio_registers("radio_initialized", "-");
     this->publish_telemetry_();

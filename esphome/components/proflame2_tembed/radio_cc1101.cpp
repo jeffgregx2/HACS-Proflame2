@@ -24,19 +24,34 @@ static constexpr uint8_t CC1101_READ_BURST = 0xC0;
 static constexpr uint8_t CC1101_READ_STATUS = 0xC0;
 
 #if PROFLAME2_RADIO_TRACE
-void RadioCC1101::trace_radio_registers(const char* stage, const char* request_id) {
+RadioTraceRecord RadioCC1101::capture_radio_registers() {
+  RadioTraceRecord record;
   if (!this->initialized_) {
-    return;
+    return record;
   }
-  const uint32_t sequence = ++this->radio_trace_sequence_;
+  record.sequence = ++this->radio_trace_sequence_;
+  record.uptime_ms = millis();
   const uint32_t started_us = micros();
-  const auto snapshot = capture_radio_trace(
+  record.snapshot = capture_radio_trace(
       [this](uint8_t address) { return this->read_register_(address); },
       [this](uint8_t address) { return this->read_status_register_(address); },
       [this](uint8_t address, uint8_t* data, size_t length) { this->read_burst_register_(address, data, length); });
-  const uint32_t read_us = micros() - started_us;
+  record.read_us = micros() - started_us;
+  return record;
+}
+
+void RadioCC1101::trace_radio_registers(const char* stage, const char* request_id) {
+  this->log_radio_registers(this->capture_radio_registers(), stage, request_id);
+}
+
+void RadioCC1101::log_radio_registers(const RadioTraceRecord& record, const char* stage, const char* request_id) {
+  if (record.sequence == 0) {
+    return;
+  }
+  const auto& snapshot = record.snapshot;
+  const uint32_t sequence = record.sequence;
   ESP_LOGI(TAG, "RFTRACE seq=%" PRIu32 " stage=%s request=%s uptime_ms=%" PRIu32 " read_us=%" PRIu32,
-           sequence, stage, request_id, millis(), read_us);
+           sequence, stage, request_id, record.uptime_ms, record.read_us);
   // Bounded lines fit ESPHome's default logger buffer; seq joins the records.
   for (size_t offset = 0; offset < snapshot.config.size(); offset += 8) {
     char values[8 * 3 + 1]{};
@@ -56,6 +71,7 @@ void RadioCC1101::trace_radio_registers(const char* stage, const char* request_i
            static_cast<unsigned>(snapshot.pa[2]), static_cast<unsigned>(snapshot.pa[3]),
            static_cast<unsigned>(snapshot.pa[4]), static_cast<unsigned>(snapshot.pa[5]),
            static_cast<unsigned>(snapshot.pa[6]), static_cast<unsigned>(snapshot.pa[7]));
+  ESP_LOGI(TAG, "RFTRACE seq=%" PRIu32 " end=1", sequence);
 }
 #endif
 

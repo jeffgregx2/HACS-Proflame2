@@ -17,6 +17,14 @@ struct RadioTraceSnapshot {
   std::array<uint8_t, 8> pa{};
 };
 
+// Value-owned records can cross the existing FreeRTOS completion queue safely.
+struct RadioTraceRecord {
+  RadioTraceSnapshot snapshot{};
+  uint32_t sequence{0};
+  uint32_t uptime_ms{0};
+  uint32_t read_us{0};
+};
+
 // Capture before logging so log transport does not separate individual reads.
 // Live status registers are sequential observations, not an atomic snapshot.
 template<typename ReadConfig, typename ReadStatus, typename ReadBurst>
