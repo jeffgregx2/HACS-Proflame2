@@ -726,6 +726,9 @@ protected:
   bool rx_active_listener_filter_configured_{false};
   bool rx_active_listener_use_rmt_{false};
   Proflame2DecodeProfile rx_active_listener_profile_{};
+  // Retain identity across HA's stop-RX / TX / resume-RX cycle. This is only
+  // retry invalidation history, never an active RX acceptance profile.
+  Proflame2DecodeProfile rx_active_listener_last_enabled_profile_{};
   ActiveListenerController active_listener_{};
 #if PROFLAME2_TEMBED_DEBUG
   std::string rx_fifo_profile_{"rfcat_fixed_none_rfcat_wide"};

@@ -665,17 +665,24 @@ void Proflame2TEmbedComponent::configure_active_listener(bool enabled, uint32_t 
 
   const bool profile_valid =
       serial_id > 0U && serial_id <= 0xFFFFFFU && c1 <= 0x0FU && d1 <= 0x0FU && c2 <= 0x0FU && d2 <= 0x0FU;
+  const auto& previous_profile = this->rx_active_listener_last_enabled_profile_;
+  const bool profile_changed = previous_profile.enabled != profile_valid || previous_profile.serial_id != serial_id ||
+                               previous_profile.c1 != c1 || previous_profile.d1 != d1 || previous_profile.c2 != c2 ||
+                               previous_profile.d2 != d2;
   const bool changed = !this->rx_active_listener_requested_ ||
                        this->rx_active_listener_filter_configured_ != profile_valid ||
                        this->rx_active_listener_profile_.serial_id != (serial_id & 0xFFFFFFU) ||
                        this->rx_active_listener_profile_.c1 != c1 || this->rx_active_listener_profile_.d1 != d1 ||
                        this->rx_active_listener_profile_.c2 != c2 || this->rx_active_listener_profile_.d2 != d2;
-  if (changed) {
+  // Resuming the same listener after HA TX must not cancel that TX's retry.
+  // The active profile is cleared on disable, so compare retained identity.
+  if (profile_changed) {
     this->cancel_delayed_retransmission_("listener_profile_changed");
   }
   this->rx_active_listener_requested_ = true;
   this->rx_active_listener_filter_configured_ = profile_valid;
   this->rx_active_listener_profile_ = Proflame2DecodeProfile{profile_valid, serial_id, c1, d1, c2, d2};
+  this->rx_active_listener_last_enabled_profile_ = this->rx_active_listener_profile_;
   if (changed) {
     ESP_LOGI(TAG,
              "RX active listener enabled profile=%s serial_id=%06" PRIx32 " c1=%" PRIu8 " d1=%" PRIu8 " c2=%" PRIu8

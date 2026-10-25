@@ -73,6 +73,11 @@ split between tracing ON and OFF. The trace switch is atomic across tasks.
   another retry. Cancellation invalidates an in-flight original completion too.
 - Accepted FIFO packets (including deduplicated repeats), changed HA display
   state, learning, listener disable/profile changes, and HA disconnect cancel it.
+  Restoring the **same** listener after HA's normal stop-RX / TX / resume-RX
+  cycle does not count as a profile change. Firmware retains the last enabled
+  profile only for retry invalidation, while still clearing the active RX
+  acceptance profile on disable. Changing the remote ID, C/D constants, or
+  strict/learning profile does invalidate the retry.
   RMT captures are validated by HA, so **any usable RMT capture conservatively
   cancels it before HA validation**. This favors avoiding stale commands over
   retrying through RF activity; a noise capture can suppress the optional retry.
@@ -186,6 +191,12 @@ compiled and executed for both frame lengths, queue-generation supersession,
 in-flight cancellation, toggle changes, failure, one-shot consumption, owned
 payload copies, and millisecond-clock rollover. Source-contract tests guard
 main-loop RX ordering and original HA telemetry isolation.
+A lifecycle regression harness compiles the actual production
+`configure_active_listener()` method with stubbed radio side effects, then
+executes disable / queue / complete / resume for both FIFO/RMT and both frame
+lengths. It also checks unchanged periodic refreshes, resume before completion,
+explicit stops, and genuine profile changes before/after completion. This
+reproduced the erroneous `listener_profile_changed` cancellation before the fix.
 `make firmware-unit-test` includes these checks in the existing ESPHome CI job.
 It enforces 100% host-side line coverage of `delayed_tx_retry.h`; this does not
 claim full component, FreeRTOS scheduling, or hardware-driver coverage.

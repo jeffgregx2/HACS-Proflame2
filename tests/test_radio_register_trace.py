@@ -12,6 +12,38 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = ROOT / "esphome/components/proflame2_tembed"
 
 
+def test_retry_survives_actual_listener_resume_method(tmp_path: Path) -> None:
+    """Execute the production listener entrypoint with mocked radio side effects."""
+    component = (COMPONENT / "proflame2_tembed.cpp").read_text()
+    start = component.index("void Proflame2TEmbedComponent::configure_active_listener(")
+    end = component.index("void Proflame2TEmbedComponent::set_fifo_capture_enabled(", start)
+    harness = (ROOT / "tests/cpp/test_retry_listener_lifecycle.cpp").read_text()
+    source = tmp_path / "retry_listener_lifecycle.cpp"
+    source.write_text(harness.replace("// INSERT_PRODUCTION_LISTENER_DEFINITION", component[start:end]))
+    compiler = shutil.which("g++")
+    assert compiler
+    executable = tmp_path / "retry_listener_lifecycle"
+    result = subprocess.run(
+        [
+            compiler,
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            f"-I{ROOT / 'tests/cpp/radio_trace_stubs'}",
+            f"-I{COMPONENT}",
+            str(source),
+            "-o",
+            str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("test_name", ["radio_readiness", "delayed_tx_retry"])
 def test_radio_readiness_and_retry_policy(tmp_path: Path, test_name: str) -> None:
     compiler = shutil.which("g++")
