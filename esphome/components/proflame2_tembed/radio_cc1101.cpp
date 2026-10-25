@@ -4,6 +4,12 @@
 
 #include "esphome/core/log.h"
 
+#if PROFLAME2_RADIO_TRACE
+#include <cstdio>
+#include "esphome/core/hal.h"
+#include "radio_trace.h"
+#endif
+
 namespace esphome {
 namespace proflame2_tembed {
 
@@ -16,6 +22,42 @@ static constexpr uint8_t CC1101_WRITE_BURST = 0x40;
 static constexpr uint8_t CC1101_READ_SINGLE = 0x80;
 static constexpr uint8_t CC1101_READ_BURST = 0xC0;
 static constexpr uint8_t CC1101_READ_STATUS = 0xC0;
+
+#if PROFLAME2_RADIO_TRACE
+void RadioCC1101::trace_radio_registers(const char* stage, const char* request_id) {
+  if (!this->initialized_) {
+    return;
+  }
+  const uint32_t sequence = ++this->radio_trace_sequence_;
+  const uint32_t started_us = micros();
+  const auto snapshot = capture_radio_trace(
+      [this](uint8_t address) { return this->read_register_(address); },
+      [this](uint8_t address) { return this->read_status_register_(address); },
+      [this](uint8_t address, uint8_t* data, size_t length) { this->read_burst_register_(address, data, length); });
+  const uint32_t read_us = micros() - started_us;
+  ESP_LOGI(TAG, "RFTRACE seq=%" PRIu32 " stage=%s request=%s uptime_ms=%" PRIu32 " read_us=%" PRIu32,
+           sequence, stage, request_id, millis(), read_us);
+  // Bounded lines fit ESPHome's default logger buffer; seq joins the records.
+  for (size_t offset = 0; offset < snapshot.config.size(); offset += 8) {
+    char values[8 * 3 + 1]{};
+    size_t used = 0;
+    for (size_t index = offset; index < snapshot.config.size() && index < offset + 8; index++) {
+      used += snprintf(values + used, sizeof(values) - used, "%02X ", static_cast<unsigned>(snapshot.config[index]));
+    }
+    ESP_LOGI(TAG, "RFTRACE seq=%" PRIu32 " config[%02X]=%s", sequence, static_cast<unsigned>(offset), values);
+  }
+  for (size_t index = 0; index < snapshot.status.size(); index++) {
+    ESP_LOGI(TAG, "RFTRACE seq=%" PRIu32 " status[%02X]=%02X", sequence,
+             static_cast<unsigned>(RadioTraceSnapshot::STATUS_ADDRESSES[index]),
+             static_cast<unsigned>(snapshot.status[index]));
+  }
+  ESP_LOGI(TAG, "RFTRACE seq=%" PRIu32 " pa=%02X %02X %02X %02X %02X %02X %02X %02X",
+           sequence, static_cast<unsigned>(snapshot.pa[0]), static_cast<unsigned>(snapshot.pa[1]),
+           static_cast<unsigned>(snapshot.pa[2]), static_cast<unsigned>(snapshot.pa[3]),
+           static_cast<unsigned>(snapshot.pa[4]), static_cast<unsigned>(snapshot.pa[5]),
+           static_cast<unsigned>(snapshot.pa[6]), static_cast<unsigned>(snapshot.pa[7]));
+}
+#endif
 
 void RadioCC1101::log_runtime_register_snapshot(const char* stage) {
   const char* resolved_stage = stage != nullptr ? stage : "runtime";

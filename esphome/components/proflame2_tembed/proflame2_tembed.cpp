@@ -403,6 +403,7 @@ static void radio_runtime_task_entry_(void* context) {
       event.cc1101_partnum = runtime->owner->read_partnum();
       event.cc1101_version = runtime->owner->read_version();
       event.marcstate_before_tx = runtime->owner->read_marcstate();
+      runtime->owner->trace_radio_registers("tx_prepared", command.request_id);
       if (command.kind == RadioRuntimeCommandKind::TX) {
         event.ok = runtime->owner->transmit_async_ook(
             command.payload.data(), command.payload_length, command.payload_bit_length, command.repeat_count,
@@ -418,6 +419,7 @@ static void radio_runtime_task_entry_(void* context) {
         radio_error = "unsupported_command";
       }
       event.marcstate_after_tx = runtime->owner->read_marcstate();
+      runtime->owner->trace_radio_registers("tx_complete", command.request_id);
       if (!event.ok) {
         copy_string_(event.radio_error, radio_error.empty() ? std::string("radio_tx_failed") : radio_error);
         runtime->state = RadioRuntimeState::ERROR;
@@ -1004,6 +1006,7 @@ void Proflame2TEmbedComponent::set_rmt_pulse_capture_enabled_(bool value) {
   }
   if (!value) {
     this->rx_rmt_pulse_capture_enabled_ = false;
+    this->trace_radio_registers("rmt_rx_stopping", this->last_request_id_.c_str());
     this->rx_rmt_pulse_discard_log_initialized_ = false;
     this->rx_rmt_pulse_discard_suppressed_count_ = 0;
     this->rmt_ook_receiver_.end();
@@ -1015,6 +1018,7 @@ void Proflame2TEmbedComponent::set_rmt_pulse_capture_enabled_(bool value) {
     std::string error;
     this->apply_async_ook_registers_(error, false);
     ESP_LOGI(TAG, "RX RMT pulse capture disabled");
+    this->trace_radio_registers("rmt_rx_stopped_tx_config", this->last_request_id_.c_str());
     this->refresh_status_text_();
     return;
   }
@@ -1048,6 +1052,7 @@ void Proflame2TEmbedComponent::set_rmt_pulse_capture_enabled_(bool value) {
   }
   this->strobe_(CC1101_SRX);
   this->rx_rmt_pulse_capture_enabled_ = true;
+  this->trace_radio_registers("rmt_rx_running", this->last_request_id_.c_str());
   this->rx_rmt_pulse_discard_log_initialized_ = false;
   this->rx_rmt_pulse_discard_suppressed_count_ = 0;
   ESP_LOGI(TAG, "RX RMT pulse capture enabled gpio=%d resolution_hz=%" PRIu32 " idle_end_ms=%u",
@@ -2977,6 +2982,10 @@ bool Proflame2TEmbedComponent::initialize_radio_(std::string* error) {
   } else if (ok) {
     this->cc1101_partnum_ = format_hex_byte_(this->read_partnum());
     this->cc1101_version_ = format_hex_byte_(this->read_version());
+#if PROFLAME2_RADIO_TRACE
+    ESP_LOGI(TAG, "RFTRACE diagnostic build base_version=%s schema=1", this->firmware_version_.c_str());
+#endif
+    this->trace_radio_registers("radio_initialized", "-");
     this->publish_telemetry_();
   }
   return ok;

@@ -55,6 +55,8 @@ i2c:
   scan: true
 
 esphome:
+  build_flags:
+    - -DPROFLAME2_RADIO_TRACE=1
   on_boot:
     priority: -100
     then:
