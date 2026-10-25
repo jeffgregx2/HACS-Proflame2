@@ -403,7 +403,7 @@ switch:
     id: proflame2_delayed_retransmission
     name: Delayed Retransmission
     entity_category: config
-    restore_mode: ALWAYS_OFF
+    restore_mode: ALWAYS_ON
     lambda: |-
       return id(proflame2_radio).is_delayed_retransmission_enabled();
     turn_on_action:

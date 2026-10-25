@@ -203,7 +203,9 @@ def test_retry_runtime_wiring_keeps_rx_and_ha_authority() -> None:
     assert worker.index("event.finished_ms = millis()") < worker.index("event.marcstate_after_tx =")
     package = (ROOT / "esphome/packages/proflame2_tembed_base.yaml").read_text()
     switch = package.split("id: proflame2_delayed_retransmission", 1)[1].split("  - platform:", 1)[0]
-    assert "restore_mode: ALWAYS_OFF" in switch
+    assert "restore_mode: ALWAYS_ON" in switch
+    assert "set_delayed_retransmission_enabled(true)" in switch
+    assert "set_delayed_retransmission_enabled(false)" in switch
     assert 'proflame2_radio_ready_timeout_us: "10000"' in package
 
 

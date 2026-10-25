@@ -59,7 +59,9 @@ Neither setting persists over a reboot: each boot restores trace OFF / delay 20 
 Change controls only while the radio is idle so a capture is not intentionally
 split between tracing ON and OFF. The trace switch is atomic across tasks.
 
-- **Delayed Retransmission** defaults to OFF and resets OFF at reboot. When
+- **Delayed Retransmission** defaults to ON and resets ON at every reboot,
+  including after it was manually disabled. It can still be turned OFF for
+  controlled tests. A Wi-Fi/API reconnect alone does not reset the switch. When
   enabled, a successful normal command can send one extra full burst two seconds
   after the worker finishes the original burst, subject to main-loop scheduling.
   This uses the exact cached payload, frame count, timing profile, and settling
@@ -293,8 +295,9 @@ The display previously latched `fault` after `tx_busy`, leaving the badge at
 `ERR` even after a subsequent successful transmission. Status now derives from
 current initialization/runtime/result state instead of its previous text.
 Successful recovery clears the old fault; actual initialization and TX failures
-remain visible. Trace logging remains OFF, settling remains 20 ms, and delayed
-retransmission remains OFF by default.
+remain visible. Trace logging remains OFF and settling remains 20 ms. Delayed
+retransmission now defaults to ON at every boot so a reboot does not silently
+remove the extra burst during reliability testing.
 
 The host arbitration harness executes the production API admission, queueing,
 retry dispatch, completion, and status/badge methods for legacy and extended
