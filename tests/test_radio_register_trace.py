@@ -12,6 +12,77 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = ROOT / "esphome/components/proflame2_tembed"
 
 
+def test_actual_retry_tx_queue_and_completion_arbitration(tmp_path: Path) -> None:
+    """Execute production TX admission/completion using deterministic RTOS queues."""
+    component = (COMPONENT / "proflame2_tembed.cpp").read_text()
+
+    def section(start: str, end: str) -> str:
+        begin = component.index(start)
+        return component[begin : component.index(end, begin)]
+
+    types = section("template <size_t N> static void copy_string_", "static void radio_runtime_task_entry_")
+    methods = "\n".join(
+        [
+            section(
+                "void Proflame2TEmbedComponent::refresh_status_text_()",
+                "void Proflame2TEmbedComponent::publish_telemetry_()",
+            ),
+            section(
+                "std::string Proflame2TEmbedComponent::get_display_mode_badge_text() const",
+                "std::string Proflame2TEmbedComponent::get_display_field_text_",
+            ),
+            section("bool Proflame2TEmbedComponent::tx(", "bool Proflame2TEmbedComponent::cc1101_test_pattern"),
+            section(
+                "bool Proflame2TEmbedComponent::enqueue_tx_(", "bool Proflame2TEmbedComponent::enqueue_test_pattern_"
+            ),
+            section(
+                "void Proflame2TEmbedComponent::cancel_delayed_retransmission_(",
+                "void Proflame2TEmbedComponent::log_rf_path_for_tx_",
+            ),
+            section(
+                "void Proflame2TEmbedComponent::consume_radio_runtime_events_()",
+                "bool Proflame2TEmbedComponent::initialize_radio_",
+            ),
+        ]
+    )
+    harness = (ROOT / "tests/cpp/test_retry_tx_arbitration.cpp").read_text()
+    source = tmp_path / "retry_tx_arbitration.cpp"
+    source.write_text(
+        harness.replace("// INSERT_PRODUCTION_RUNTIME_TYPES", types).replace("// INSERT_PRODUCTION_METHODS", methods)
+    )
+    compiler = shutil.which("g++")
+    assert compiler
+    executable = tmp_path / "retry_tx_arbitration"
+    result = subprocess.run(
+        [
+            compiler,
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DPROFLAME2_RADIO_TRACE=1",
+            "-DPROFLAME2_TX_CLEAN_MODE=0",
+            f"-I{ROOT / 'tests/cpp/radio_trace_stubs'}",
+            f"-I{COMPONENT}",
+            str(source),
+            str(COMPONENT / "tx_controller.cpp"),
+            str(COMPONENT / "tx_payload_layout.cpp"),
+            "-o",
+            str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    for (payload, bits), (new_payload, _) in zip(
+        _native_tx_payloads(), _native_tx_payloads(alternate=True), strict=True
+    ):
+        result = subprocess.run(
+            [str(executable), payload.hex(), str(bits), new_payload.hex()], capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+
+
 def test_retry_survives_actual_listener_resume_method(tmp_path: Path) -> None:
     """Execute the production listener entrypoint with mocked radio side effects."""
     component = (COMPONENT / "proflame2_tembed.cpp").read_text()
@@ -200,9 +271,6 @@ def test_worker_snapshots_are_deferred_through_completion_on_success_and_failure
 
 
 def test_native_tx_settling_legacy_and_extended_real_scheduler(tmp_path: Path) -> None:
-    from custom_components.proflame2.protocol.packet import ProflameFrame
-    from custom_components.proflame2.rf.waveform import frame_to_air_bytes
-
     executable = tmp_path / "native_tx_settling"
     compiler = shutil.which("g++")
     assert compiler
@@ -226,8 +294,21 @@ def test_native_tx_settling_legacy_and_extended_real_scheduler(tmp_path: Path) -
         text=True,
     )
     assert result.returncode == 0, result.stderr
+    for payload, bits in _native_tx_payloads():
+        result = subprocess.run(
+            [str(executable), payload.hex(), str(bits)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+
+def _native_tx_payloads(*, alternate: bool = False) -> list[tuple[bytes, int]]:
+    from custom_components.proflame2.protocol.packet import ProflameFrame
+    from custom_components.proflame2.rf.waveform import frame_to_air_bytes
+
     fixture = json.loads((ROOT / "tests/fixtures/issue_26_mendota_extended_capture.json").read_text())
-    words = fixture["captures"][0]["words"]
+    words = fixture["captures"][2 if alternate else 0]["words"]
     extended = ProflameFrame(
         serial_id=(words[0] << 16) | (words[1] << 8) | words[2],
         cmd1=words[3],
@@ -236,14 +317,10 @@ def test_native_tx_settling_legacy_and_extended_real_scheduler(tmp_path: Path) -
         err2=words[6],
         extension_words=tuple(words[7:]),
     )
-    legacy = ProflameFrame(serial_id=0x3B3F02, cmd1=0x61, cmd2=1, err1=0xD0, err2=0x39)
-    for frame, bits in ((legacy, 182), (extended, 260)):
-        result = subprocess.run(
-            [str(executable), frame_to_air_bytes(frame).hex(), str(bits)],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, result.stderr
+    legacy = ProflameFrame(
+        serial_id=0x3B3F02, cmd1=0x01 if alternate else 0x61, cmd2=1, err1=0x76 if alternate else 0xD0, err2=0x39
+    )
+    return [(frame_to_air_bytes(legacy), 182), (frame_to_air_bytes(extended), 260)]
 
 
 def test_runtime_controls_defaults_and_queued_delay_are_explicit() -> None:

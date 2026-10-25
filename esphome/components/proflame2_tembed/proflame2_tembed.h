@@ -524,6 +524,7 @@ protected:
   void process_pending_operation_();
   void consume_radio_runtime_events_();
   void process_delayed_retransmission_();
+  void dispatch_deferred_tx_();
   void cancel_delayed_retransmission_(const char* reason);
   void pause_rx_for_tx_();
   void drain_deferred_debug_trace_();

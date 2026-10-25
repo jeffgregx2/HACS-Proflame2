@@ -371,6 +371,12 @@ struct Proflame2TEmbedComponent::RadioRuntime {
   RadioRuntimeCommand command_buffer{};
   RadioRuntimeEvent event_buffer{};
   DelayedTxRetry<RadioRuntimeCommand> retry;
+  // Main-task-owned arbitration state. The worker must not dequeue a waiting
+  // user command until completion handling has released/restored radio IO.
+  bool active_is_retransmission{false};
+  bool deferred_tx_pending{false};
+  RadioRuntimeCommand deferred_tx{};
+  PendingDisplayIntent normal_display_intent{};
 };
 
 static void radio_runtime_task_entry_(void* context) {
@@ -1698,8 +1704,7 @@ void Proflame2TEmbedComponent::update_rx_runtime_display_state_() {}
 
 void Proflame2TEmbedComponent::refresh_status_text_() {
   if (this->radio_runtime_init_state_ == RadioRuntimeInitState::FAILED ||
-      this->radio_runtime_state_ == RadioRuntimeState::ERROR || this->last_tx_result_.rfind("error:", 0) == 0 ||
-      this->status_text_ == "fault") {
+      this->radio_runtime_state_ == RadioRuntimeState::ERROR || this->last_tx_result_.rfind("error:", 0) == 0) {
     this->status_text_ = "fault";
   } else if (this->tx_in_progress_ || this->radio_runtime_state_ == RadioRuntimeState::TX_ACTIVE) {
     this->status_text_ = "tx";
@@ -2468,6 +2473,9 @@ bool Proflame2TEmbedComponent::tx(const std::string& request_id, const std::stri
                                   int intended_power, int intended_flame, int intended_fan, int intended_light,
                                   int intended_pilot, int intended_thermostat, int intended_front, int intended_aux,
                                   const std::string& intended_action_label, const std::string& fireplace_name) {
+  // A higher-priority worker can finish before the main task handles its event.
+  // Consume it before replacing metadata/display intent or checking busy state.
+  this->consume_radio_runtime_events_();
   this->last_request_id_ = request_id;
   if (!fireplace_name.empty()) {
     this->display_.fireplace_name = fireplace_name;
@@ -2582,6 +2590,7 @@ bool Proflame2TEmbedComponent::tx(const std::string& request_id, const std::stri
 bool Proflame2TEmbedComponent::cc1101_test_pattern(const std::string& request_id, TestPatternMode mode,
                                                    uint32_t duration_ms, uint32_t period_us,
                                                    const std::string& status_text) {
+  this->consume_radio_runtime_events_();
   this->last_request_id_ = request_id;
   this->last_request_repeat_count_ = 0;
   this->last_tx_path_ = "cc1101_async_test_pattern";
@@ -2713,7 +2722,9 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
     this->publish_telemetry_();
     return false;
   }
-  if (this->tx_in_progress_) {
+  const bool defer_until_retry_complete = this->tx_in_progress_ && this->radio_runtime_->active_is_retransmission &&
+                                          !this->radio_runtime_->deferred_tx_pending;
+  if (this->tx_in_progress_ && !defer_until_retry_complete) {
     this->tx_failure_count_++;
     this->last_error_ = "tx_busy";
     this->last_tx_result_ = "error:tx_busy";
@@ -2722,7 +2733,9 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
     this->publish_telemetry_();
     return false;
   }
-  this->pause_rx_for_tx_();
+  if (!defer_until_retry_complete) {
+    this->pause_rx_for_tx_();
+  }
 
   RadioRuntimeCommand command;
   command.kind = RadioRuntimeCommandKind::TX;
@@ -2756,7 +2769,7 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
   this->update_display_runtime_state_("Sending...", !status_text.empty() ? status_text : std::string("TX queued"), 0U);
   this->mark_display_activity_(this->display_wake_on_activity_);
 
-  if (xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE) {
+  if (!defer_until_retry_complete && xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE) {
     this->display_.active_operation = false;
     this->display_.active_operation_expires_millis = 0U;
     this->display_.active_operation_title.clear();
@@ -2770,6 +2783,14 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
     this->publish_telemetry_();
     return false;
   }
+  if (defer_until_retry_complete) {
+    this->radio_runtime_->deferred_tx = command;
+    this->radio_runtime_->deferred_tx_pending = true;
+    ESP_LOGI(TAG, "TX request waiting for active retransmission request_id=%s", request_id.c_str());
+  } else {
+    this->radio_runtime_->active_is_retransmission = false;
+  }
+  this->radio_runtime_->normal_display_intent = this->pending_display_intent_;
   if (this->radio_runtime_->retry.pending()) {
     ESP_LOGI(TAG, "TX retransmission cancelled reason=new_tx_queued");
   }
@@ -2847,6 +2868,7 @@ bool Proflame2TEmbedComponent::enqueue_test_pattern_(const std::string& request_
     return false;
   }
   this->cancel_delayed_retransmission_("test_pattern_queued");
+  this->radio_runtime_->active_is_retransmission = false;
   this->tx_in_progress_ = true;
   this->radio_runtime_state_ = RadioRuntimeState::TX_ACTIVE;
   this->refresh_status_text_();
@@ -2899,7 +2921,7 @@ void Proflame2TEmbedComponent::pause_rx_for_tx_() {
 }
 
 void Proflame2TEmbedComponent::process_delayed_retransmission_() {
-  if (this->radio_runtime_ == nullptr || this->tx_in_progress_) {
+  if (this->radio_runtime_ == nullptr || this->tx_in_progress_ || this->radio_runtime_->deferred_tx_pending) {
     return;
   }
   if (!this->display_.api_connected || this->display_.learn_active) {
@@ -2918,9 +2940,52 @@ void Proflame2TEmbedComponent::process_delayed_retransmission_() {
     return;
   }
   this->tx_in_progress_ = true;
+  this->radio_runtime_->active_is_retransmission = true;
   this->radio_runtime_state_ = RadioRuntimeState::TX_ACTIVE;
   ESP_LOGI(TAG, "TX retransmission queued original_request_id=%s repeat_count=%u payload_bits=%" PRIu32,
            command.request_id, static_cast<unsigned>(command.repeat_count), command.payload_bit_length);
+}
+
+void Proflame2TEmbedComponent::dispatch_deferred_tx_() {
+  if (!this->radio_runtime_->deferred_tx_pending) {
+    return;
+  }
+  const RadioRuntimeCommand command = this->radio_runtime_->deferred_tx;
+  this->radio_runtime_->deferred_tx_pending = false;
+  // A later rejected request may have published its own error. Restore the
+  // accepted waiting command's identity without letting the old retry confirm it.
+  this->last_request_id_ = string_from_buffer_(command.request_id);
+  this->last_payload_hex_ = string_from_buffer_(command.air_payload_hex);
+  this->last_payload_length_ = command.payload_length;
+  this->last_payload_bit_length_ = command.ha_payload_bit_length;
+  this->last_request_repeat_count_ = command.repeat_count;
+  this->last_tx_path_ = "cc1101_async_gdo0_msb_first";
+  this->last_tx_elapsed_ms_ = 0;
+  this->pending_display_intent_ = this->radio_runtime_->normal_display_intent;
+  this->pause_rx_for_tx_();
+  if (xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE) {
+    this->radio_runtime_->retry.cancel();
+    this->radio_runtime_->normal_display_intent = PendingDisplayIntent{};
+    this->clear_pending_display_intent_();
+    this->tx_failure_count_++;
+    this->last_error_ = "deferred_tx_queue_full";
+    this->last_tx_result_ = "error:deferred_tx_queue_full";
+    this->update_display_runtime_state_("Send failed", this->last_error_, 3000U);
+    ESP_LOGW(TAG, "TX deferred request failed request_id=%s reason=queue_full", command.request_id);
+    this->restore_rx_after_tx_if_needed_();
+    this->refresh_status_text_();
+    this->publish_telemetry_();
+    return;
+  }
+  this->tx_in_progress_ = true;
+  this->radio_runtime_->active_is_retransmission = false;
+  this->radio_runtime_state_ = RadioRuntimeState::TX_ACTIVE;
+  this->last_error_.clear();
+  this->last_tx_result_ = "queued";
+  this->update_display_runtime_state_("Sending...", string_from_buffer_(command.status_text), 0U);
+  ESP_LOGI(TAG, "TX deferred request dispatched request_id=%s", command.request_id);
+  this->refresh_status_text_();
+  this->publish_telemetry_();
 }
 
 void Proflame2TEmbedComponent::log_rf_path_for_tx_(uint32_t payload_length, uint32_t effective_payload_bit_length,
@@ -3016,6 +3081,7 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
     return;
   }
   this->tx_in_progress_ = false;
+  this->radio_runtime_->active_is_retransmission = false;
   this->radio_runtime_state_ = result.ok ? RadioRuntimeState::IDLE : RadioRuntimeState::ERROR;
   // The radio worker has completed. Restore the selected listener before any
   // completion UI/logging exposes the controller as ready for remote input.
@@ -3034,7 +3100,20 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
     ESP_LOGI(TAG, "TX retransmission result status=%s original_request_id=%s elapsed_ms=%" PRIu32 " error=%s",
              result.ok ? "ok" : "failed", result.request_id, result.elapsed_ms, result.radio_error);
     this->refresh_status_text_();
+    this->dispatch_deferred_tx_();
     return;
+  }
+  // Completion belongs to the accepted command, not any later rejected call.
+  this->last_request_id_ = string_from_buffer_(result.request_id);
+  this->last_payload_hex_ = string_from_buffer_(result.air_payload_hex);
+  this->last_payload_length_ = result.payload_length;
+  this->last_payload_bit_length_ = result.ha_payload_bit_length;
+  this->last_request_repeat_count_ = result.repeat_count;
+  this->last_tx_path_ = result.kind == RadioRuntimeEventKind::TEST_PATTERN_COMPLETE ? "cc1101_async_test_pattern"
+                                                                                    : "cc1101_async_gdo0_msb_first";
+  if (result.kind == RadioRuntimeEventKind::TX_COMPLETE) {
+    this->pending_display_intent_ = this->radio_runtime_->normal_display_intent;
+    this->radio_runtime_->normal_display_intent = PendingDisplayIntent{};
   }
   if (this->radio_runtime_->retry.complete(result.retry_generation,
                                            result.ok && result.kind == RadioRuntimeEventKind::TX_COMPLETE, false,

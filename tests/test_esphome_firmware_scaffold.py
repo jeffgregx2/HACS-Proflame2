@@ -697,7 +697,7 @@ def test_rmt_rx_failure_paths_restore_or_report_errors() -> None:
     component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
     receiver = _read("components/proflame2_tembed/rmt_ook_receiver.cpp")
 
-    queue_failure_start = component.index("if (xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE)")
+    queue_failure_start = component.index("if (!defer_until_retry_complete && xQueueSend(")
     queue_failure_end = component.index("  this->tx_in_progress_ = true;", queue_failure_start)
     queue_failure_block = component[queue_failure_start:queue_failure_end]
     assert "this->restore_rx_after_tx_if_needed_();" in queue_failure_block

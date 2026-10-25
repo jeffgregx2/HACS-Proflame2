@@ -267,6 +267,47 @@ necessarily identify why RX was enabled or disabled.
 Do not infer fireplace acceptance from TX success telemetry, an SDR decoder,
 or another LilyGO's mirrored state.
 
+## Command Arbitration and Status Recovery
+
+The fireplace is not known to transmit acknowledgements. Received RF activity
+must not be described as a fireplace acknowledgement; it can come from a native
+remote or another controller. Software TX completion still does not prove that
+the fireplace accepted a command.
+
+Fast-cycle testing exposed `tx_busy` rejections while a delayed retransmission
+was completing. The API now consumes an available worker completion before
+checking busy state or replacing request metadata. If the retransmission is
+actually still running, one new user command can wait outside the worker queue.
+Completion handling restores radio ownership before dispatching that command.
+The in-flight RF burst is never interrupted. A second waiting command is still
+rejected rather than creating an unbounded backlog. Normal user transmissions
+do not gain an additional waiting slot.
+
+Accepted commands retain their own payload, settings, request identity, and
+display intent even if a later request is rejected. An older retransmission
+cannot confirm or apply the waiting command. Logs distinguish requests waiting
+for an active retransmission, dispatched requests, and deferred queue failures.
+Disabling optional retries does not discard an already accepted user command.
+
+The display previously latched `fault` after `tx_busy`, leaving the badge at
+`ERR` even after a subsequent successful transmission. Status now derives from
+current initialization/runtime/result state instead of its previous text.
+Successful recovery clears the old fault; actual initialization and TX failures
+remain visible. Trace logging remains OFF, settling remains 20 ms, and delayed
+retransmission remains OFF by default.
+
+The host arbitration harness executes the production API admission, queueing,
+retry dispatch, completion, and status/badge methods for legacy and extended
+payloads. Simulated queues cover pending completions, active retries, a full
+waiting slot, successful/failed retry completion, failed deferred dispatch,
+request/display ownership, retry disable, and fault recovery. These tests do
+not simulate FreeRTOS scheduling, radio electrical timing, or RF acceptance.
+
+Arbitration/status validation: 1,090 tests passed, with the existing optional
+external-source check deselected. All 12 firmware host checks, Ruff, Black,
+whitespace checks, and ESPHome 2026.8.2 source generation passed. An ESP32 build
+and testing against the fireplace remain required on the Builder/device.
+
 ## Limits
 
 Reads and logging add latency outside the waveform loop and change the binary
