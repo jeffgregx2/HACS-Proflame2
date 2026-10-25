@@ -33,6 +33,7 @@
 #include "rmt_ook_receiver.h"
 #include "telemetry_publisher.h"
 #include "tx_controller.h"
+#include "wifi_diagnostics.h"
 
 namespace esphome {
 namespace sensor {
@@ -412,6 +413,9 @@ public:
     this->mark_display_dirty_();
   }
   void set_wifi_connected(bool value);
+  const WifiDiagnostics& get_wifi_diagnostics() const {
+    return this->wifi_diagnostics_;
+  }
   void set_api_connected(bool value);
   void handle_api_client_connected(const std::string& client_info);
   void handle_api_client_disconnected(const std::string& client_info);
@@ -605,6 +609,7 @@ protected:
   std::string firmware_version_{"unknown"};
   uint32_t firmware_version_api_last_log_ms_{0};
   bool firmware_version_api_log_initialized_{false};
+  WifiDiagnostics wifi_diagnostics_{};
   AsyncTxDataPin async_tx_data_pin_{AsyncTxDataPin::GDO0};
 
   GPIOPin* board_power_enable_pin_{nullptr};

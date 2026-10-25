@@ -100,6 +100,47 @@ wifi:
       - lambda: |-
           id(proflame2_radio).set_wifi_connected(false);
 
+debug:
+  update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    bssid:
+      id: proflame2_wifi_bssid
+      name: Proflame2 Wi-Fi Access Point
+      entity_category: diagnostic
+  - platform: debug
+    reset_reason:
+      id: proflame2_reset_reason
+      name: Proflame2 Reset Reason
+      entity_category: diagnostic
+
+script:
+  - id: proflame2_log_connection_summary
+    mode: restart
+    then:
+      # Allow API log subscribers to attach; coalesce simultaneous clients.
+      - delay: 1s
+      - component.update: proflame2_uptime
+      - component.update: proflame2_wifi_rssi
+      - component.update: proflame2_wifi_disconnect_count
+      - component.update: proflame2_wifi_reconnect_count
+      - component.update: proflame2_wifi_last_outage
+      - lambda: |-
+          const auto &wifi = id(proflame2_radio).get_wifi_diagnostics();
+          ESP_LOGI("proflame2.connection",
+                   "WiFi connected=%s disconnects=%u reconnects=%u last_outage_ms=%u uptime_s=%.0f bssid=%s rssi_dbm=%.0f reset_reason='%s' retransmission=%s pre_tx_settle_ms=%.1f",
+                   wifi.connected() ? "YES" : "NO",
+                   static_cast<unsigned>(wifi.disconnect_count()),
+                   static_cast<unsigned>(wifi.reconnect_count()),
+                   static_cast<unsigned>(wifi.last_outage_ms()),
+                   id(proflame2_uptime).state,
+                   id(proflame2_wifi_bssid).state.c_str(),
+                   id(proflame2_wifi_rssi).state,
+                   id(proflame2_reset_reason).state.c_str(),
+                   id(proflame2_radio).is_delayed_retransmission_enabled() ? "ON" : "OFF",
+                   id(proflame2_radio).get_pre_tx_settle_delay_us() / 1000.0f);
+
 spi:
   id: proflame2_spi_bus
   clk_pin: GPIO11
@@ -206,6 +247,7 @@ api:
     then:
       - lambda: |-
           id(proflame2_radio).handle_api_client_connected(client_info);
+      - script.execute: proflame2_log_connection_summary
   on_client_disconnected:
     then:
       - lambda: |-
@@ -358,12 +400,44 @@ api:
 sensor:
   - platform: wifi_signal
     id: proflame2_wifi_rssi
-    internal: true
+    name: Proflame2 Wi-Fi Signal
+    entity_category: diagnostic
     update_interval: 10s
     on_value:
       then:
         - lambda: |-
             id(proflame2_radio).set_wifi_rssi_dbm(x);
+  - platform: uptime
+    id: proflame2_uptime
+    name: Proflame2 Uptime
+    entity_category: diagnostic
+    update_interval: 10s
+  - platform: template
+    id: proflame2_wifi_disconnect_count
+    name: Proflame2 Wi-Fi Disconnect Count
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+    update_interval: 10s
+    lambda: return id(proflame2_radio).get_wifi_diagnostics().disconnect_count();
+  - platform: template
+    id: proflame2_wifi_reconnect_count
+    name: Proflame2 Wi-Fi Reconnect Count
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+    update_interval: 10s
+    lambda: return id(proflame2_radio).get_wifi_diagnostics().reconnect_count();
+  - platform: template
+    id: proflame2_wifi_last_outage
+    name: Proflame2 Last Wi-Fi Outage Duration
+    entity_category: diagnostic
+    unit_of_measurement: ms
+    device_class: duration
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return id(proflame2_radio).get_wifi_diagnostics().last_outage_ms();
 
 number:
   - platform: template

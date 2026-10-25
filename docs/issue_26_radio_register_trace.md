@@ -256,6 +256,58 @@ necessarily identify why RX was enabled or disabled.
 
 ## Collection
 
+### Connection Evidence
+
+The base package exposes these HA diagnostic entities without the optional
+debug package or DEBUG-level logging:
+
+- **Proflame2 Wi-Fi Disconnect Count** and **Wi-Fi Reconnect Count**, since boot.
+  Initial association and duplicate connection notifications do not increment
+  the counters. Failed connection attempts before the first connection are not
+  counted as drops.
+- **Proflame2 Last Wi-Fi Outage Duration**, in milliseconds, for the most recent
+  completed disconnect/reconnect pair. Zero means no completed outage this boot.
+- **Proflame2 Wi-Fi Access Point**, the BSSID reported by ESPHome's Wi-Fi info
+  component, and **Proflame2 Wi-Fi Signal**, in dBm.
+- **Proflame2 Uptime**, in seconds, and **Proflame2 Reset Reason**, using ESPHome's
+  built-in uptime and debug text-sensor components.
+
+Counters and outage timing are kept in RAM, without flash writes, and continue
+while HA is unreachable. They reset on reboot, not on API reconnection. Numeric
+entities update every ten seconds and are refreshed for the API log summary.
+Wi-Fi counters measure ESPHome connection transitions, not every low-level radio
+event; BSSID changes can help identify AP changes without proving a disconnect.
+The reset-reason sensor records the hardware/framework-reported reason, which
+may not identify the underlying cause of a software reset.
+
+Each API client connection, including a log viewer, schedules one INFO summary
+after one second so log subscription can complete. Restart-mode scheduling
+coalesces simultaneous clients. It does not block TX or perform CC1101 register
+reads. The line includes Wi-Fi connection state, both counters, last outage,
+uptime, BSSID, RSSI, reset reason, delayed retransmission state, and settling delay:
+
+```text
+WiFi connected=YES disconnects=1 reconnects=1 last_outage_ms=3500 uptime_s=125 bssid=AA:BB:CC:DD:EE:FF rssi_dbm=-47 reset_reason='Software Reset CPU' retransmission=ON pre_tx_settle_ms=20.0
+```
+
+An API-only reconnect leaves the Wi-Fi counters and uptime unchanged except for
+elapsed time. A Wi-Fi outage increments the counters without resetting uptime;
+a reboot resets uptime and counters. Compare these values rather than inferring
+a reboot solely from a version banner or assuming every disconnect is roaming.
+
+Host tests execute the production Wi-Fi callback and the actual YAML summary
+lambda. They cover initial association, duplicate callbacks, repeated outages,
+millisecond timer wrap, reset state, display signal clearing, and summaries with
+retransmission ON/OFF. The counter helper has a 100% host-side line-coverage gate.
+This does not emulate the ESP32 Wi-Fi stack or prove the cause of a reset.
+
+Connection-diagnostic validation: 1,091 tests and all 13 firmware host checks
+passed, with one existing optional external-source check deselected. Ruff,
+Black, whitespace checks, and ESPHome 2026.8.2 source generation passed. Full
+ESP32 compilation and reconnect/reset behavior still require Builder/device tests.
+
+### Capture Steps
+
 1. Start continuous ESPHome API logging before rebooting.
 2. Reboot and retain the initialization and RX snapshots.
 3. Send spaced light and fan changes through HA, recording the time, requested

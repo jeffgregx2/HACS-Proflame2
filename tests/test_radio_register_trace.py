@@ -7,9 +7,87 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = ROOT / "esphome/components/proflame2_tembed"
+
+
+def test_wifi_diagnostics_and_api_summary(tmp_path: Path) -> None:
+    component = (COMPONENT / "proflame2_tembed.cpp").read_text()
+    method = component.split("void Proflame2TEmbedComponent::set_wifi_connected(", 1)[1].split(
+        "void Proflame2TEmbedComponent::set_api_connected", 1
+    )[0]
+    package = (ROOT / "esphome/packages/proflame2_tembed_base.yaml").read_text()
+    script = yaml.safe_load("script:" + package.split("\nscript:", 1)[1].split("\nspi:", 1)[0])["script"][0]
+    assert script["id"] == "proflame2_log_connection_summary"
+    assert script["mode"] == "restart"
+    assert script["then"][0] == {"delay": "1s"}
+    updates = [step["component.update"] for step in script["then"] if "component.update" in step]
+    assert set(updates) == {
+        "proflame2_uptime",
+        "proflame2_wifi_rssi",
+        "proflame2_wifi_disconnect_count",
+        "proflame2_wifi_reconnect_count",
+        "proflame2_wifi_last_outage",
+    }
+    summary = script["then"][-1]["lambda"]
+    assert summary.count("ESP_LOGI(") == 1
+    api_connect = package.split("  on_client_connected:", 1)[1].split("  on_client_disconnected:", 1)[0]
+    assert "script.execute: proflame2_log_connection_summary" in api_connect
+    sensors = yaml.safe_load("sensor:" + package.split("\nsensor:", 1)[1].split("\nnumber:", 1)[0])["sensor"]
+    assert len(sensors) == 5
+    assert all(sensor["entity_category"] == "diagnostic" for sensor in sensors)
+    assert all(sensor["update_interval"] == "10s" for sensor in sensors)
+    text = yaml.safe_load("text_sensor:" + package.split("\ntext_sensor:", 1)[1].split("\nscript:", 1)[0])[
+        "text_sensor"
+    ]
+    assert text[0]["bssid"]["entity_category"] == "diagnostic"
+    assert text[1]["reset_reason"]["entity_category"] == "diagnostic"
+    harness = (ROOT / "tests/cpp/test_wifi_diagnostics.cpp").read_text()
+    source = tmp_path / "wifi_diagnostics.cpp"
+    source.write_text(
+        harness.replace(
+            "// INSERT_PRODUCTION_WIFI_METHOD", "void Proflame2TEmbedComponent::set_wifi_connected(" + method
+        ).replace("// INSERT_PRODUCTION_SUMMARY", summary)
+    )
+    compiler = shutil.which("g++")
+    assert compiler
+    executable = tmp_path / "wifi_diagnostics"
+    result = subprocess.run(
+        [
+            compiler,
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "--coverage",
+            f"-I{ROOT / 'tests/cpp/radio_trace_stubs'}",
+            f"-I{COMPONENT}",
+            str(source),
+            "-o",
+            str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([str(executable)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    gcov = shutil.which("gcov")
+    assert gcov
+    result = subprocess.run(
+        [gcov, "-b", str(tmp_path / "wifi_diagnostics.gcno")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    report = re.search(
+        rf"File '{re.escape(str(COMPONENT / 'wifi_diagnostics.h'))}'\nLines executed:([0-9.]+)%",
+        result.stdout,
+    )
+    assert report and float(report[1]) == 100.0, result.stdout
 
 
 def test_actual_retry_tx_queue_and_completion_arbitration(tmp_path: Path) -> None:

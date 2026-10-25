@@ -1878,6 +1878,7 @@ bool Proflame2TEmbedComponent::is_display_update_allowed() const {
 }
 
 void Proflame2TEmbedComponent::set_wifi_connected(bool value) {
+  this->wifi_diagnostics_.observe(value, millis());
   const bool changed = this->display_.wifi_connected != value;
   this->display_.wifi_connected = value;
   if (!value) {
