@@ -44,6 +44,10 @@ substitutions:
   proflame2_diagnostic_repeat_count_override: "5"
   proflame2_async_tx_data_pin_override: "gdo0"
   proflame2_active_listener_rx_path_default: "rmt_pulse"
+  # Readiness timeout for IDLE, TX, and SPI CHIP_RDYn (microseconds).
+  proflame2_radio_ready_timeout_us: "10000"
+  # Pre-TX settling delay in microseconds; YAML-only, 20 ms by default.
+  proflame2_pre_tx_settle_delay_us: "20000"
   proflame2_display_debug_mode: "false"
   # Stamped by the release workflow. This is independent of the source ref so
   # a local development build can still identify the released firmware version.
@@ -55,6 +59,8 @@ i2c:
   scan: true
 
 esphome:
+  build_flags:
+    - -DPROFLAME2_RADIO_TRACE=1
   on_boot:
     priority: -100
     then:
@@ -91,10 +97,65 @@ wifi:
     then:
       - lambda: |-
           id(proflame2_radio).set_wifi_connected(true);
+      - script.execute: proflame2_log_connection_summary
   on_disconnect:
     then:
       - lambda: |-
           id(proflame2_radio).set_wifi_connected(false);
+          const auto &wifi = id(proflame2_radio).get_wifi_diagnostics();
+          ESP_LOGI("proflame2.connection",
+                   "WiFi disconnected disconnects=%u reconnects=%u uptime_ms=%u last_rssi_dbm=%.0f retransmission=%s",
+                   static_cast<unsigned>(wifi.disconnect_count()),
+                   static_cast<unsigned>(wifi.reconnect_count()),
+                   static_cast<unsigned>(millis()),
+                   id(proflame2_wifi_rssi).get_raw_state(),
+                   id(proflame2_radio).is_delayed_retransmission_enabled() ? "ON" : "OFF");
+
+debug:
+  update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ssid:
+      id: proflame2_wifi_ssid
+      name: Proflame2 Wi-Fi Network
+      entity_category: diagnostic
+    bssid:
+      id: proflame2_wifi_bssid
+      name: Proflame2 Wi-Fi Access Point BSSID
+      entity_category: diagnostic
+  - platform: debug
+    reset_reason:
+      id: proflame2_reset_reason
+      name: Proflame2 Reset Reason
+      entity_category: diagnostic
+
+script:
+  - id: proflame2_log_connection_summary
+    mode: restart
+    then:
+      # Allow API log subscribers to attach; coalesce simultaneous clients.
+      - delay: 1s
+      - component.update: proflame2_uptime
+      - component.update: proflame2_wifi_rssi
+      - component.update: proflame2_wifi_disconnect_count
+      - component.update: proflame2_wifi_reconnect_count
+      - component.update: proflame2_wifi_last_outage
+      - lambda: |-
+          const auto &wifi = id(proflame2_radio).get_wifi_diagnostics();
+          ESP_LOGI("proflame2.connection",
+                   "WiFi connected=%s disconnects=%u reconnects=%u last_outage_ms=%u uptime_s=%.0f ssid='%s' bssid=%s rssi_dbm=%.0f reset_reason='%s' retransmission=%s pre_tx_settle_ms=%.1f",
+                   wifi.connected() ? "YES" : "NO",
+                   static_cast<unsigned>(wifi.disconnect_count()),
+                   static_cast<unsigned>(wifi.reconnect_count()),
+                   static_cast<unsigned>(wifi.last_outage_ms()),
+                   id(proflame2_uptime).state,
+                   id(proflame2_wifi_ssid).state.c_str(),
+                   id(proflame2_wifi_bssid).state.c_str(),
+                   id(proflame2_wifi_rssi).get_raw_state(),
+                   id(proflame2_reset_reason).state.c_str(),
+                   id(proflame2_radio).is_delayed_retransmission_enabled() ? "ON" : "OFF",
+                   id(proflame2_radio).get_pre_tx_settle_delay_us() / 1000.0f);
 
 spi:
   id: proflame2_spi_bus
@@ -113,6 +174,8 @@ external_components:
 proflame2_tembed:
   id: proflame2_radio
   spi_id: proflame2_spi_bus
+  radio_ready_timeout_us: ${proflame2_radio_ready_timeout_us}
+  pre_tx_settle_delay_us: ${proflame2_pre_tx_settle_delay_us}
   rf_band: ${proflame2_rf_band}
   data_rate_bps: 2400
   tx_repeat_count: 5
@@ -137,50 +200,68 @@ proflame2_tembed:
   rf_switch_sw0_pin: GPIO48
   endpoint_status:
     name: Proflame2 Endpoint Status
+    entity_category: diagnostic
   last_error:
     name: Proflame2 Last Error
+    entity_category: diagnostic
   last_tx_result:
     name: Proflame2 Last TX Result
+    entity_category: diagnostic
   last_request_id:
     name: Proflame2 Last Request ID
+    entity_category: diagnostic
   last_tx_path:
     name: Proflame2 Last TX Path
+    entity_category: diagnostic
   last_payload_hex:
     name: Proflame2 Last Payload Hex
+    entity_category: diagnostic
   last_marcstate_before_tx:
     name: Proflame2 Last MARCSTATE Before TX
+    entity_category: diagnostic
   last_marcstate_after_tx:
     name: Proflame2 Last MARCSTATE After TX
+    entity_category: diagnostic
   cc1101_partnum:
     name: Proflame2 CC1101 PARTNUM
+    entity_category: diagnostic
   cc1101_version:
     name: Proflame2 CC1101 VERSION
+    entity_category: diagnostic
   firmware_version_text:
     name: Proflame2 Firmware Version
     entity_category: diagnostic
   tx_success_count:
     name: Proflame2 TX Success Count
+    entity_category: diagnostic
     accuracy_decimals: 0
   tx_failure_count:
     name: Proflame2 TX Failure Count
+    entity_category: diagnostic
     accuracy_decimals: 0
   last_payload_length:
     name: Proflame2 Last Payload Length
+    entity_category: diagnostic
     accuracy_decimals: 0
   last_request_repeat_count:
     name: Proflame2 Last Request Repeat Count
+    entity_category: diagnostic
     accuracy_decimals: 0
   tx_repeat_count_sensor:
     name: Proflame2 TX Repeat Count
+    entity_category: diagnostic
     accuracy_decimals: 0
   firmware_protocol_version:
     name: Proflame2 Firmware Protocol Version
+    entity_category: diagnostic
     accuracy_decimals: 0
   config_revision:
     name: Proflame2 Config Revision
+    entity_category: diagnostic
     accuracy_decimals: 0
   last_tx_elapsed_ms:
     name: Proflame2 Last TX Elapsed ms
+    entity_category: diagnostic
     accuracy_decimals: 0
   battery_percent:
     name: Proflame2 Battery Percentage
@@ -201,6 +282,7 @@ api:
     then:
       - lambda: |-
           id(proflame2_radio).handle_api_client_connected(client_info);
+      - script.execute: proflame2_log_connection_summary
   on_client_disconnected:
     then:
       - lambda: |-
@@ -353,12 +435,44 @@ api:
 sensor:
   - platform: wifi_signal
     id: proflame2_wifi_rssi
-    internal: true
+    name: Proflame2 Wi-Fi Signal
+    entity_category: diagnostic
     update_interval: 10s
     on_value:
       then:
         - lambda: |-
             id(proflame2_radio).set_wifi_rssi_dbm(x);
+  - platform: uptime
+    id: proflame2_uptime
+    name: Proflame2 Uptime
+    entity_category: diagnostic
+    update_interval: 10s
+  - platform: template
+    id: proflame2_wifi_disconnect_count
+    name: Proflame2 Wi-Fi Disconnect Count
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+    update_interval: 10s
+    lambda: return id(proflame2_radio).get_wifi_diagnostics().disconnect_count();
+  - platform: template
+    id: proflame2_wifi_reconnect_count
+    name: Proflame2 Wi-Fi Reconnect Count
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+    update_interval: 10s
+    lambda: return id(proflame2_radio).get_wifi_diagnostics().reconnect_count();
+  - platform: template
+    id: proflame2_wifi_last_outage
+    name: Proflame2 Last Wi-Fi Outage Duration
+    entity_category: diagnostic
+    unit_of_measurement: ms
+    device_class: duration
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return id(proflame2_radio).get_wifi_diagnostics().last_outage_ms();
 
 number:
   - platform: template
@@ -378,6 +492,37 @@ number:
           }
           id(proflame2_radio).set_display_dim_level(static_cast<uint8_t>(value));
 switch:
+  - platform: template
+    id: proflame2_delayed_retransmission
+    name: Delayed Retransmission
+    entity_category: config
+    restore_mode: ALWAYS_ON
+    lambda: |-
+      return id(proflame2_radio).is_delayed_retransmission_enabled();
+    turn_on_action:
+      - lambda: |-
+          id(proflame2_radio).set_delayed_retransmission_enabled(true);
+          id(proflame2_delayed_retransmission).publish_state(id(proflame2_radio).is_delayed_retransmission_enabled());
+    turn_off_action:
+      - lambda: |-
+          id(proflame2_radio).set_delayed_retransmission_enabled(false);
+          id(proflame2_delayed_retransmission).publish_state(false);
+  - platform: template
+    id: proflame2_radio_trace_logging
+    name: Radio Register Trace Logging
+    entity_category: diagnostic
+    icon: mdi:bug
+    restore_mode: ALWAYS_OFF
+    lambda: |-
+      return id(proflame2_radio).is_radio_trace_enabled();
+    turn_on_action:
+      - lambda: |-
+          id(proflame2_radio).set_radio_trace_enabled(true);
+          id(proflame2_radio_trace_logging).publish_state(true);
+    turn_off_action:
+      - lambda: |-
+          id(proflame2_radio).set_radio_trace_enabled(false);
+          id(proflame2_radio_trace_logging).publish_state(false);
   - platform: template
     id: proflame2_display_wake_on_activity
     name: Display Wake On Activity

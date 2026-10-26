@@ -24,7 +24,7 @@ test:
 	$(PYTHON) -m pytest -q
 
 firmware-unit-test:
-	$(PYTHON) -m pytest -q tests/test_esphome_cpp_unit.py
+	$(PYTHON) -m pytest -q tests/test_esphome_cpp_unit.py tests/test_radio_register_trace.py
 
 lint-python:
 	$(RUFF) check custom_components tools tests

@@ -115,8 +115,14 @@ The production overlay targets the LilyGO T-Embed CC1101:
 esp32:
   board: esp32-s3-devkitc-1
   framework:
-    type: arduino
+    type: esp-idf
 ```
+
+Use ESP-IDF rather than Arduino for ESPHome's retained crash reporting on
+supported builds. Existing Arduino configurations should change the framework
+type, then rebuild and install the firmware. See the
+[manual setup guide](../docs/lilygo_cc1101_manual_yaml.md) for crash-reporting
+limitations and preservation of the matching `firmware.elf` during debugging.
 
 Known board facts:
 

@@ -33,6 +33,7 @@
 #include "rmt_ook_receiver.h"
 #include "telemetry_publisher.h"
 #include "tx_controller.h"
+#include "wifi_diagnostics.h"
 
 namespace esphome {
 namespace sensor {
@@ -103,6 +104,9 @@ public:
   void setup() override;
   void loop() override;
   void dump_config() override;
+  /// One extra full burst after two seconds of quiet; base package enables it at boot.
+  void set_delayed_retransmission_enabled(bool value);
+  bool is_delayed_retransmission_enabled() const;
 
   void set_rf_band(RFBand value) {
     this->rf_band_ = value;
@@ -409,6 +413,9 @@ public:
     this->mark_display_dirty_();
   }
   void set_wifi_connected(bool value);
+  const WifiDiagnostics& get_wifi_diagnostics() const {
+    return this->wifi_diagnostics_;
+  }
   void set_api_connected(bool value);
   void handle_api_client_connected(const std::string& client_info);
   void handle_api_client_disconnected(const std::string& client_info);
@@ -520,6 +527,10 @@ protected:
   void log_rf_path_for_test_pattern_(TestPatternMode mode, uint32_t duration_ms, uint32_t period_us) const;
   void process_pending_operation_();
   void consume_radio_runtime_events_();
+  void process_delayed_retransmission_();
+  void dispatch_deferred_tx_();
+  void cancel_delayed_retransmission_(const char* reason);
+  void pause_rx_for_tx_();
   void drain_deferred_debug_trace_();
   void store_deferred_debug_trace_(const TXTimingDiagnostics& timing, TXMode tx_mode);
   void clear_deferred_debug_trace_();
@@ -598,6 +609,7 @@ protected:
   std::string firmware_version_{"unknown"};
   uint32_t firmware_version_api_last_log_ms_{0};
   bool firmware_version_api_log_initialized_{false};
+  WifiDiagnostics wifi_diagnostics_{};
   AsyncTxDataPin async_tx_data_pin_{AsyncTxDataPin::GDO0};
 
   GPIOPin* board_power_enable_pin_{nullptr};
@@ -720,6 +732,9 @@ protected:
   bool rx_active_listener_filter_configured_{false};
   bool rx_active_listener_use_rmt_{false};
   Proflame2DecodeProfile rx_active_listener_profile_{};
+  // Retain identity across HA's stop-RX / TX / resume-RX cycle. This is only
+  // retry invalidation history, never an active RX acceptance profile.
+  Proflame2DecodeProfile rx_active_listener_last_enabled_profile_{};
   ActiveListenerController active_listener_{};
 #if PROFLAME2_TEMBED_DEBUG
   std::string rx_fifo_profile_{"rfcat_fixed_none_rfcat_wide"};

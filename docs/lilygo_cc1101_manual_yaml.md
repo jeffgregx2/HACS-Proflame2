@@ -20,7 +20,7 @@ After ESPHome Builder creates the device YAML:
 1. Keep the generated `esphome`, `wifi`, `api`, `ota`, and `logger` sections.
 2. Ensure there is only one top-level `substitutions` section.
 3. Add `proflame2_package_ref: "main"` to `substitutions`.
-4. Ensure `esp32.framework.type` is `arduino`.
+4. Ensure `esp32.framework.type` is `esp-idf`.
 5. Add the Proflame2 package entries from the overlay to the existing
    `packages` section, or create that section if it does not exist.
 6. Add the restart switch from the overlay only if your YAML does not already
@@ -30,9 +30,22 @@ Do not copy the repository `esphome/components` directory into your ESPHome
 configuration. The package downloads the Proflame2 ESPHome component from
 GitHub using `proflame2_package_ref`.
 
-The current LilyGO Proflame2 firmware is validated on the Arduino framework.
-ESPHome Builder may create the starter YAML with `esp-idf`; change only the
-framework type unless you know the board value is wrong.
+Use ESP-IDF so ESPHome can retain a supported panic backtrace and report it
+after a restart, including through network logs. If an existing device uses
+Arduino, change only the framework type, keeping the board and other device
+settings unchanged, then rebuild and install the firmware:
+
+```yaml
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+```
+
+Crash reporting depends on the ESPHome version and build configuration; it is
+not a guarantee that every reset will produce a backtrace. During crash
+investigations, preserve the `firmware.elf` from the exact installed build before
+rebuilding. A different build's ELF cannot reliably decode the crash addresses.
 
 ## Package Reference
 

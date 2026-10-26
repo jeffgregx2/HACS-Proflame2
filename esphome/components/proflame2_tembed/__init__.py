@@ -7,10 +7,11 @@ import inspect
 import esphome.automation as automation
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.const import CONF_CS_PIN, CONF_DATA_RATE, CONF_ID, CONF_SPI_ID
+from esphome.const import CONF_CS_PIN, CONF_DATA_RATE, CONF_ID, CONF_MISO_PIN, CONF_SPI, CONF_SPI_ID
+from esphome.core import CORE
 
 from esphome import pins
-from esphome.components import i2c, sensor, spi, text_sensor
+from esphome.components import esp32, i2c, sensor, spi, text_sensor
 
 DEPENDENCIES = ["spi", "i2c", "api"]
 AUTO_LOAD = ["sensor", "text_sensor"]
@@ -85,6 +86,8 @@ CONF_INTENDED_ACTION_LABEL = "intended_action_label"
 CONF_FIREPLACE_NAME = "fireplace_name"
 CONF_FIRMWARE_VERSION = "firmware_version"
 CONF_FIRMWARE_VERSION_TEXT = "firmware_version_text"
+CONF_RADIO_READY_TIMEOUT_US = "radio_ready_timeout_us"
+CONF_PRE_TX_SETTLE_DELAY_US = "pre_tx_settle_delay_us"
 
 proflame2_tembed_ns = cg.esphome_ns.namespace("proflame2_tembed")
 TXMode = proflame2_tembed_ns.enum("TXMode", is_class=True)
@@ -125,6 +128,8 @@ CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(Proflame2TEmbedComponent),
         cv.GenerateID(CONF_SPI_ID): cv.use_id(spi.SPIComponent),
+        cv.Optional(CONF_RADIO_READY_TIMEOUT_US, default=10000): cv.int_range(min=100, max=100000),
+        cv.Optional(CONF_PRE_TX_SETTLE_DELAY_US, default=20000): cv.int_range(min=0, max=100000),
         cv.Optional(CONF_RF_BAND, default="315"): cv.one_of("315", "433"),
         cv.Optional(CONF_DATA_RATE_BPS, default=2_400): cv.positive_int,
         cv.Optional(CONF_TX_REPEAT_COUNT, default=5): cv.int_range(min=1, max=20),
@@ -161,27 +166,27 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_CC1101_GDO2_PIN): pins.gpio_output_pin_schema,
         cv.Required(CONF_RF_SWITCH_SW1_PIN): pins.gpio_output_pin_schema,
         cv.Required(CONF_RF_SWITCH_SW0_PIN): pins.gpio_output_pin_schema,
-        cv.Optional(CONF_ENDPOINT_STATUS): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_LAST_ERROR): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_LAST_TX_RESULT): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_LAST_REQUEST_ID): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_LAST_TX_PATH): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_LAST_PAYLOAD_HEX): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_LAST_MARCSTATE_BEFORE_TX): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_LAST_MARCSTATE_AFTER_TX): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_CC1101_PARTNUM): text_sensor.text_sensor_schema(),
-        cv.Optional(CONF_CC1101_VERSION): text_sensor.text_sensor_schema(),
+        cv.Optional(CONF_ENDPOINT_STATUS): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_ERROR): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_TX_RESULT): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_REQUEST_ID): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_TX_PATH): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_PAYLOAD_HEX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_MARCSTATE_BEFORE_TX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_MARCSTATE_AFTER_TX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_CC1101_PARTNUM): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+        cv.Optional(CONF_CC1101_VERSION): text_sensor.text_sensor_schema(entity_category="diagnostic"),
         cv.Optional(CONF_FIRMWARE_VERSION_TEXT): text_sensor.text_sensor_schema(
             entity_category="diagnostic"
         ),
-        cv.Optional(CONF_TX_SUCCESS_COUNT): sensor.sensor_schema(accuracy_decimals=0),
-        cv.Optional(CONF_TX_FAILURE_COUNT): sensor.sensor_schema(accuracy_decimals=0),
-        cv.Optional(CONF_LAST_PAYLOAD_LENGTH): sensor.sensor_schema(accuracy_decimals=0),
-        cv.Optional(CONF_LAST_REQUEST_REPEAT_COUNT): sensor.sensor_schema(accuracy_decimals=0),
-        cv.Optional(CONF_LAST_TX_ELAPSED_MS): sensor.sensor_schema(accuracy_decimals=0),
-        cv.Optional(CONF_TX_REPEAT_COUNT_SENSOR): sensor.sensor_schema(accuracy_decimals=0),
-        cv.Optional(CONF_FIRMWARE_PROTOCOL_VERSION): sensor.sensor_schema(accuracy_decimals=0),
-        cv.Optional(CONF_CONFIG_REVISION): sensor.sensor_schema(accuracy_decimals=0),
+        cv.Optional(CONF_TX_SUCCESS_COUNT): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+        cv.Optional(CONF_TX_FAILURE_COUNT): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_PAYLOAD_LENGTH): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_REQUEST_REPEAT_COUNT): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+        cv.Optional(CONF_LAST_TX_ELAPSED_MS): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+        cv.Optional(CONF_TX_REPEAT_COUNT_SENSOR): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+        cv.Optional(CONF_FIRMWARE_PROTOCOL_VERSION): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+        cv.Optional(CONF_CONFIG_REVISION): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
         cv.Optional(CONF_BATTERY_PERCENT): sensor.sensor_schema(
             unit_of_measurement="%",
             accuracy_decimals=0,
@@ -235,6 +240,8 @@ FINAL_VALIDATE_SCHEMA = spi.final_validate_device_schema(
 
 
 async def to_code(config):
+    # ESPHome excludes unused IDF drivers; our direct RMT API use needs this one.
+    esp32.include_builtin_idf_component("esp_driver_rmt")
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await i2c.register_i2c_device(var, config)
@@ -246,6 +253,13 @@ async def to_code(config):
             CONF_DATA_RATE: 4_000_000,
         },
     )
+
+    # Reuse the bus-owned pin: a second GPIO setup could disrupt hardware SPI.
+    bus = next(bus for bus in CORE.config[CONF_SPI] if bus[CONF_ID] == config[CONF_SPI_ID])
+    miso = await cg.get_variable(bus[CONF_MISO_PIN][CONF_ID])
+    cg.add(var.set_spi_miso_pin(miso))
+    cg.add(var.set_radio_ready_timeout_us(config[CONF_RADIO_READY_TIMEOUT_US]))
+    cg.add(var.set_pre_tx_settle_delay_us(config[CONF_PRE_TX_SETTLE_DELAY_US]))
 
     cg.add(var.set_rf_band(RFBand.BAND_433 if config[CONF_RF_BAND] == "433" else RFBand.BAND_315))
     cg.add(var.set_data_rate_bps(config[CONF_DATA_RATE_BPS]))

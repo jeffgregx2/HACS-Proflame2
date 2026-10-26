@@ -18,8 +18,6 @@ static const char* const TAG = "proflame2_cc1101";
 static constexpr uint8_t CC1101_MARCSTATE_TX = 0x13;
 static constexpr uint8_t CC1101_PATABLE_OOK_OFF_VALUE = 0x00;
 static constexpr uint8_t CC1101_PATABLE_OOK_ON_VALUE = 0xC6;
-static constexpr uint32_t CC1101_TX_STABILIZATION_TIMEOUT_US = 1500;
-static constexpr uint32_t CC1101_TX_STABILIZATION_FALLBACK_US = 1000;
 static constexpr uint32_t PROFLAME_NATIVE_YARDSTICK_DEFAULT_REPEAT_GAP_US = 10700;
 static constexpr uint32_t PROFLAME_NATIVE_REMOTE_DEFAULT_REPEAT_GAP_US = 5240;
 static constexpr uint32_t PROFLAME_NATIVE_REMOTE_SHORT_HIGH_US = 408;
@@ -69,23 +67,24 @@ struct TXReadyWaitResult {
 
 static TXReadyWaitResult wait_for_tx_ready_(RadioCC1101* radio, int64_t after_enter_tx_us) {
   int64_t now_us = after_enter_tx_us;
-  while ((now_us - after_enter_tx_us) < static_cast<int64_t>(CC1101_TX_STABILIZATION_TIMEOUT_US)) {
-    if (radio->read_marcstate() == CC1101_MARCSTATE_TX) {
+  bool matched = false;
+  uint8_t last_state = 0;
+  while ((now_us - after_enter_tx_us) < static_cast<int64_t>(radio->get_radio_ready_timeout_us())) {
+    last_state = radio->read_marcstate();
+    if (last_state == CC1101_MARCSTATE_TX && matched) {
       return TXReadyWaitResult{
-          .settle_wait_us = static_cast<uint32_t>(now_us - after_enter_tx_us),
+          .settle_wait_us = static_cast<uint32_t>(esp_timer_get_time() - after_enter_tx_us),
           .fallback_used = false,
       };
     }
+    matched = last_state == CC1101_MARCSTATE_TX;
     esp_rom_delay_us(10);
     now_us = esp_timer_get_time();
   }
-  const int64_t target_us = after_enter_tx_us + static_cast<int64_t>(CC1101_TX_STABILIZATION_FALLBACK_US);
-  while (now_us < target_us) {
-    esp_rom_delay_us(10);
-    now_us = esp_timer_get_time();
-  }
+  ESP_LOGW(TAG, "CC1101 TX readiness timeout after %" PRIu32 " us MARCSTATE=0x%02X; proceeding best-effort",
+           radio->get_radio_ready_timeout_us(), last_state);
   return TXReadyWaitResult{
-      .settle_wait_us = static_cast<uint32_t>(now_us - after_enter_tx_us),
+      .settle_wait_us = static_cast<uint32_t>(esp_timer_get_time() - after_enter_tx_us),
       .fallback_used = true,
   };
 }
@@ -851,6 +850,7 @@ void RadioCC1101::log_rf_output_path(GPIOPin* gdo0_pin, GPIOPin* gdo2_pin, TXMod
 }
 
 bool RadioCC1101::apply_async_ook_registers_(std::string& error, bool log_config) {
+  this->strobe_(CC1101_SIDLE);
   const uint32_t frequency_word = compute_frequency_word_(this->frequency_hz_);
   uint8_t mdmcfg4 = 0;
   uint8_t mdmcfg3 = 0;
@@ -1035,7 +1035,7 @@ bool RadioCC1101::transmit_async_ook(const uint8_t* payload, size_t length, uint
                                      NativeGroupRepeatBoundaryMode native_group_repeat_boundary_mode,
                                      uint32_t pre_burst_low_us, uint32_t pre_frame_low_us,
                                      uint32_t post_frame_idle_gap_us, uint32_t& elapsed_ms, TXTimingDiagnostics& timing,
-                                     std::string& error) {
+                                     std::string& error, uint32_t pre_tx_settle_delay_us) {
   elapsed_ms = 0;
   timing = TXTimingDiagnostics{};
   if (!this->initialized_) {
@@ -1052,6 +1052,10 @@ bool RadioCC1101::transmit_async_ook(const uint8_t* payload, size_t length, uint
   }
   if (this->data_rate_bps_ == 0) {
     error = "invalid_data_rate";
+    return false;
+  }
+  if (pre_tx_settle_delay_us > 0 && tx_mode != TXMode::PROFLAME_NATIVE_GROUPS) {
+    error = "pre_tx_settle_requires_native_groups";
     return false;
   }
 
@@ -1369,6 +1373,10 @@ bool RadioCC1101::transmit_async_ook(const uint8_t* payload, size_t length, uint
       }
       if (target_first_rising_edge_us < tx_ready_us) {
         target_first_rising_edge_us = tx_ready_us;
+      }
+      if (transmission_index == 0 && pre_tx_settle_delay_us > 0) {
+        target_first_rising_edge_us = radio_trace_pre_tx_deadline(
+            target_first_rising_edge_us, tx_ready_us, transmission_index, pre_tx_settle_delay_us);
       }
       wait_until_(target_first_rising_edge_us);
       const uint32_t first_symbol_cycle = esp_cpu_get_cycle_count();

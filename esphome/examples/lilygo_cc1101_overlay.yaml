@@ -32,8 +32,8 @@
 #    your generated YAML. There can only be one top-level substitutions block,
 #    one packages block, and one switch block.
 #
-# 5. Update the generated esp32.framework.type value to arduino. The current
-#    LilyGO Proflame2 firmware is validated on the Arduino framework.
+# 5. Set esp32.framework.type to esp-idf so supported ESPHome builds can retain
+#    panic backtraces and report them after a restart.
 #
 # 6. Build and deploy from ESPHome Builder.
 #
@@ -52,7 +52,7 @@ substitutions:
 esp32:
   board: esp32-s3-devkitc-1
   framework:
-    type: arduino
+    type: esp-idf
 
 switch:
   - platform: restart
