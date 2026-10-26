@@ -108,7 +108,7 @@ wifi:
                    static_cast<unsigned>(wifi.disconnect_count()),
                    static_cast<unsigned>(wifi.reconnect_count()),
                    static_cast<unsigned>(millis()),
-                   id(proflame2_wifi_rssi).raw_state,
+                   id(proflame2_wifi_rssi).get_raw_state(),
                    id(proflame2_radio).is_delayed_retransmission_enabled() ? "ON" : "OFF");
 
 debug:
@@ -152,7 +152,7 @@ script:
                    id(proflame2_uptime).state,
                    id(proflame2_wifi_ssid).state.c_str(),
                    id(proflame2_wifi_bssid).state.c_str(),
-                   id(proflame2_wifi_rssi).raw_state,
+                   id(proflame2_wifi_rssi).get_raw_state(),
                    id(proflame2_reset_reason).state.c_str(),
                    id(proflame2_radio).is_delayed_retransmission_enabled() ? "ON" : "OFF",
                    id(proflame2_radio).get_pre_tx_settle_delay_us() / 1000.0f);

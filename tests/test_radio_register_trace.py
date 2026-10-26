@@ -33,6 +33,8 @@ def test_wifi_diagnostics_and_api_summary(tmp_path: Path) -> None:
     }
     summary = script["then"][-1]["lambda"]
     assert summary.count("ESP_LOGI(") == 1
+    assert "id(proflame2_wifi_rssi).get_raw_state()" in summary
+    assert ".raw_state" not in package
     api_connect = package.split("  on_client_connected:", 1)[1].split("  on_client_disconnected:", 1)[0]
     assert "script.execute: proflame2_log_connection_summary" in api_connect
     sensors = yaml.safe_load("sensor:" + package.split("\nsensor:", 1)[1].split("\nnumber:", 1)[0])["sensor"]
@@ -51,6 +53,7 @@ def test_wifi_diagnostics_and_api_summary(tmp_path: Path) -> None:
     wifi = yaml.safe_load("wifi:" + package.split("\nwifi:", 1)[1].split("\ndebug:", 1)[0])["wifi"]
     disconnect = wifi["on_disconnect"]["then"][0]["lambda"]
     assert disconnect.count("ESP_LOGI(") == 1
+    assert "id(proflame2_wifi_rssi).get_raw_state()" in disconnect
     source = tmp_path / "wifi_diagnostics.cpp"
     source.write_text(
         harness.replace(

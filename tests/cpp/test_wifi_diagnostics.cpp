@@ -46,7 +46,9 @@ static struct {
 } proflame2_uptime;
 static struct {
   float state{-80}; // Summary must use the fresh raw sample, not a stale state.
-  float raw_state{-47};
+  float get_raw_state() const {
+    return -47;
+  }
 } proflame2_wifi_rssi;
 static struct {
   std::string state{"AA:BB:CC:DD:EE:FF"};
