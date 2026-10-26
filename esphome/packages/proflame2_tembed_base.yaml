@@ -46,6 +46,8 @@ substitutions:
   proflame2_active_listener_rx_path_default: "rmt_pulse"
   # Readiness timeout for IDLE, TX, and SPI CHIP_RDYn (microseconds).
   proflame2_radio_ready_timeout_us: "10000"
+  # Pre-TX settling delay in microseconds; YAML-only, 20 ms by default.
+  proflame2_pre_tx_settle_delay_us: "20000"
   proflame2_display_debug_mode: "false"
   # Stamped by the release workflow. This is independent of the source ref so
   # a local development build can still identify the released firmware version.
@@ -173,6 +175,7 @@ proflame2_tembed:
   id: proflame2_radio
   spi_id: proflame2_spi_bus
   radio_ready_timeout_us: ${proflame2_radio_ready_timeout_us}
+  pre_tx_settle_delay_us: ${proflame2_pre_tx_settle_delay_us}
   rf_band: ${proflame2_rf_band}
   data_rate_bps: 2400
   tx_repeat_count: 5
@@ -197,50 +200,68 @@ proflame2_tembed:
   rf_switch_sw0_pin: GPIO48
   endpoint_status:
     name: Proflame2 Endpoint Status
+    entity_category: diagnostic
   last_error:
     name: Proflame2 Last Error
+    entity_category: diagnostic
   last_tx_result:
     name: Proflame2 Last TX Result
+    entity_category: diagnostic
   last_request_id:
     name: Proflame2 Last Request ID
+    entity_category: diagnostic
   last_tx_path:
     name: Proflame2 Last TX Path
+    entity_category: diagnostic
   last_payload_hex:
     name: Proflame2 Last Payload Hex
+    entity_category: diagnostic
   last_marcstate_before_tx:
     name: Proflame2 Last MARCSTATE Before TX
+    entity_category: diagnostic
   last_marcstate_after_tx:
     name: Proflame2 Last MARCSTATE After TX
+    entity_category: diagnostic
   cc1101_partnum:
     name: Proflame2 CC1101 PARTNUM
+    entity_category: diagnostic
   cc1101_version:
     name: Proflame2 CC1101 VERSION
+    entity_category: diagnostic
   firmware_version_text:
     name: Proflame2 Firmware Version
     entity_category: diagnostic
   tx_success_count:
     name: Proflame2 TX Success Count
+    entity_category: diagnostic
     accuracy_decimals: 0
   tx_failure_count:
     name: Proflame2 TX Failure Count
+    entity_category: diagnostic
     accuracy_decimals: 0
   last_payload_length:
     name: Proflame2 Last Payload Length
+    entity_category: diagnostic
     accuracy_decimals: 0
   last_request_repeat_count:
     name: Proflame2 Last Request Repeat Count
+    entity_category: diagnostic
     accuracy_decimals: 0
   tx_repeat_count_sensor:
     name: Proflame2 TX Repeat Count
+    entity_category: diagnostic
     accuracy_decimals: 0
   firmware_protocol_version:
     name: Proflame2 Firmware Protocol Version
+    entity_category: diagnostic
     accuracy_decimals: 0
   config_revision:
     name: Proflame2 Config Revision
+    entity_category: diagnostic
     accuracy_decimals: 0
   last_tx_elapsed_ms:
     name: Proflame2 Last TX Elapsed ms
+    entity_category: diagnostic
     accuracy_decimals: 0
   battery_percent:
     name: Proflame2 Battery Percentage
@@ -455,22 +476,6 @@ sensor:
 
 number:
   - platform: template
-    id: proflame2_pre_tx_settle_delay
-    name: Pre-TX Settling Delay
-    entity_category: config
-    icon: mdi:timer-sand
-    unit_of_measurement: ms
-    min_value: 0
-    max_value: 100
-    step: 0.1
-    mode: box
-    lambda: |-
-      return id(proflame2_radio).get_pre_tx_settle_delay_us() / 1000.0f;
-    set_action:
-      - lambda: |-
-          id(proflame2_radio).set_pre_tx_settle_delay_us(static_cast<uint32_t>(x * 1000.0f + 0.5f));
-          id(proflame2_pre_tx_settle_delay).publish_state(id(proflame2_radio).get_pre_tx_settle_delay_us() / 1000.0f);
-  - platform: template
     id: proflame2_display_dim_level
     name: Display Dim Level
     min_value: 0
@@ -505,7 +510,7 @@ switch:
   - platform: template
     id: proflame2_radio_trace_logging
     name: Radio Register Trace Logging
-    entity_category: config
+    entity_category: diagnostic
     icon: mdi:bug
     restore_mode: ALWAYS_OFF
     lambda: |-

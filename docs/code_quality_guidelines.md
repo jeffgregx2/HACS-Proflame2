@@ -48,6 +48,30 @@ senior engineer can navigate, evaluate, debug, and safely change.
    exist. Manual execution is acceptable only for inspection, emergency repair,
    or one-off investigation, and should not replace the canonical workflow.
 
+## Privacy Before Publication or Commit
+
+Scrubbing personal and environment-identifying information is mandatory before
+posting anything to GitHub or creating any commit, including local-only commits.
+Local commits may later be pushed, so the same rule applies immediately.
+
+- Review issue and pull request titles, bodies, comments, release notes, commit
+  messages, committed content, logs, screenshots, and other attachments before
+  submission or commit.
+- Remove personal names, local account names, email addresses, home-directory
+  paths, private hostnames, network names, IP addresses, hardware identifiers,
+  credentials, and other identifying details from submitted content.
+- For local artifact references, include only a scrubbed filename, never a home
+  directory or other identity-bearing path. Use neutral placeholders where
+  context is necessary, and retain non-identifying technical evidence such as
+  source filenames, crash addresses, and line numbers.
+- The only exception is the maintainer's explicitly authorized personal
+  sign-off on a post. Do not record the signature in these guidelines or infer
+  permission for any other personal information from it.
+- Inspect the final text and attachments, not just a draft or template. If
+  identifying information is discovered after posting, redact it promptly and
+  inform the maintainer. Editing a post does not guarantee removal from prior
+  notifications or copies.
+
 ## Repository Structure
 
 Organize code by domain and responsibility, not by vague utility buckets.

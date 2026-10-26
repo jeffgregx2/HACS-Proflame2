@@ -42,21 +42,23 @@ New traces require rebuilding and flashing, not just changing the HA integration
 
 ## Runtime Experiment Controls
 
-The controls are in the ESPHome device's Configuration section in HA. They
-require this diagnostic firmware, not the optional debug YAML package.
+The controls require this diagnostic firmware, not the optional debug YAML
+package. Radio Register Trace Logging is a diagnostic control; Delayed
+Retransmission remains in the ESPHome device's Configuration section in HA.
 
 - **Radio Register Trace Logging** defaults to OFF. OFF skips both snapshot
   register reads and RFTRACE output, including previously captured records
   awaiting output. Normal radio-operation SPI traffic, TX results, and existing
   receive logging are not disabled. A single confirmation logs each setting
   change. Re-enabling resumes tracing without rebooting.
-- **Pre-TX Settling Delay** defaults to 20 ms, with a range of
-  0-100 ms in 0.1 ms steps. The setting is copied into each queued TX request,
-  so a later edit does not alter an in-flight command. TX result logs include
+- **Pre-TX Settling Delay** is YAML-only. The substitution
+  `proflame2_pre_tx_settle_delay_us` defaults to `"20000"` (20 ms) and accepts
+  0-100000 microseconds. Changing it requires rebuilding and installing the
+  firmware. It is copied into each queued TX request. TX result logs include
   the applied `pre_tx_settle_us` value even when tracing is OFF.
 
-Neither setting persists over a reboot: each boot restores trace OFF / delay 20 ms.
-Change controls only while the radio is idle so a capture is not intentionally
+Each boot restores trace OFF and the settling delay configured in YAML.
+Change the trace control only while the radio is idle so a capture is not intentionally
 split between tracing ON and OFF. The trace switch is atomic across tasks.
 
 - **Delayed Retransmission** defaults to ON and resets ON at every reboot,
@@ -116,7 +118,7 @@ The YAML substitution `proflame2_radio_ready_timeout_us: "10000"` configures
 `radio_ready_timeout_us` for each SPI, IDLE, and TX readiness wait. Supported
 values are 100-100000 microseconds. The default is 10 ms per attempt; IDLE can
 use two attempts, and a stalled SPI handshake can extend a state-poll attempt.
-This timeout is separate from the runtime **Pre-TX Settling Delay** setting.
+This timeout is separate from the YAML-only **Pre-TX Settling Delay** setting.
 TI Table 34 gives typical calibrated IDLE-to-TX times around 799 us, not a
 universal worst-case deadline. Ten milliseconds is a conservative diagnostic
 timeout, not a datasheet-mandated constant.

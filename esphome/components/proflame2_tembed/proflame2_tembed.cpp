@@ -370,6 +370,9 @@ struct Proflame2TEmbedComponent::RadioRuntime {
   bool worker_started{false};
   RadioRuntimeCommand command_buffer{};
   RadioRuntimeEvent event_buffer{};
+  // Main-task-owned queue destination. Keep large timing traces off the loop
+  // stack and separate from the worker's event buffer while RX is restored.
+  RadioRuntimeEvent completion_buffer{};
   DelayedTxRetry<RadioRuntimeCommand> retry;
   // Main-task-owned arbitration state. The worker must not dequeue a waiting
   // user command until completion handling has released/restored radio IO.
@@ -3077,7 +3080,7 @@ void Proflame2TEmbedComponent::consume_radio_runtime_events_() {
     return;
   }
 
-  RadioRuntimeEvent result;
+  auto& result = this->radio_runtime_->completion_buffer;
   if (xQueueReceive(this->radio_runtime_->event_queue, &result, 0) != pdTRUE) {
     return;
   }

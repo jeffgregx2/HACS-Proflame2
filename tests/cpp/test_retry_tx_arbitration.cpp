@@ -98,6 +98,7 @@ public:
   int applied_light{-1};
   uint32_t settle_us{20000};
   uint32_t restores{0};
+  bool clobber_worker_event_on_restore{false};
   bool tx(const std::string&, const std::string&, uint32_t, uint8_t, const std::string&, int, int, int, int, int, int,
           int, int, const std::string&, const std::string&);
   bool enqueue_tx_(const std::string&, const std::string&, std::vector<uint8_t>&&, uint32_t, uint8_t,
@@ -141,17 +142,24 @@ public:
       clear_pending_display_intent_();
     }
   }
-  void restore_rx_after_tx_if_needed_() {
-    ++restores;
-    if (rx_rmt_pulse_paused_for_tx_) {
-      rx_rmt_pulse_paused_for_tx_ = false;
-      rx_rmt_pulse_capture_enabled_ = true;
-    }
-  }
+  void restore_rx_after_tx_if_needed_();
 };
 
 // INSERT_PRODUCTION_RUNTIME_TYPES
 // INSERT_PRODUCTION_METHODS
+
+void Proflame2TEmbedComponent::restore_rx_after_tx_if_needed_() {
+  ++restores;
+  if (clobber_worker_event_on_restore) {
+    // Simulate the worker reusing its scratch space while main handles a copy.
+    radio_runtime_->event_buffer.ok = false;
+    copy_string_(radio_runtime_->event_buffer.request_id, "worker_reused_buffer");
+  }
+  if (rx_rmt_pulse_paused_for_tx_) {
+    rx_rmt_pulse_paused_for_tx_ = false;
+    rx_rmt_pulse_capture_enabled_ = true;
+  }
+}
 
 struct Bench {
   Proflame2TEmbedComponent controller;
@@ -173,7 +181,8 @@ struct Bench {
     return command;
   }
   void finish_worker(const RadioRuntimeCommand& command, bool ok = true) {
-    RadioRuntimeEvent result;
+    auto& result = runtime.event_buffer;
+    result = RadioRuntimeEvent{};
     result.kind = RadioRuntimeEventKind::TX_COMPLETE;
     result.ok = ok;
     result.is_retransmission = command.is_retransmission;
@@ -214,6 +223,22 @@ int main(int argc, char** argv) {
   const uint32_t bits = std::stoul(argv[2]);
   const std::string new_payload = argv[3];
   assert(payload != new_payload);
+  // Queue completion must survive worker scratch-buffer reuse during RX setup.
+  {
+    Bench b;
+    assert(&b.runtime.event_buffer != &b.runtime.completion_buffer);
+    b.controller.clobber_worker_event_on_restore = true;
+    assert(b.send("original", payload, bits, 6));
+    b.finish_worker(b.start_worker());
+    b.controller.consume_radio_runtime_events_();
+    assert(b.controller.last_request_id_ == "original");
+    assert(b.controller.last_tx_result_ == "ok");
+    assert(b.controller.applied_request == "original");
+    assert(std::string(b.runtime.event_buffer.request_id) == "worker_reused_buffer");
+    // An empty poll cannot process the previous completion a second time.
+    b.controller.consume_radio_runtime_events_();
+    assert(b.controller.tx_success_count_ == 1);
+  }
   // Reproduce the log's busy window: worker finished, event not yet consumed.
   {
     Bench b;

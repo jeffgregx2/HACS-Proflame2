@@ -95,8 +95,8 @@ device YAML configuration file:
 10. Save the YAML in ESPHome Builder.
 
 The helper preserves the ESPHome-generated `api`, `ota`, `wifi`, `logger`, and
-device identity settings. It also updates the ESP32 framework to the current
-validated LilyGO firmware framework, adds the Proflame2 package references, and
+device identity settings. It also sets the ESP32 framework to ESP-IDF to support
+retained crash reporting, adds the Proflame2 package references, and
 adds a restart switch if one is not already present.
 
 ## Radio Band

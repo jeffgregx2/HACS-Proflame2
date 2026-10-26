@@ -98,7 +98,8 @@ def test_wifi_diagnostics_and_api_summary(tmp_path: Path) -> None:
     assert report and float(report[1]) == 100.0, result.stdout
 
 
-def test_actual_retry_tx_queue_and_completion_arbitration(tmp_path: Path) -> None:
+@pytest.mark.parametrize("local_completion", [False, True], ids=["runtime-storage", "old-stack-negative-control"])
+def test_actual_retry_tx_queue_and_completion_arbitration(tmp_path: Path, local_completion: bool) -> None:
     """Execute production TX admission/completion using deterministic RTOS queues."""
     component = (COMPONENT / "proflame2_tembed.cpp").read_text()
 
@@ -132,6 +133,10 @@ def test_actual_retry_tx_queue_and_completion_arbitration(tmp_path: Path) -> Non
         ]
     )
     harness = (ROOT / "tests/cpp/test_retry_tx_arbitration.cpp").read_text()
+    if local_completion:
+        methods = methods.replace(
+            "auto& result = this->radio_runtime_->completion_buffer;", "RadioRuntimeEvent result;"
+        )
     source = tmp_path / "retry_tx_arbitration.cpp"
     source.write_text(
         harness.replace("// INSERT_PRODUCTION_RUNTIME_TYPES", types).replace("// INSERT_PRODUCTION_METHODS", methods)
@@ -148,6 +153,8 @@ def test_actual_retry_tx_queue_and_completion_arbitration(tmp_path: Path) -> Non
             "-Werror",
             "-DPROFLAME2_RADIO_TRACE=1",
             "-DPROFLAME2_TX_CLEAN_MODE=0",
+            "-Os",
+            "-fstack-usage",
             f"-I{ROOT / 'tests/cpp/radio_trace_stubs'}",
             f"-I{COMPONENT}",
             str(source),
@@ -160,6 +167,22 @@ def test_actual_retry_tx_queue_and_completion_arbitration(tmp_path: Path) -> Non
         text=True,
     )
     assert result.returncode == 0, result.stderr
+    stack_reports = list(tmp_path.glob("*.su"))
+    assert stack_reports
+    completion_frames = [
+        line
+        for report in stack_reports
+        for line in report.read_text().splitlines()
+        if "Proflame2TEmbedComponent::consume_radio_runtime_events_()" in line
+    ]
+    assert len(completion_frames) == 1
+    # Host measurements guard against reintroducing the 4 KiB local event.
+    # They do not measure Xtensa driver/ISR or complete task-stack depth.
+    frame_bytes = int(completion_frames[0].split("\t")[1])
+    if local_completion:
+        assert frame_bytes > 4096, completion_frames
+    else:
+        assert frame_bytes <= 1024, completion_frames
     for (payload, bits), (new_payload, _) in zip(
         _native_tx_payloads(), _native_tx_payloads(alternate=True), strict=True
     ):
@@ -267,7 +290,7 @@ def test_retry_runtime_wiring_keeps_rx_and_ha_authority() -> None:
     )
     loop = component.split("void Proflame2TEmbedComponent::loop()", 1)[1].split("void Proflame2TEmbedComponent::", 1)[0]
     assert loop.index("poll_rmt_pulse_capture_()") < loop.index("process_delayed_retransmission_()")
-    completion = component.split("RadioRuntimeEvent result;", 1)[1]
+    completion = component.split("void Proflame2TEmbedComponent::consume_radio_runtime_events_()", 1)[1]
     retry = completion.split("if (result.is_retransmission)", 1)[1].split("retry.complete(", 1)[0]
     assert "return;" in retry
     assert "apply_pending_display_intent_" not in retry
@@ -350,7 +373,7 @@ def test_worker_snapshots_are_deferred_through_completion_on_success_and_failure
     error_branch = worker.index("if (!event.ok)")
     queue = worker.index("xQueueSend(runtime->event_queue")
     assert before < transmit < after < error_branch < queue
-    completion = component.split("RadioRuntimeEvent result;", 1)[1]
+    completion = component.split("void Proflame2TEmbedComponent::consume_radio_runtime_events_()", 1)[1]
     restore = completion.index("this->restore_rx_after_tx_if_needed_();")
     before_output = completion.index('log_radio_registers(result.trace_before_tx, "tx_prepared", result.request_id)')
     after_output = completion.index('log_radio_registers(result.trace_after_tx, "tx_complete", result.request_id)')
@@ -426,9 +449,23 @@ def test_runtime_controls_defaults_and_queued_delay_are_explicit() -> None:
     assert call < wait < edge
     assert "if (transmission_index == 0 && pre_tx_settle_delay_us > 0)" in tx
     package = (ROOT / "esphome/packages/proflame2_tembed_base.yaml").read_text()
-    delay = package.split("id: proflame2_pre_tx_settle_delay", 1)[1].split("  - platform:", 1)[0]
-    assert "max_value: 100" in delay and "step: 0.1" in delay and "unit_of_measurement: ms" in delay
+    assert "name: Pre-TX Settling Delay" not in package
+    assert 'proflame2_pre_tx_settle_delay_us: "20000"' in package
+    assert "pre_tx_settle_delay_us: ${proflame2_pre_tx_settle_delay_us}" in package
+    schema = (COMPONENT / "__init__.py").read_text()
+    assert "cv.Optional(CONF_PRE_TX_SETTLE_DELAY_US, default=20000)" in schema
+    assert "var.set_pre_tx_settle_delay_us(config[CONF_PRE_TX_SETTLE_DELAY_US])" in schema
     toggle = package.split("id: proflame2_radio_trace_logging", 1)[1].split("  - platform:", 1)[0]
     assert "restore_mode: ALWAYS_OFF" in toggle
     assert "set_radio_trace_enabled(false)" in toggle
     assert "set_radio_trace_enabled(true)" in toggle
+    assert "entity_category: diagnostic" in toggle
+
+
+def test_completion_storage_is_separate_from_worker_and_not_on_stack() -> None:
+    component = (COMPONENT / "proflame2_tembed.cpp").read_text()
+    assert "RadioRuntimeEvent event_buffer{};" in component
+    assert "RadioRuntimeEvent completion_buffer{};" in component
+    completion = component.split("void Proflame2TEmbedComponent::consume_radio_runtime_events_()", 1)[1]
+    assert "auto& result = this->radio_runtime_->completion_buffer;" in completion
+    assert "RadioRuntimeEvent result;" not in completion

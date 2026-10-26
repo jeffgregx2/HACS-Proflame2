@@ -8,6 +8,30 @@ on:
       - main
 
 jobs:
+  esphome-config-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        esphome: ["2026.8.2", "2026.9.1", "2026.10.0"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Install isolated test and ESPHome environments
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-dev.txt
+          python -m venv .venv-esphome
+          .venv-esphome/bin/python -m pip install esphome==${{ matrix.esphome }}
+      - name: Validate telemetry categories and YAML-only settings
+        env:
+          ESPHOME_TEST_CLI: .venv-esphome/bin/esphome
+        run: .venv/bin/python -m pytest tests/test_lilygo_entity_configuration.py --no-cov -q
+      - name: Generate complete display example source (not a firmware compile)
+        run: .venv-esphome/bin/esphome compile esphome/validate_display_preset.yaml --only-generate
+
   esphome-validate:
     runs-on: ubuntu-latest
 
