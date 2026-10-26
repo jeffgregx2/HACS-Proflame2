@@ -6,8 +6,10 @@ Add support for Proflame2 fireplaces that use the 433.92 MHz CE radio band on
 the LilyGO T-Embed CC1101 controller. The initial reporter hardware is a SIT
 Proflame2 remote, part number `0.584.053`, used in Australia.
 
-This is an internal implementation and validation plan. It does not claim that
-433.92 MHz learning or control works until hardware validation is complete.
+This is an internal implementation and validation plan. The reporter confirmed
+operation with remote `0.584.053` using `v0.7.0-alpha1`. This is initial hardware
+evidence, not confirmation of every acceptance step or later beta firmware.
+Broader regression and release validation remain tracked below.
 
 ## Product Decision
 
@@ -33,17 +35,17 @@ Supported values are:
 implementation must not expose independent TX/RX frequencies, raw RF-switch
 pins, or a Home Assistant configuration-flow option.
 
-## Current Boundary
+## Original Fault Boundary
 
-The current package hardcodes both TX and RX to `314973000` Hz. Firmware also
-hardcodes the T-Embed RF switch to the 315 MHz path during `setup()`. Although
-the CC1101 frequency word is calculated from the configured value and used by
-both TX and RX, changing only a frequency value does not select the matching
-RF path.
+Before this implementation, the package hardcoded both TX and RX to
+`314973000` Hz. Firmware also hardcoded the T-Embed RF switch to the 315 MHz
+path during `setup()`. Although the CC1101 frequency word is calculated from a
+configured value and used by both TX and RX, changing only a frequency value
+does not select the matching RF path.
 
-The Issue #21 FIFO evidence is therefore not useful for protocol analysis: the
-receiver was tuned to the wrong band. Retest protocol behavior only after the
-433 MHz radio configuration is in place.
+The original Issue #21 FIFO evidence was therefore not useful for protocol
+analysis: the receiver was tuned to the wrong band. The selected-band model now
+configures both the CC1101 carrier and matching T-Embed RF path.
 
 ## Design
 
@@ -94,11 +96,10 @@ validation, repeat behavior, and 7-word/10-word frame handling. Band selection
 must not alter packet contents or transmit scheduling; it changes only the RF
 carrier and matching board path.
 
-The current CC1101 register profile has been validated only at 315 MHz. Keep
-the profile initially, but require 433.92 MHz hardware validation of RX and TX.
-If the radio fails to receive/decode or transmit reliably at 433.92 MHz, record
-the observed registers and derive a 433-specific register profile from measured
-evidence rather than guessing tuning values.
+The current CC1101 register profile has initial hardware validation at both 315
+MHz and 433.92 MHz. Retain the shared profile unless a future supported remote
+shows a measured compatibility problem; derive a band-specific profile only
+from that evidence rather than guessing tuning values.
 
 ### 4. Package And Documentation
 
@@ -135,11 +136,14 @@ contract change is required.
 - [x] Update the YAML helper, user documentation, component README, and
       ESPHome contract documentation.
 - [x] Add test fixtures/configurations for both supported substitutions.
-- [ ] Complete host, ESPHome compile, and hardware validation below.
+- [x] Complete host, ESPHome compile, and initial hardware validation below.
 
 **Current status:** Host coverage, Python regression tests, schema validation,
-and both staged ESPHome builds are complete. Physical 315 MHz regression and
-433.92 MHz receive/transmit validation remain required before release.
+both staged ESPHome builds, and initial 433.92 MHz hardware validation are
+complete. The Issue #21 reporter confirmed that the integration and firmware
+worked with SIT remote `0.584.053` on `v0.7.0-alpha1`, without a per-step test
+report. Detailed acceptance checks and later-beta regression remain required
+before a general release.
 
 ## Automated Test And Coverage Plan
 
@@ -211,8 +215,9 @@ C++ coverage thresholds fail.
 ## Hardware Validation Plan
 
 Automated tests prove mapping and generated configuration, not RF behavior.
-The Issue #21 reporter must validate a 433 MHz beta with the original remote
-available for recovery.
+The Issue #21 reporter confirmed overall operation on alpha1. The following
+acceptance plan remains the detailed validation checklist; completion of every
+step was not documented in that report.
 
 ### 433.92 MHz Acceptance
 
@@ -245,11 +250,13 @@ available for recovery.
 
 ## Release Criteria
 
-The feature is ready for beta only when all automated checks pass and the
-433.92 MHz reporter has demonstrated successful guided learning, active
-listening, and at least basic HA transmit control. It is ready for a general
-release only after the 315 MHz regression test also passes and user-facing
-documentation names the `0.584.053` remote as tested.
+The feature is ready for beta once all automated checks pass and the 433.92 MHz
+reporter has demonstrated successful guided learning, active listening, and
+basic HA transmit control. The initial alpha1 success report for remote
+`0.584.053` supports continued beta testing, but does not establish completion
+of the detailed checklist or validate later beta changes. A general release
+requires the applicable 433 MHz acceptance and 315 MHz regression checks to
+pass, with user-facing documentation naming `0.584.053` as tested.
 
 If 433 MHz learning succeeds but HA transmit fails, release only the diagnostic
 receive evidence if explicitly useful; do not present 433 MHz as supported.

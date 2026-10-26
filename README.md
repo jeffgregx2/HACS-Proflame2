@@ -113,6 +113,7 @@ and appear to work:
 
 - `0.584.040`
 - `0.584.043`
+- `0.584.053` (433.92 MHz CE variant)
 - `0.584.080`
 
 Other Proflame2 remotes may also work. These are simply the remote models for
