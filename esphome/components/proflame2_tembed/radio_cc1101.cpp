@@ -25,17 +25,17 @@ static constexpr uint8_t CC1101_READ_SINGLE = 0x80;
 static constexpr uint8_t CC1101_READ_BURST = 0xC0;
 static constexpr uint8_t CC1101_READ_STATUS = 0xC0;
 
-#if PROFLAME2_RADIO_TRACE
-void RadioCC1101::set_radio_trace_enabled(bool value) {
-  if (this->radio_trace_enabled_.exchange(value) != value) {
-    ESP_LOGI(TAG, "Radio register trace %s (output and snapshot reads)", value ? "ON" : "OFF");
-  }
-}
-
 void RadioCC1101::set_pre_tx_settle_delay_us(uint32_t value) {
   const uint32_t bounded = value > RADIO_TRACE_MAX_PRE_TX_SETTLE_US ? RADIO_TRACE_MAX_PRE_TX_SETTLE_US : value;
   if (this->pre_tx_settle_delay_us_.exchange(bounded) != bounded) {
     ESP_LOGI(TAG, "Diagnostic pre-TX settling delay set to %" PRIu32 " us", bounded);
+  }
+}
+
+#if PROFLAME2_RADIO_TRACE
+void RadioCC1101::set_radio_trace_enabled(bool value) {
+  if (this->radio_trace_enabled_.exchange(value) != value) {
+    ESP_LOGI(TAG, "Radio register trace %s (output and snapshot reads)", value ? "ON" : "OFF");
   }
 }
 

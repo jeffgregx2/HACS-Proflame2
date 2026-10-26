@@ -38,7 +38,9 @@ static RunResult run(const std::vector<uint8_t>& payload, uint32_t bits, uint32_
   InternalGPIOPin pin;
   BenchRadio radio;
   radio.prepare(&pin);
+#if PROFLAME2_RADIO_TRACE
   radio.set_radio_trace_enabled(false);
+#endif
   radio.set_pre_tx_settle_delay_us(delay_us);
   trace_logs.clear();
   uint32_t elapsed_ms = 0;

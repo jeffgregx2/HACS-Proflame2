@@ -104,7 +104,7 @@ public:
   void setup() override;
   void loop() override;
   void dump_config() override;
-  /// One extra full burst after two seconds of quiet; defaults OFF at boot.
+  /// One extra full burst after two seconds of quiet; base package enables it at boot.
   void set_delayed_retransmission_enabled(bool value);
   bool is_delayed_retransmission_enabled() const;
 

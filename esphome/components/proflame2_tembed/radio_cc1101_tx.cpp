@@ -1035,7 +1035,7 @@ bool RadioCC1101::transmit_async_ook(const uint8_t* payload, size_t length, uint
                                      NativeGroupRepeatBoundaryMode native_group_repeat_boundary_mode,
                                      uint32_t pre_burst_low_us, uint32_t pre_frame_low_us,
                                      uint32_t post_frame_idle_gap_us, uint32_t& elapsed_ms, TXTimingDiagnostics& timing,
-                                     std::string& error, [[maybe_unused]] uint32_t pre_tx_settle_delay_us) {
+                                     std::string& error, uint32_t pre_tx_settle_delay_us) {
   elapsed_ms = 0;
   timing = TXTimingDiagnostics{};
   if (!this->initialized_) {
@@ -1054,12 +1054,10 @@ bool RadioCC1101::transmit_async_ook(const uint8_t* payload, size_t length, uint
     error = "invalid_data_rate";
     return false;
   }
-#if PROFLAME2_RADIO_TRACE
   if (pre_tx_settle_delay_us > 0 && tx_mode != TXMode::PROFLAME_NATIVE_GROUPS) {
     error = "pre_tx_settle_requires_native_groups";
     return false;
   }
-#endif
 
   const uint32_t bit_period_us =
       std::max<uint32_t>(1, static_cast<uint32_t>((1000000ULL + (this->data_rate_bps_ / 2U)) / this->data_rate_bps_));
@@ -1376,12 +1374,10 @@ bool RadioCC1101::transmit_async_ook(const uint8_t* payload, size_t length, uint
       if (target_first_rising_edge_us < tx_ready_us) {
         target_first_rising_edge_us = tx_ready_us;
       }
-#if PROFLAME2_RADIO_TRACE
       if (transmission_index == 0 && pre_tx_settle_delay_us > 0) {
         target_first_rising_edge_us = radio_trace_pre_tx_deadline(
             target_first_rising_edge_us, tx_ready_us, transmission_index, pre_tx_settle_delay_us);
       }
-#endif
       wait_until_(target_first_rising_edge_us);
       const uint32_t first_symbol_cycle = esp_cpu_get_cycle_count();
       this->async_tx_pin_()->digital_write(true);

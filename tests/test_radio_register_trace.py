@@ -381,7 +381,8 @@ def test_worker_snapshots_are_deferred_through_completion_on_success_and_failure
     assert restore < before_output < after_output < failure
 
 
-def test_native_tx_settling_legacy_and_extended_real_scheduler(tmp_path: Path) -> None:
+@pytest.mark.parametrize("trace_enabled", [0, 1])
+def test_native_tx_settling_legacy_and_extended_real_scheduler(tmp_path: Path, trace_enabled: int) -> None:
     executable = tmp_path / "native_tx_settling"
     compiler = shutil.which("g++")
     assert compiler
@@ -391,7 +392,7 @@ def test_native_tx_settling_legacy_and_extended_real_scheduler(tmp_path: Path) -
             "-std=c++17",
             "-Wall",
             "-Wextra",
-            "-DPROFLAME2_RADIO_TRACE=1",
+            f"-DPROFLAME2_RADIO_TRACE={trace_enabled}",
             f"-I{ROOT / 'tests/cpp/radio_trace_stubs'}",
             f"-I{COMPONENT}",
             str(COMPONENT / "radio_cc1101.cpp"),

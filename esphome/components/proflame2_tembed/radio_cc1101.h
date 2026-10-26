@@ -8,6 +8,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -17,10 +18,7 @@
 #define PROFLAME2_RADIO_TRACE 0
 #endif
 
-#if PROFLAME2_RADIO_TRACE
-#include <atomic>
 #include "radio_trace.h"
-#endif
 
 #ifndef PROFLAME2_TEMBED_TX_DEBUG
 #define PROFLAME2_TEMBED_TX_DEBUG 1
@@ -289,11 +287,15 @@ public:
   void log_rf_output_path(GPIOPin* gdo0_pin, GPIOPin* gdo2_pin, TXMode tx_mode, uint32_t payload_length,
                           uint32_t payload_bit_length, uint8_t repeat_count, uint32_t repeat_gap_us);
   void log_runtime_register_snapshot(const char* stage);
+  void set_pre_tx_settle_delay_us(uint32_t value);
+  uint32_t get_pre_tx_settle_delay_us() const {
+    return this->pre_tx_settle_delay_us_.load();
+  }
 #if PROFLAME2_RADIO_TRACE
   void set_radio_trace_enabled(bool value);
-  bool is_radio_trace_enabled() const { return this->radio_trace_enabled_.load(); }
-  void set_pre_tx_settle_delay_us(uint32_t value);
-  uint32_t get_pre_tx_settle_delay_us() const { return this->pre_tx_settle_delay_us_.load(); }
+  bool is_radio_trace_enabled() const {
+    return this->radio_trace_enabled_.load();
+  }
   RadioTraceRecord capture_radio_registers();
   void log_radio_registers(const RadioTraceRecord& record, const char* stage, const char* request_id);
   void trace_radio_registers(const char* stage, const char* request_id);
@@ -321,10 +323,10 @@ protected:
   GPIOPin* spi_miso_pin_{nullptr};
   uint32_t radio_ready_timeout_us_{10000};
   bool spi_ready_warning_logged_{false};
+  std::atomic<uint32_t> pre_tx_settle_delay_us_{20000};
 #if PROFLAME2_RADIO_TRACE
   uint32_t radio_trace_sequence_{0};
   std::atomic<bool> radio_trace_enabled_{false};
-  std::atomic<uint32_t> pre_tx_settle_delay_us_{20000};
 #endif
   bool write_register_(uint8_t address, uint8_t value);
   uint8_t read_register_(uint8_t address);

@@ -21,6 +21,14 @@ public:
 
 int main() {
   TraceRadio radio;
+  // YAML code generation must configure settling with tracing compiled out too.
+  assert(radio.get_pre_tx_settle_delay_us() == 20000);
+  radio.set_pre_tx_settle_delay_us(999999);
+  assert(radio.get_pre_tx_settle_delay_us() == 100000);
+  radio.set_pre_tx_settle_delay_us(0);
+  assert(radio.get_pre_tx_settle_delay_us() == 0);
+  radio.set_pre_tx_settle_delay_us(20000);
+  trace_logs.clear();
   radio.trace_radio_registers("radio_initialized", "-");
   assert(spi::commands.empty() && trace_logs.empty());
   radio.initialized(true);

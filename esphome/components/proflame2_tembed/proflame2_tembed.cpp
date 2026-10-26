@@ -2761,9 +2761,7 @@ bool Proflame2TEmbedComponent::enqueue_tx_(const std::string& request_id, const 
   command.post_frame_idle_gap_us = this->post_frame_idle_gap_us_;
   command.pre_burst_low_us = this->pre_burst_low_us_;
   command.pre_frame_low_us = this->pre_frame_low_us_;
-#if PROFLAME2_RADIO_TRACE
   command.pre_tx_settle_delay_us = this->get_pre_tx_settle_delay_us();
-#endif
 
   this->display_.last_action_text = !status_text.empty() ? status_text : "Sending";
   this->display_.last_action_millis = millis();
