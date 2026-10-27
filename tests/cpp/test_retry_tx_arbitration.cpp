@@ -223,6 +223,23 @@ int main(int argc, char** argv) {
   const uint32_t bits = std::stoul(argv[2]);
   const std::string new_payload = argv[3];
   assert(payload != new_payload);
+  // A replacement rejected before admission must preserve the accepted retry.
+  for (bool reject_queue : {false, true}) {
+    Bench b;
+    assert(b.send("original", payload, bits, 6));
+    b.finish_worker(b.start_worker());
+    b.controller.consume_radio_runtime_events_();
+    assert(b.runtime.retry.pending());
+    b.commands.reject_send = reject_queue;
+    assert(!b.send("rejected", reject_queue ? new_payload : "invalid", bits, 0));
+    assert(b.runtime.retry.pending());
+    b.commands.reject_send = false;
+    esphome::test_millis = 2000;
+    b.controller.process_delayed_retransmission_();
+    const auto retry = b.start_worker();
+    assert(retry.is_retransmission && std::string(retry.request_id) == "original");
+    assert(std::string(retry.air_payload_hex) == payload);
+  }
   // Queue completion must survive worker scratch-buffer reuse during RX setup.
   {
     Bench b;

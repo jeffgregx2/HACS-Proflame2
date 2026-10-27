@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -55,6 +55,7 @@ from .const import (
     STATE_CONFIDENCE_RESTORED,
     STATE_CONFIDENCE_UNKNOWN,
 )
+from .control_intent import ControlIntents
 from .identity import fireplace_device_identifiers
 from .packet_debug import (
     async_disable_packet_debug_logging,
@@ -111,12 +112,16 @@ class Proflame2RuntimeEntry:
     learning_in_progress: bool = False
     sending_in_progress: bool = False
     last_packet: ProflamePacket | None = None
+    last_observed_packet: ProflamePacket | None = None
     last_send_result: SendResult | None = None
     last_error: str | None = None
     last_applied_profile_id: str | None = None
     last_applied_profile_name: str | None = None
     saved_profiles: dict[str, dict[str, Any]] | None = None
     desired_state: FireplaceState | None = None
+    control_intents: ControlIntents = field(default_factory=ControlIntents)
+    control_task: asyncio.Task[None] | None = None
+    control_disconnect_unsub: Callable[[], None] | None = None
     operational_status: str = OPERATIONAL_STATUS_READY
     state_confidence: str = STATE_CONFIDENCE_UNKNOWN
     active_profile_state: FireplaceState | None = None
@@ -637,6 +642,9 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     if runtime_entry.last_packet is None:
         await async_initialize_safe_default_runtime_state(hass, runtime_entry)
     async_get_runtime_entries(hass)[entry.entry_id] = runtime_entry
+    from .services import async_observe_controller_connection
+
+    async_observe_controller_connection(hass, runtime_entry)
     return runtime_entry
 
 
@@ -674,9 +682,13 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
     runtime_entry = async_get_runtime_entries(hass).pop(entry.entry_id, None)
     if runtime_entry:
         runtime_entry.shutting_down = True
+        if runtime_entry.control_disconnect_unsub is not None:
+            runtime_entry.control_disconnect_unsub()
+            runtime_entry.control_disconnect_unsub = None
         runtime_entry.shutdown_reason = "config_entry_unload"
         runtime_entry.active_listening_enabled = False
         for task in (
+            runtime_entry.control_task,
             runtime_entry.debounce_task,
             runtime_entry.active_send_task,
             runtime_entry.confirmation_task,
@@ -688,6 +700,7 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
         pending_tasks = [
             task
             for task in (
+                runtime_entry.control_task,
                 runtime_entry.debounce_task,
                 runtime_entry.active_send_task,
                 runtime_entry.confirmation_task,
@@ -719,9 +732,13 @@ async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
     runtime_entries = list(async_get_runtime_entries(hass).values())
     for runtime_entry in runtime_entries:
         runtime_entry.shutting_down = True
+        if runtime_entry.control_disconnect_unsub is not None:
+            runtime_entry.control_disconnect_unsub()
+            runtime_entry.control_disconnect_unsub = None
         runtime_entry.shutdown_reason = "ha_shutdown"
         runtime_entry.active_listening_enabled = False
         for task in (
+            runtime_entry.control_task,
             runtime_entry.debounce_task,
             runtime_entry.active_send_task,
             runtime_entry.confirmation_task,
@@ -733,6 +750,7 @@ async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
         pending_tasks = [
             task
             for task in (
+                runtime_entry.control_task,
                 runtime_entry.debounce_task,
                 runtime_entry.active_send_task,
                 runtime_entry.confirmation_task,
@@ -794,6 +812,20 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "shutting_down": runtime_entry.shutting_down,
         "shutdown_reason": runtime_entry.shutdown_reason,
         "desired_state": (asdict(runtime_entry.desired_state) if runtime_entry.desired_state is not None else None),
+        "control_intents": {
+            "revision": runtime_entry.control_intents.revision,
+            "epoch": runtime_entry.control_intents.epoch,
+            "pending_state": (
+                asdict(runtime_entry.control_intents.pending.state)
+                if runtime_entry.control_intents.pending is not None
+                else None
+            ),
+            "in_flight_state": (
+                asdict(runtime_entry.control_intents.in_flight.state)
+                if runtime_entry.control_intents.in_flight is not None
+                else None
+            ),
+        },
         "remote_profile": {
             "serial_id": runtime_entry.remote_profile.serial_id,
             "ecc": asdict(runtime_entry.remote_profile.ecc),

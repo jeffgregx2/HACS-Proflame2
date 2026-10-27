@@ -27,6 +27,9 @@ class FakeRFBackend(RFBackend):
     async def connect(self) -> None:
         self.connected = True
 
+    async def recover_send_readiness(self, request_id: str | None = None) -> bool:
+        return self.connected
+
     async def close(self, *, reason: str | None = None) -> None:
         self.connected = False
 

@@ -174,3 +174,15 @@ Manual entry requires:
 
 Most users will not know these values. This option does not listen to a remote
 and does not run rtl_433.
+
+## Changing Controls
+
+You can continue adjusting controls while a command is being sent. Home Assistant
+keeps your latest combined settings and sends them after the current command
+finishes and the normal short delay has expired. Intermediate settings are not
+queued for later playback.
+
+If a send fails or the controller disconnects, the controls return to the last
+accepted settings. Reconnecting does not automatically resend discarded changes.
+A successful send means the controller finished transmitting; the fireplace does
+not send an acknowledgement. Check the fireplace itself when troubleshooting.
