@@ -434,6 +434,11 @@ def _should_suppress_verbose_failure(raw_payload: bytes, diagnostics) -> bool:
 class YardStickBackend(RFBackend):
     """Backend used for development-time RX and learning."""
 
+    @property
+    def physical_controller_id(self) -> str:
+        """Multiple fireplace entries using the same USB radio share TX ownership."""
+        return f"yardstick:{self._device_index}"
+
     def __init__(
         self,
         *,

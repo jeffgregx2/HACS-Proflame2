@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from itertools import count
 from typing import Any, cast
+from uuid import uuid4
 
 from ..const import BACKEND_ESPHOME
 from ..packet_debug import get_packet_debug_logger
@@ -21,6 +22,7 @@ from .base import BackendCapabilities, CaptureResult, RFBackend, SendResult
 from .capture import CaptureSample, DecodeCandidate, find_proflame_candidates
 from .esphome.contract import (
     ESPHomeDisplayState,
+    ESPHomeEndpointStatus,
     ESPHomeEndpointStatusReport,
     ESPHomeRadioConfig,
     ESPHomeRXEvent,
@@ -112,6 +114,8 @@ class ESPHomeAPIBackend(RFBackend):
         self.last_fifo_semantic_artifact: LilyGoFifoSemanticArtifact | None = None
         self.last_fifo_debug_failure: FifoDebugFailure | None = None
         self._request_counter = count(1)
+        self._request_session = uuid4().hex[:12]
+        self.latest_request_id: str | None = None
         self._connect_timeout_seconds = connect_timeout_seconds
         self._send_timeout_seconds = send_timeout_seconds
         self._close_timeout_seconds = close_timeout_seconds
@@ -189,6 +193,7 @@ class ESPHomeAPIBackend(RFBackend):
             request_id=self._next_request_id(),
             display_state=getattr(packet, "display_state", None),
         )
+        self.latest_request_id = request.request_id
         if request.repeat_count is None:
             request = ESPHomeTXRequest(
                 request_id=request.request_id,
@@ -216,6 +221,8 @@ class ESPHomeAPIBackend(RFBackend):
                 self.transport.send_tx(request),
                 timeout=self._send_timeout_seconds,
             )
+        except TimeoutError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"ESPHome backend send failed: {exc}") from exc
         finally:
@@ -673,7 +680,20 @@ class ESPHomeAPIBackend(RFBackend):
     def _next_request_id(self) -> str:
         """Return a local correlation id for HA/transport/debug logs."""
 
-        return f"proflame2-{next(self._request_counter)}"
+        return f"proflame2-{self._request_session}-{next(self._request_counter)}"
+
+    async def recover_send_readiness(self, request_id: str | None = None) -> bool:
+        """Require endpoint readiness before a new command follows uncertain TX."""
+        if self.transport is None:
+            return False
+        await self.connect()
+        recover = getattr(self.transport, "recover_send_readiness", None)
+        if callable(recover):
+            return await asyncio.wait_for(
+                recover(request_id or self.latest_request_id), timeout=self._connect_timeout_seconds
+            )
+        status = await self.transport.get_status()
+        return status.status in (ESPHomeEndpointStatus.READY, ESPHomeEndpointStatus.RX_ACTIVE)
 
     def serialize_diagnostics(self) -> dict[str, Any]:
         """Return diagnostics for the HA-side ESPHome backend adapter."""
