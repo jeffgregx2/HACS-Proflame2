@@ -25,5 +25,9 @@ struct RFBandConfiguration {
 /// Resolve one supported RF band. Returns false for an invalid enum value.
 bool resolve_rf_band_configuration(RFBand band, RFBandConfiguration& configuration);
 
+constexpr int32_t MAX_TX_FREQUENCY_OFFSET_HZ = 100000;
+/// Diagnostic TX-only adjustment; leaves output unchanged on invalid input.
+bool resolve_tx_frequency(RFBand band, int32_t offset_hz, uint32_t& frequency_hz);
+
 } // namespace proflame2_tembed
 } // namespace esphome

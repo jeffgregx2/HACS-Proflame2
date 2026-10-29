@@ -98,6 +98,28 @@ async def test_backend_send_consumes_exact_prepared_air_payload(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("extended", [False, True])
+async def test_payload_only_logging_preserves_requested_legacy_and_extended_pcm(remote_profile, caplog, extended):
+    if extended:
+        remote_profile = RemoteProfile(
+            serial_id=0x123456,
+            ecc=ECCProfile(c1=0, d1=0, c2=0, d2=0),
+            protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
+            extended_template=ExtendedFrameTemplate(w4_base=0x80, w6=0x15, w7=0xC8, w8=0),
+        )
+    packet = _prepared_packet(remote_profile)
+    backend = ESPHomeAPIBackend(transport=MockESPHomeTransport())
+    backend.set_pcm_logging_enabled(True)
+    await backend.send(packet)
+    lines = [record.getMessage() for record in caplog.records if record.name == "custom_components.proflame2.pcm"]
+    assert len(lines) == 1
+    assert f"pcm_hex={packet.transmission_plan.air_payload.hex()}" in lines[0]
+    assert f"bits={260 if extended else 182}" in lines[0]
+    assert "direction=TX" in lines[0]
+    assert "stage=request" in lines[0]
+
+
+@pytest.mark.asyncio
 async def test_backend_does_not_regenerate_protocol_payload(
     remote_profile: RemoteProfile,
     monkeypatch: pytest.MonkeyPatch,

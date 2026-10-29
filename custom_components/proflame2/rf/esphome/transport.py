@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -817,6 +817,9 @@ class HomeAssistantESPHomeTransport:
             parsed = self._build_rx_event_from_bus_data(event.data or {})
             if parsed is None:
                 return
+            pcm_logger = getattr(self, "pcm_event_logger", None)
+            if pcm_logger is not None:
+                pcm_logger(parsed.event)
             self._rx_queue.put_nowait(parsed.event)
             self._log_debug(
                 "rx event accepted controller_id=%s event_kind=%s packet_count=%s payload_length_bytes=%s payload_hex_preview=%s",
@@ -828,6 +831,10 @@ class HomeAssistantESPHomeTransport:
             )
 
         self._rx_unsub = self.hass.bus.async_listen(ESPHOME_RX_EVENT_TYPE, _handle_state_changed)
+
+    def set_pcm_event_logger(self, logger: Callable[[ESPHomeRXEvent], None]) -> None:
+        """Observe complete linked-device events before queue draining/filtering."""
+        self.pcm_event_logger = logger
 
     def _build_rx_event_from_bus_data(self, event_data: Mapping[str, Any]) -> _ParsedESPHomeRXEvent | None:
         """Validate and convert one Home Assistant bus payload into an RX event."""

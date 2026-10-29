@@ -101,15 +101,44 @@ class Proflame2TEmbedComponent : public Component,
                                  public i2c::I2CDevice,
                                  public api::CustomAPIDevice {
 public:
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  void start_waveform_capture() {
+    this->abort_waveform_capture();
+    if (this->rmt_ook_receiver_.active())
+      return;
+    this->set_fifo_capture_enabled(false);
+    this->set_rmt_pulse_capture_enabled_(true);
+  }
+  void abort_waveform_capture() {
+#ifdef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
+    // Stop acquisition, then let loop() drain and export the retained session.
+    this->rmt_ook_receiver_.end();
+#else
+    this->set_rmt_pulse_capture_enabled_(false);
+    // Retry an earlier failed shutdown even if the component's RX flag is clear.
+    this->rmt_ook_receiver_.end();
+#endif
+  }
+  void set_waveform_diagnostic_limits(bool rejected, uint16_t max_exports, uint32_t session_ms) {
+    RawCaptureLimits limits;
+    limits.capture_rejected = rejected;
+    limits.max_exports = max_exports;
+    limits.session_ms = session_ms;
+    this->rmt_ook_receiver_.set_diagnostic_limits(limits);
+  }
+#endif
   void setup() override;
   void loop() override;
   void dump_config() override;
-  /// One extra full burst after two seconds of quiet; base package enables it at boot.
+  /// Optional extra full burst after two seconds of quiet; starts disabled at boot.
   void set_delayed_retransmission_enabled(bool value);
   bool is_delayed_retransmission_enabled() const;
 
   void set_rf_band(RFBand value) {
     this->rf_band_ = value;
+  }
+  void set_tx_frequency_offset_hz(int32_t value) {
+    this->tx_frequency_offset_hz_ = value;
   }
   void set_data_rate_bps(uint32_t value) {
     this->data_rate_bps_ = value;
@@ -590,6 +619,7 @@ protected:
 
   RFBand rf_band_{RFBand::BAND_315};
   RFBandConfiguration rf_band_configuration_{314973000U, true, false, "315 MHz"};
+  int32_t tx_frequency_offset_hz_{0};
   uint32_t tx_frequency_hz_{rf_band_configuration_.frequency_hz};
   uint32_t rx_frequency_hz_{rf_band_configuration_.frequency_hz};
   uint32_t data_rate_bps_{2400};

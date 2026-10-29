@@ -39,6 +39,15 @@ mechanical cleanup does not obscure RF or controller behavior changes.
 
 ## Validation Maintenance
 
+- Review ESPHome's startup suggestion to set `esp32.framework.advanced.flash_chip`
+  to the detected driver (reported as `generic` on the diagnostic controller).
+  This omits unused flash vendor drivers to reduce IRAM usage; the warning alone
+  does not indicate memory exhaustion or an RF failure. Follow the value reported
+  by each board rather than assuming every LilyGO uses the same flash chip.
+  Keep ESPHome 2026.8.2 compatibility: its schema does not recognize this option.
+  Add version-appropriate configuration/help once the supported minimum permits
+  it, with configuration validation and a board boot test. Keep this separate
+  from the waveform investigation's measurement baseline.
 - Keep the host C++ coverage harness current as dependency-free firmware logic
   is extracted.
 - Keep 315 MHz and 433.92 MHz ESPHome fixtures compiling in CI.

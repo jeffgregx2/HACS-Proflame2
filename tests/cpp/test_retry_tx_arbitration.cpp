@@ -97,6 +97,7 @@ public:
   std::string applied_request;
   int applied_light{-1};
   uint32_t settle_us{20000};
+  int32_t tx_frequency_offset_hz_{0};
   uint32_t restores{0};
   bool clobber_worker_event_on_restore{false};
   bool tx(const std::string&, const std::string&, uint32_t, uint8_t, const std::string&, int, int, int, int, int, int,
@@ -131,6 +132,7 @@ public:
     rx_rmt_pulse_capture_enabled_ = value;
   }
   void strobe_(uint8_t) {}
+  bool apply_async_ook_registers_(std::string&, bool) { return true; }
   void log_radio_registers(const RadioTraceRecord&, const char*, const char*) {}
   void clear_pending_display_intent_() {
     pending_display_intent_ = PendingDisplayIntent{};

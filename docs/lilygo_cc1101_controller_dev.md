@@ -22,6 +22,11 @@ try to be a second independent protocol specification; use SmartFire and
 [custom_components/proflame2/rf/waveform.py](../custom_components/proflame2/rf/waveform.py)
 as the packet-format references.
 
+Measured timing observations and protocol-documentation follow-ups are recorded
+in [Measured Proflame2 Waveform Notes](proflame2_waveform_observations.md).
+In particular, distinguish observed native repeat gaps from decoder acceptance
+thresholds; they are not necessarily the same rule.
+
 ## Hardware Defaults
 
 The production ESPHome package configures the controller for:

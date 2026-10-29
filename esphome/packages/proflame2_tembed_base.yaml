@@ -41,17 +41,19 @@ substitutions:
   proflame2_post_frame_idle_gap_us_override: "0"
   proflame2_pre_burst_low_us_override: "834"
   proflame2_pre_frame_low_us_override: "0"
-  proflame2_diagnostic_repeat_count_override: "5"
+  proflame2_diagnostic_repeat_count_override: "10"
   proflame2_async_tx_data_pin_override: "gdo0"
   proflame2_active_listener_rx_path_default: "rmt_pulse"
   # Readiness timeout for IDLE, TX, and SPI CHIP_RDYn (microseconds).
   proflame2_radio_ready_timeout_us: "10000"
   # Pre-TX settling delay in microseconds; YAML-only, 20 ms by default.
   proflame2_pre_tx_settle_delay_us: "20000"
+  # Diagnostic TX-only carrier adjustment in Hz. RX tuning is not changed.
+  proflame2_tx_frequency_offset_hz: "0"
   proflame2_display_debug_mode: "false"
   # Stamped by the release workflow. This is independent of the source ref so
   # a local development build can still identify the released firmware version.
-  proflame2_firmware_version: "v0.7.0-beta3"
+  proflame2_firmware_version: "v0.7.0-debug"
 
 i2c:
   sda: GPIO8
@@ -177,6 +179,7 @@ proflame2_tembed:
   radio_ready_timeout_us: ${proflame2_radio_ready_timeout_us}
   pre_tx_settle_delay_us: ${proflame2_pre_tx_settle_delay_us}
   rf_band: ${proflame2_rf_band}
+  tx_frequency_offset_hz: ${proflame2_tx_frequency_offset_hz}
   data_rate_bps: 2400
   tx_repeat_count: 5
   tx_mode: ${proflame2_tx_mode_override}
@@ -496,7 +499,7 @@ switch:
     id: proflame2_delayed_retransmission
     name: Delayed Retransmission
     entity_category: config
-    restore_mode: ALWAYS_ON
+    restore_mode: ALWAYS_OFF
     lambda: |-
       return id(proflame2_radio).is_delayed_retransmission_enabled();
     turn_on_action:
