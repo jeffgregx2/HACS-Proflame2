@@ -146,6 +146,10 @@ Available feature choices:
 - `Aux supported`: enable auxiliary controls for fireplaces that have an
   auxiliary output.
 - `CPI supported`: enable Continuous Pilot Ignition controls.
+- `Refresh period in minutes`: optionally resend HA's current ON state after
+  this many minutes without successful transmission or valid matching reception.
+  The default `0` disables refresh. No refresh is sent while HA shows OFF.
+  Use this only for fireplace versions that require periodic keep-alive commands.
 - `Enable packet debug log`: write detailed packet/debug information for
   troubleshooting. Leave this off unless you are diagnosing a problem.
 - `Enable active listening`: allow Home Assistant to keep listening for remote

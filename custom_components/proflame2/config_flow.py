@@ -42,6 +42,7 @@ from .const import (
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
     CONF_RTL433_SAMPLES,
     DATA_LEARNING_DEBUG_LOGGING,
@@ -50,6 +51,7 @@ from .const import (
     DEFAULT_DEBUG_LOGGING,
     DEFAULT_FEATURE_OPTIONS,
     DEFAULT_FIREPLACE_SHORT_NAME,
+    DEFAULT_REFRESH_PERIOD_MINUTES,
     DOMAIN,
     available_backend_labels,
     available_backend_types,
@@ -78,6 +80,7 @@ from .profile import (
     DuplicateProfileIdError,
     InvalidNibbleError,
     InvalidProfileNameError,
+    InvalidRefreshPeriodError,
     InvalidRemoteIdError,
     InvalidRtl433SamplesError,
     InvalidSavedProfileError,
@@ -157,6 +160,9 @@ def _manual_profile_schema() -> vol.Schema:
             vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
             vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
             vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
+            vol.Required(CONF_REFRESH_PERIOD_MINUTES, default=DEFAULT_REFRESH_PERIOD_MINUTES): vol.All(
+                int, vol.Range(min=0)
+            ),
         }
     )
 
@@ -207,6 +213,9 @@ FEATURE_SELECTION_SCHEMA = vol.Schema(
         vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
         vol.Required(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): bool,
         vol.Required(CONF_ACTIVE_LISTENING, default=False): bool,
+        vol.Required(CONF_REFRESH_PERIOD_MINUTES, default=DEFAULT_REFRESH_PERIOD_MINUTES): vol.All(
+            int, vol.Range(min=0)
+        ),
         vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
     }
 )
@@ -315,6 +324,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 normalized = normalize_manual_profile_input(user_input)
+            except InvalidRefreshPeriodError:
+                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
             except InvalidRemoteIdError:
                 errors[CONF_REMOTE_ID] = "invalid_remote_id"
             except InvalidNibbleError as exc:
@@ -646,7 +657,13 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._learn_result is None or not self._learn_result.success or self._learn_input is None:
             return await self.async_step_learn_failed()
 
+        errors: dict[str, str] = {}
         if user_input is not None:
+            try:
+                options = normalize_entry_options(user_input)
+            except InvalidRefreshPeriodError:
+                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
+        if user_input is not None and not errors:
             data = {
                 CONF_NAME: self._learn_input[CONF_NAME],
                 CONF_BACKEND_TYPE: self._learn_input[CONF_BACKEND_TYPE],
@@ -660,7 +677,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self._async_create_profile_entry(
                 title=data[CONF_NAME],
                 data=data,
-                options=normalize_entry_options(user_input),
+                options=options,
             )
 
         suggested_values = default_feature_options()
@@ -675,9 +692,10 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         suggested_values[CONF_ACTIVE_LISTENING] = self._learn_input[CONF_BACKEND_TYPE] == BACKEND_ESPHOME
         return self.async_show_form(
             step_id="learn_features",
+            errors=errors,
             data_schema=self.add_suggested_values_to_schema(
                 FEATURE_SELECTION_SCHEMA,
-                suggested_values,
+                user_input or suggested_values,
             ),
         )
 
@@ -988,8 +1006,13 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
     async def async_step_features(self, user_input: dict[str, Any] | None = None):
         """Manage editable feature flag options."""
 
+        errors: dict[str, str] = {}
         if user_input is not None:
-            updated = normalize_entry_options({**self.config_entry.options, **user_input})
+            try:
+                updated = normalize_entry_options({**self.config_entry.options, **user_input})
+            except InvalidRefreshPeriodError:
+                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
+        if user_input is not None and not errors:
             updated.update(normalize_feature_options(user_input))
             updated[CONF_DEBUG_LOGGING] = bool(
                 user_input.get(
@@ -1012,7 +1035,8 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
         suggested_values.update(normalize_entry_options(self.config_entry.options))
         return self.async_show_form(
             step_id="features",
-            data_schema=self.add_suggested_values_to_schema(FEATURE_SELECTION_SCHEMA, suggested_values),
+            errors=errors,
+            data_schema=self.add_suggested_values_to_schema(FEATURE_SELECTION_SCHEMA, user_input or suggested_values),
         )
 
     async def async_step_profiles(self, user_input: dict[str, Any] | None = None):

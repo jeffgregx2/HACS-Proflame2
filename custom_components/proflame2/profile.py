@@ -28,11 +28,13 @@ from .const import (
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
     CONF_RTL433_SAMPLES,
     DEFAULT_DEBUG_LOGGING,
     DEFAULT_FEATURE_OPTIONS,
     DEFAULT_FIREPLACE_SHORT_NAME,
+    DEFAULT_REFRESH_PERIOD_MINUTES,
     FEATURE_OPTION_KEYS,
     MAX_FIREPLACE_SHORT_NAME_LENGTH,
     available_backend_types,
@@ -215,6 +217,17 @@ def default_feature_options() -> dict[str, bool]:
     return dict(DEFAULT_FEATURE_OPTIONS)
 
 
+class InvalidRefreshPeriodError(ValueError):
+    """Raised when a refresh period is not non-negative whole minutes."""
+
+
+def validate_refresh_period(value: Any) -> int:
+    """Require non-negative whole minutes without silently truncating input."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise InvalidRefreshPeriodError("Refresh period must be a non-negative whole number of minutes.")
+    return value
+
+
 def default_entry_options() -> dict[str, Any]:
     """Return default config-entry options including saved profiles."""
 
@@ -222,6 +235,7 @@ def default_entry_options() -> dict[str, Any]:
         **default_feature_options(),
         CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
         CONF_ACTIVE_LISTENING: False,
+        CONF_REFRESH_PERIOD_MINUTES: DEFAULT_REFRESH_PERIOD_MINUTES,
         CONF_FIREPLACE_SHORT_NAME: DEFAULT_FIREPLACE_SHORT_NAME,
         CONF_PROFILES: {},
     }
@@ -249,6 +263,9 @@ def normalize_entry_options(
         return normalized
 
     normalized.update(normalize_feature_options(raw_options))
+    normalized[CONF_REFRESH_PERIOD_MINUTES] = validate_refresh_period(
+        raw_options.get(CONF_REFRESH_PERIOD_MINUTES, DEFAULT_REFRESH_PERIOD_MINUTES)
+    )
     normalized[CONF_DEBUG_LOGGING] = bool(raw_options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
     if CONF_ACTIVE_LISTENING in raw_options:
         normalized[CONF_ACTIVE_LISTENING] = bool(raw_options[CONF_ACTIVE_LISTENING])

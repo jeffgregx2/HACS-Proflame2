@@ -212,6 +212,27 @@ Assistant synchronized when another remote is used later.
 
 To change the Active Listening settings, open Settings -> Devices & services -> Proflame 2 Fireplace in Home Assistant and select the Gear icon next to your existing fireplace.  Select `Edit supported features` -> `Enable active listening` and change it to the desired value.
 
+## Optional Inactivity Refresh
+
+Some fireplace versions shut off if they do not receive the current state within
+sixty minutes. A reporter with a Mendota FV48 and SIT Proflame 0.584.090 remote
+reports a ten-minute native refresh interval; this does not apply to every
+Mendota fireplace. Compatibility with that timeout still requires hardware
+validation.
+
+Set **Refresh period in minutes** during setup or under **Edit supported
+features** for an existing fireplace. The default, **0**, disables refresh.
+When enabled, HA resends its current state only while the fireplace is **ON**,
+after the configured interval without successful TX or valid matching RX.
+Received commands with unchanged state also restart the interval. A native OFF
+command prevents further refreshes; no keep-alive packet is sent while HA shows
+OFF. With Active Listening disabled, native commands cannot postpone refresh.
+
+Refresh uses the normal command path and yields to user changes. HA manages the
+timer: restart or controller reconnect starts a fresh interval, and LilyGO does
+not continue periodic refreshes without HA. A successful TX result does not
+confirm that the fireplace received it.
+
 ## Multiple Fireplaces
 
 The Proflame2 integration can support multiple fireplaces.  Each fireplace will need its own controller set up using that fireplace's original remote.  Simply use "Add entry" multiple times, once per fireplace.

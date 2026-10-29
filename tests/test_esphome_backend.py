@@ -676,6 +676,23 @@ async def test_backend_receive_accepts_firmware_filtered_active_listener_packet(
 
 
 @pytest.mark.asyncio
+async def test_backend_delivers_separate_unchanged_native_refreshes() -> None:
+    """State equality must not suppress activity before HA's refresh timer."""
+    profile = RemoteProfile(serial_id=0x3B3F02, ecc=ECCProfile(c1=5, d1=7, c2=1, d2=8))
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport, remote_profile=profile)
+    await backend.connect()
+    await backend.set_active_listening_enabled(True, profile)
+    frame = encode_packet(FireplaceState(power=True, flame=3), profile).frame
+    for event_id in ("native-command", "later-native-refresh"):
+        transport.push_rx_event(_fifo_event(event_id, frame))
+        packet = await backend.receive(timeout=0.1)
+        assert packet is not None
+        assert packet.frame == frame
+    await backend.close()
+
+
+@pytest.mark.asyncio
 async def test_backend_receive_rejects_strict_rx_packet_without_decoded_fields(
     remote_profile: RemoteProfile,
 ) -> None:
