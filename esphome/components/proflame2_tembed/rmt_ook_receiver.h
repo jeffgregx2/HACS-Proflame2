@@ -15,15 +15,15 @@
 #include "freertos/queue.h"
 #include "esphome/core/defines.h"
 #ifdef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
-#include "buffered_ook_capture.h"
+#include "diagnostics/buffered_ook_capture.h"
 #endif
 #ifdef USE_PROFLAME2_GPIO_EDGE_DIAGNOSTICS
-#include "gpio_edge_observer.h"
+#include "diagnostics/gpio_edge_observer.h"
 #endif
 
 #ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
 #include "esp_attr.h"
-#include "raw_ook_window.h"
+#include "diagnostics/raw_ook_window.h"
 #endif
 
 namespace esphome {

@@ -95,7 +95,8 @@ def _config(
         .replace("PLACEHOLDER_BASE", f"!include {local_base}")
         .replace("PLACEHOLDER_DEBUG", f"!include {ROOT / 'esphome/packages/proflame2_tembed_debug.yaml'}")
         .replace(
-            "PLACEHOLDER_WAVEFORM", f"!include {ROOT / 'esphome/packages/proflame2_tembed_waveform_diagnostics.yaml'}"
+            "PLACEHOLDER_WAVEFORM",
+            f"!include {ROOT / 'esphome/packages/diagnostics/proflame2_tembed_waveform_diagnostics.yaml'}",
         )
     )
     path = tmp_path / "device.yaml"
@@ -128,6 +129,13 @@ def test_waveform_diagnostics_codegen_is_explicit_opt_in(tmp_path, esphome_cli, 
     main = "\n".join(path.read_text() for path in tmp_path.rglob("main.cpp"))
     assert ("proflame2_waveform_start" in main) is enabled
     assert ("start_waveform_capture()" in main) is enabled
+    nested_sources = list(tmp_path.rglob("src/diagnostics/buffered_ook_capture.cpp"))
+    assert bool(nested_sources) is enabled
+    if enabled:
+        assert (
+            nested_sources[0].read_bytes()
+            == (ROOT / "esphome/components/proflame2_tembed/diagnostics/buffered_ook_capture.cpp").read_bytes()
+        )
     base_version = yaml.load((ROOT / "esphome/packages/proflame2_tembed_base.yaml").read_text(), Loader=_Loader)[
         "substitutions"
     ]["proflame2_firmware_version"]

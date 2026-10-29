@@ -23,7 +23,7 @@ try to be a second independent protocol specification; use SmartFire and
 as the packet-format references.
 
 Measured timing observations and protocol-documentation follow-ups are recorded
-in [Measured Proflame2 Waveform Notes](proflame2_waveform_observations.md).
+in [Measured Proflame2 Waveform Notes](diagnostics/proflame2_waveform_observations.md).
 In particular, distinguish observed native repeat gaps from decoder acceptance
 thresholds; they are not necessarily the same rule.
 

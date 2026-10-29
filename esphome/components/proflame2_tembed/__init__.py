@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import esphome.automation as automation
 import esphome.codegen as cg
@@ -277,6 +278,11 @@ FINAL_VALIDATE_SCHEMA = cv.All(
 
 async def to_code(config):
     if config[CONF_WAVEFORM_DIAGNOSTICS]:
+        # Use ESPHome's include-directory handling for opt-in nested sources.
+        # Normal component discovery intentionally only copies root-level files.
+        from esphome.core.config import add_includes
+
+        CORE.add_job(add_includes, [str(Path(__file__).parent / "diagnostics")])
         cg.add_define("USE_PROFLAME2_WAVEFORM_DIAGNOSTICS")
     if config[CONF_WAVEFORM_BUFFERED]:
         cg.add_define("USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS")
