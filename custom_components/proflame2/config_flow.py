@@ -37,6 +37,7 @@ from .const import (
     CONF_FRONT,
     CONF_INITIAL_FRAME,
     CONF_INITIAL_PACKET_SOURCE,
+    CONF_LEARNING_ID,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
@@ -76,11 +77,13 @@ from .learning import (
 from .packet_debug import get_packet_debug_logger
 from .profile import (
     DuplicateProfileIdError,
+    InvalidLearningIdError,
     InvalidNibbleError,
     InvalidProfileNameError,
     InvalidRemoteIdError,
     InvalidRtl433SamplesError,
     InvalidSavedProfileError,
+    ManualProfileInput,
     Rtl433ProfileDerivationError,
     Rtl433RemoteIdMismatchError,
     Rtl433Sample,
@@ -88,6 +91,7 @@ from .profile import (
     fireplace_features_from_options,
     normalize_entry_options,
     normalize_feature_options,
+    normalize_learning_id_profile_input,
     normalize_manual_profile_input,
     normalize_manual_rtl433_profile_samples,
     normalize_saved_profile_input,
@@ -140,7 +144,20 @@ def _learning_backend_selector() -> SelectSelector:
 
 
 def _manual_profile_schema() -> vol.Schema:
-    """Build the manual-entry schema for the active build."""
+    """Build the default Learning ID import form."""
+
+    return vol.Schema(
+        {
+            vol.Required(CONF_NAME): str,
+            vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
+            vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _backend_selector(),
+            vol.Required(CONF_LEARNING_ID): str,
+        }
+    )
+
+
+def _manual_legacy_profile_schema() -> vol.Schema:
+    """Build the retained legacy remote ID and C/D entry form."""
 
     return vol.Schema(
         {
@@ -304,11 +321,33 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_menu(
             step_id="user",
-            menu_options=["learn", "manual_rtl433", "manual"],
+            menu_options=["learn", "manual_rtl433", "manual", "manual_legacy"],
         )
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None):
-        """Handle manual fireplace profile entry."""
+        """Import either protocol from a Learning ID; default manual setup path."""
+
+        # Retain programmatic callers that submit the original manual schema.
+        if user_input is not None and CONF_LEARNING_ID not in user_input and CONF_REMOTE_ID in user_input:
+            return await self.async_step_manual_legacy(user_input)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                normalized = normalize_learning_id_profile_input(user_input)
+            except InvalidLearningIdError:
+                errors[CONF_LEARNING_ID] = "invalid_learning_id"
+            else:
+                return await self._async_finish_manual_profile(normalized, user_input)
+        return self.async_show_form(
+            step_id="manual",
+            data_schema=self.add_suggested_values_to_schema(
+                _manual_profile_schema(), user_input or self._manual_suggested_values()
+            ),
+            errors=errors,
+        )
+
+    async def async_step_manual_legacy(self, user_input: dict[str, Any] | None = None):
+        """Retain manual entry of remote ID and legacy C/D constants."""
 
         errors: dict[str, str] = {}
 
@@ -321,26 +360,32 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 error_key = _extract_invalid_nibble_key(user_input, exc)
                 errors[error_key] = "invalid_nibble"
             else:
-                if self._backend_requires_esphome_entry(normalized.data[CONF_BACKEND_TYPE]):
-                    linked_entry_id = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
-                    if linked_entry_id:
-                        normalized.data[CONF_ESPHOME_ENTRY_ID] = linked_entry_id
-                    esphome_entry_error = self._validate_manual_esphome_link(normalized.data)
-                    if esphome_entry_error is not None:
-                        self._manual_pending_data = normalized.data
-                        self._manual_pending_options = normalized.options
-                        return await self.async_step_manual_esphome()
-                return await self._async_create_profile_entry(
-                    title=normalized.data[CONF_NAME],
-                    data=normalized.data,
-                    options=normalized.options,
-                )
+                return await self._async_finish_manual_profile(normalized, user_input)
 
         suggested_values = self._manual_suggested_values()
         return self.async_show_form(
-            step_id="manual",
-            data_schema=self.add_suggested_values_to_schema(_manual_profile_schema(), user_input or suggested_values),
+            step_id="manual_legacy",
+            data_schema=self.add_suggested_values_to_schema(
+                _manual_legacy_profile_schema(), user_input or suggested_values
+            ),
             errors=errors,
+        )
+
+    async def _async_finish_manual_profile(self, normalized: ManualProfileInput, user_input: dict[str, Any]):
+        """Share controller linking and duplicate protection between import paths."""
+
+        if self._backend_requires_esphome_entry(normalized.data[CONF_BACKEND_TYPE]):
+            linked_entry_id = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
+            if linked_entry_id:
+                normalized.data[CONF_ESPHOME_ENTRY_ID] = linked_entry_id
+            if self._validate_manual_esphome_link(normalized.data) is not None:
+                self._manual_pending_data = normalized.data
+                self._manual_pending_options = normalized.options
+                return await self.async_step_manual_esphome()
+        return await self._async_create_profile_entry(
+            title=normalized.data[CONF_NAME],
+            data=normalized.data,
+            options=normalized.options,
         )
 
     async def async_step_manual_rtl433(self, user_input: dict[str, Any] | None = None):
@@ -693,7 +738,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         return self.async_show_menu(
             step_id="learn_failed",
-            menu_options=["retry_learn", "manual_rtl433", "manual"],
+            menu_options=["retry_learn", "manual_rtl433", "manual", "manual_legacy"],
             description_placeholders=description_placeholders,
         )
 

@@ -64,6 +64,9 @@ Local commits may later be pushed, so the same rule applies immediately.
   directory or other identity-bearing path. Use neutral placeholders where
   context is necessary, and retain non-identifying technical evidence such as
   source filenames, crash addresses, and line numbers.
+- Keep device-specific Learning IDs and private local notes in `docs/private/`,
+  which is ignored recursively by Git. Never force-add its contents. Keep raw
+  captures in dedicated capture storage and credentials in external configuration.
 - The only exception is the maintainer's explicitly authorized personal
   sign-off on a post. Do not record the signature in these guidelines or infer
   permission for any other personal information from it.

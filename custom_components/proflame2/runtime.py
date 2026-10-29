@@ -63,6 +63,7 @@ from .packet_debug import (
 )
 from .profile import normalize_profiles, sanitize_fireplace_short_name
 from .protocol.encoder import encode_packet
+from .protocol.learning_id import encode_learning_id
 from .protocol.models import (
     PROTOCOL_VARIANT_EXTENDED_10_WORD,
     ECCProfile,
@@ -127,6 +128,7 @@ class Proflame2RuntimeEntry:
     active_profile_state: FireplaceState | None = None
     active_listening_enabled: bool = False
     debug_logging_enabled: bool = False
+    learning_id: str | None = None
     debounce_task: asyncio.Task[None] | None = None
     debounce_cancel_reason: str | None = None
     active_send_task: asyncio.Task[None] | None = None
@@ -607,6 +609,11 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
         active_listening_enabled=active_listening_enabled,
         debug_logging_enabled=debug_logging_enabled,
     )
+    try:
+        runtime_entry.learning_id = encode_learning_id(remote_profile)
+    except ValueError:
+        # A diagnostic export failure must not disable an otherwise usable fireplace.
+        _LOGGER.warning("Unable to generate Learning ID from the loaded remote profile.")
     if controller_device_id is not None:
         device_registry = dr.async_get(hass)
         device_registry.async_update_device(

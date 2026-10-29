@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import itertools
+from dataclasses import asdict
+
 import pytest
 
 pytestmark = pytest.mark.protocol
@@ -19,22 +22,32 @@ from custom_components.proflame2.const import (
     CONF_D1,
     CONF_D2,
     CONF_DEBUG_LOGGING,
+    CONF_ESPHOME_ENTRY_ID,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
     CONF_FRONT,
+    CONF_LEARNING_ID,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_PROTOCOL_VARIANT,
     CONF_REMOTE_ID,
     CONF_RTL433_SAMPLES,
+    PROTOCOL_VARIANT_EXTENDED_10_WORD,
+    PROTOCOL_VARIANT_LEGACY_7_WORD,
     available_backend_types,
     available_learning_backend_types,
 )
 from custom_components.proflame2.profile import (
     InvalidBackendError,
+    InvalidLearningIdError,
     InvalidNibbleError,
     InvalidRemoteIdError,
     InvalidRtl433SamplesError,
@@ -47,6 +60,7 @@ from custom_components.proflame2.profile import (
     default_feature_options,
     normalize_entry_options,
     normalize_feature_options,
+    normalize_learning_id_profile_input,
     normalize_manual_profile_input,
     normalize_manual_rtl433_profile_input,
     normalize_saved_profile_input,
@@ -55,7 +69,13 @@ from custom_components.proflame2.profile import (
     parse_rtl433_samples,
     sanitize_fireplace_short_name,
 )
-from custom_components.proflame2.protocol.models import FireplaceFeatures
+from custom_components.proflame2.protocol.learning_id import encode_learning_id
+from custom_components.proflame2.protocol.models import (
+    ECCProfile,
+    ExtendedFrameTemplate,
+    FireplaceFeatures,
+    RemoteProfile,
+)
 from custom_components.proflame2.rf.registry import get_backend_definition, normalize_controller_id
 from custom_components.proflame2.version import (
     DEFAULT_INTEGRATION_VERSION,
@@ -72,6 +92,67 @@ def test_parse_remote_id_accepts_24_bit_hex() -> None:
 
     assert parse_remote_id("3b3f02") == 0x3B3F02
     assert parse_remote_id("0x3B3F02") == 0x3B3F02
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("flags", itertools.product((False, True), repeat=5))
+def test_learning_id_normalization_preserves_profile_and_features(extended, flags) -> None:
+    features = FireplaceFeatures(*flags)
+    profile = RemoteProfile(
+        0x123456,
+        ECCProfile(0, 0, 0, 0) if extended else ECCProfile(5, 7, 1, 8),
+        features,
+        PROTOCOL_VARIANT_EXTENDED_10_WORD if extended else PROTOCOL_VARIANT_LEGACY_7_WORD,
+        ExtendedFrameTemplate(0x84, 0x50, 0xC8, 2) if extended else None,
+    )
+    result = normalize_learning_id_profile_input(
+        {
+            CONF_NAME: " Test Fireplace ",
+            CONF_BACKEND_TYPE: BACKEND_ESPHOME,
+            CONF_ESPHOME_ENTRY_ID: "test-controller",
+            CONF_FIREPLACE_SHORT_NAME: " TEST ",
+            CONF_LEARNING_ID: "\n" + encode_learning_id(profile) + " ",
+            # The ID, not unrelated submitted profile fields, is authoritative.
+            CONF_REMOTE_ID: 0xFFFFFF,
+            CONF_C1: 15,
+            **{key: not value for key, value in asdict(features).items()},
+        }
+    )
+    assert result.data[CONF_NAME] == "Test Fireplace"
+    assert result.data[CONF_ESPHOME_ENTRY_ID] == "test-controller"
+    assert result.data[CONF_REMOTE_ID] == 0x123456
+    assert result.data[CONF_PROTOCOL_VARIANT] == profile.protocol_variant
+    assert {key: result.options[key] for key in asdict(features)} == asdict(features)
+    assert result.options[CONF_ACTIVE_LISTENING] is True
+    assert result.options[CONF_FIREPLACE_SHORT_NAME] == "TEST"
+    assert CONF_LEARNING_ID not in result.data
+    assert CONF_LEARNING_ID not in result.options
+    if extended:
+        assert [
+            result.data[key] for key in (CONF_EXTENDED_W4_BASE, CONF_EXTENDED_W6, CONF_EXTENDED_W7, CONF_EXTENDED_W8)
+        ] == [0x84, 0x50, 0xC8, 2]
+        assert all(key not in result.data for key in (CONF_C1, CONF_D1, CONF_C2, CONF_D2))
+    else:
+        assert {key: result.data[key] for key in asdict(profile.ecc)} == asdict(profile.ecc)
+        assert CONF_EXTENDED_W4_BASE not in result.data
+
+
+@pytest.mark.parametrize("value", [None, 123, "", "bad-id", "PF2-9-L-CI2FMA2XDBVBZFK7"])
+def test_learning_id_normalization_rejects_bad_values_without_echoing(value) -> None:
+    with pytest.raises(InvalidLearningIdError, match="^Invalid Learning ID.$") as exc:
+        normalize_learning_id_profile_input({CONF_LEARNING_ID: value})
+    assert exc.value.__cause__ is None
+
+
+def test_learning_id_normalization_rejects_unsupported_controller() -> None:
+    with pytest.raises(InvalidBackendError):
+        normalize_learning_id_profile_input(
+            {
+                CONF_NAME: "Test Fireplace",
+                CONF_BACKEND_TYPE: "unsupported",
+                CONF_LEARNING_ID: "PF2-1-L-CI2FMA2XDBVBZFK7",
+            }
+        )
 
 
 def test_parse_remote_id_rejects_invalid_values() -> None:

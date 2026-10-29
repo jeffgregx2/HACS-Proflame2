@@ -45,8 +45,10 @@ path to use.
   original fireplace remote. Most users should choose this option.
 - **Learn from rtl_433 output**: use only if normal learning does not complete
   and you have, or are willing to obtain, a separate SDR receiver.
-- **Manual entry**: use only if you already know the exact remote ID and C/D
-  values for the fireplace remote.
+- **Enter Learning ID**: copy an existing profile using its Learning ID
+  diagnostic sensor. Supports both legacy and extended remotes.
+- **Enter legacy values**: use older records containing a remote ID and C/D
+  values. This option supports legacy remotes only.
 
 ## Learn Fireplace Profile
 
@@ -164,7 +166,23 @@ exact remote profile values from prior troubleshooting.
 In almost all situations, use `Learn from remote` first. If that fails, use
 `Learn from rtl_433 output`.
 
-Manual entry requires:
+To copy an existing profile, open its Proflame2 fireplace device in Home
+Assistant and copy the **Learning ID** from the Diagnostic section. Choose
+**Enter Learning ID** when adding the new profile, paste the complete value,
+and provide the name and controller for this installation. For LilyGO, select
+the ESPHome controller in the next step.
+
+The ID restores the remote's identity, protocol, and supported-feature choices.
+You can adjust the features afterward using **Edit supported features**. It does
+not copy the current fireplace settings, controller connection, or radio band.
+Make sure the LilyGO is configured for the original remote's frequency.
+
+Learning IDs contain enough information to reproduce commands for that remote;
+do not publish them without considering that exposure. They identify a particular
+remote, not every remote with the same model number.
+
+If you have older remote ID and C/D records instead, choose **Enter legacy
+values** in the setup menu. This alternative requires:
 
 - `Remote ID`,
 - `C1`,
@@ -172,8 +190,9 @@ Manual entry requires:
 - `C2`,
 - `D2`.
 
-Most users will not know these values. This option does not listen to a remote
-and does not run rtl_433.
+Most users will not know these values. Neither manual option listens to a remote
+or runs rtl_433. See [Learning ID encoding](learning_id_encoding.md) for the
+technical exchange format.
 
 ## Changing Controls
 

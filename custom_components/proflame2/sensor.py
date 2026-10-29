@@ -47,6 +47,13 @@ USER_SENSORS: tuple[Proflame2SensorDefinition, ...] = (
 
 DIAGNOSTIC_SENSORS: tuple[Proflame2SensorDefinition, ...] = (
     Proflame2SensorDefinition(
+        key="learning_id",
+        name="Learning ID",
+        value_fn=lambda runtime: runtime.learning_id,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:identifier",
+    ),
+    Proflame2SensorDefinition(
         key="remote_id",
         name="Remote ID",
         value_fn=lambda runtime: remote_id_as_hex(runtime.remote_profile.serial_id),

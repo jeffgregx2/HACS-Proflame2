@@ -83,6 +83,9 @@ instance/
 # Sphinx documentation
 docs/_build/
 
+# Local-only documents and device-specific test data (all nested content).
+/docs/private/
+
 # PyBuilder
 .pybuilder/
 target/
@@ -235,15 +238,11 @@ __marimo__/
 #*#
 *~
 
-# Protocol debug data, we don't want that checked in
-analysis/
-!tools/waveform/analysis/
-!tools/waveform/analysis/*.py
+# Legacy root working-data paths remain excluded as a privacy guard.
+# Local documents/data now live under the recursively ignored docs/private/.
+/analysis/
+/llm_prompts/
+/tmp/
 
 # Ignore any private rtl_433 build with added instrumentation
 rtl_433/
-
-llm_prompts
-
-# Ignore tmp directory used for testing and refactor
-tmp/

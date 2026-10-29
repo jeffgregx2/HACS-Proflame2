@@ -7,19 +7,32 @@
         "menu_options": {
           "learn": "Learn from remote (Recommended)",
           "manual_rtl433": "Learn from rtl_433 output",
-          "manual": "Manual entry"
+          "manual": "Enter Learning ID",
+          "manual_legacy": "Enter legacy values"
         },
         "menu_option_descriptions": {
           "learn": "Use your selected LilyGO or YardStick controller to learn from the original remote.",
           "manual_rtl433": "Use a separate SDR with rtl_433 to learn, then control the fireplace with LilyGO or YardStick.",
-          "manual": "Enter the permanent remote ID and learned C/D values directly."
+          "manual": "Copy a Learning ID from an existing Proflame2 fireplace's diagnostics.",
+          "manual_legacy": "Enter a legacy remote ID and learned C/D values instead."
         }
       },
       "manual": {
         "title": "Manual fireplace profile",
+        "description": "Paste the Learning ID from the Diagnostic section of an existing Proflame2 fireplace device. This works for both legacy and extended remotes and restores the supported features stored in that ID.\n\nFor a Remote ID and C/D values instead, choose Enter legacy values from the Add fireplace profile menu.",
+        "data": {
+          "name": "Fireplace name",
+          "fireplace_short_name": "Display short name",
+          "backend_type": "Controller Type",
+          "learning_id": "Learning ID"
+        }
+      },
+      "manual_legacy": {
+        "title": "Enter legacy values",
         "description": "Enter the permanent learned remote profile for one Proflame2 fireplace.",
         "data": {
           "name": "Fireplace name",
+          "fireplace_short_name": "Display short name",
           "backend_type": "Controller Type",
           "remote_id": "Remote ID",
           "c1": "C1",
@@ -104,12 +117,14 @@
         "menu_options": {
           "retry_learn": "Retry learning",
           "manual_rtl433": "Learn from rtl_433 output",
-          "manual": "Manual entry"
+          "manual": "Enter Learning ID",
+          "manual_legacy": "Enter legacy values"
         },
         "menu_option_descriptions": {
           "retry_learn": "Start guided learning again with the same backend.",
           "manual_rtl433": "Run rtl_433 yourself, follow prompted remote button presses, and paste decoded rows.",
-          "manual": "Enter the permanent remote profile yourself instead."
+          "manual": "Import an existing Learning ID instead.",
+          "manual_legacy": "Enter a known legacy remote ID and C/D values."
         }
       }
     },
@@ -117,6 +132,7 @@
       "learn_remote": "Listening with {backend_name}.\n\n**Do this now:**\n**{instruction}**\n\nThis step times out after 2 minutes if no packet is observed. Close this dialog to cancel listening."
     },
     "error": {
+      "invalid_learning_id": "Invalid Learning ID. Copy the complete ID, including its PF2 prefix. Check for missing characters or an unsupported version.",
       "invalid_remote_id": "Remote ID must be a 24-bit hexadecimal value.",
       "invalid_nibble": "C and D values must be integers from 0 to 15.",
       "invalid_profile": "The saved profile contains an invalid fireplace state.",

@@ -25,6 +25,10 @@ from custom_components.proflame2.const import (
     CONF_CPI,
     CONF_D1,
     CONF_D2,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
     CONF_FLAME,
     CONF_FRONT,
@@ -32,10 +36,14 @@ from custom_components.proflame2.const import (
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_PROTOCOL_VARIANT,
     CONF_REMOTE_ID,
     DOMAIN,
+    PROTOCOL_VARIANT_EXTENDED_10_WORD,
 )
+from custom_components.proflame2.protocol.learning_id import decode_learning_id, encode_learning_id
 from custom_components.proflame2.rf.yardstick import YardStickBackend
+from custom_components.proflame2.runtime import async_get_runtime_entries, serialize_runtime_entry
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +92,83 @@ def _primary_entity_id(title: str) -> str:
 
 def _secondary_entity_id(title: str, name: str) -> str:
     return f"sensor.{slugify(title)}_{slugify(name)}"
+
+
+@pytest.mark.parametrize("extended", [False, True])
+async def test_learning_id_diagnostic_generated_on_each_profile_load(hass, monkeypatch, extended) -> None:
+    """Expose a read-only ID and rebuild it instead of trusting old runtime state."""
+    entry = _add_entry(hass, title="Test Fireplace", remote_id=0x123456)
+    if extended:
+        hass.config_entries.async_update_entry(
+            entry,
+            data={
+                **entry.data,
+                CONF_PROTOCOL_VARIANT: PROTOCOL_VARIANT_EXTENDED_10_WORD,
+                CONF_EXTENDED_W4_BASE: 0x80,
+                CONF_EXTENDED_W6: 0x42,
+                CONF_EXTENDED_W7: 0xC8,
+                CONF_EXTENDED_W8: 0x19,
+            },
+        )
+    generated = []
+
+    def track_generation(profile):
+        result = encode_learning_id(profile)
+        generated.append(result)
+        return result
+
+    monkeypatch.setattr("custom_components.proflame2.runtime.encode_learning_id", track_generation)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entity_id = _secondary_entity_id(entry.title, "Learning ID")
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == generated[0]
+    assert state.state.startswith("PF2-1-E-" if extended else "PF2-1-L-")
+    registry_entry = er.async_get(hass).async_get(entity_id)
+    assert registry_entry.entity_category.value == "diagnostic"
+    assert registry_entry.disabled_by is None
+    assert state.attributes.get("supported_features", 0) == 0
+
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    assert decode_learning_id(state.state).serial_id == runtime.remote_profile.serial_id
+    assert "learning_id" not in serialize_runtime_entry(runtime)
+    runtime.learning_id = "stale diagnostic value"
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert len(generated) == 2
+    assert hass.states.get(entity_id).state == generated[0] == generated[1]
+
+    hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_REMOTE_ID: 0x654321})
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state != generated[0]
+    assert decode_learning_id(hass.states.get(entity_id).state).serial_id == 0x654321
+    assert "learning_id" not in entry.data
+    assert "learning_id" not in entry.options
+
+
+async def test_learning_id_generation_failure_does_not_block_control(hass, monkeypatch, caplog) -> None:
+    """An export error is nonfatal, private, and retried on the next load."""
+    entry = _add_entry(hass, title="Test Fireplace", remote_id=0x123456)
+
+    def fail_generation(profile):
+        raise ValueError("sensitive profile details must not be logged")
+
+    monkeypatch.setattr("custom_components.proflame2.runtime.encode_learning_id", fail_generation)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entity_id = _secondary_entity_id(entry.title, "Learning ID")
+    assert hass.states.get(entity_id).state == "unknown"
+    assert "Unable to generate Learning ID" in caplog.text
+    assert "sensitive profile details" not in caplog.text
+    await hass.services.async_call(DOMAIN, "set_state", {CONF_POWER: False}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(_primary_entity_id(entry.title)).state == "Off"
+    monkeypatch.setattr("custom_components.proflame2.runtime.encode_learning_id", encode_learning_id)
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state.startswith("PF2-1-L-")
 
 
 async def test_primary_entity_and_last_issue_sensor_are_created(hass) -> None:

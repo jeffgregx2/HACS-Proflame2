@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,10 @@ from custom_components.proflame2.const import (
     CONF_D2,
     CONF_DEBUG_LOGGING,
     CONF_ESPHOME_ENTRY_ID,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
@@ -39,11 +45,13 @@ from custom_components.proflame2.const import (
     CONF_INITIAL_FRAME,
     CONF_INITIAL_PACKET_SOURCE,
     CONF_LEARNING_DEBUG_LOGGING,
+    CONF_LEARNING_ID,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_PROTOCOL_VARIANT,
     CONF_REMOTE_ID,
     CONF_RTL433_SAMPLES,
     CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
@@ -57,12 +65,23 @@ from custom_components.proflame2.const import (
     DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
     PROTOCOL_VARIANT_EXTENDED_10_WORD,
+    PROTOCOL_VARIANT_LEGACY_7_WORD,
 )
 from custom_components.proflame2.learning import LearnSession
 from custom_components.proflame2.packet_debug import PacketDebugLogPaths
+from custom_components.proflame2.protocol.encoder import encode_state
+from custom_components.proflame2.protocol.learning_id import encode_learning_id
+from custom_components.proflame2.protocol.models import (
+    ECCProfile,
+    ExtendedFrameTemplate,
+    FireplaceFeatures,
+    FireplaceState,
+    RemoteProfile,
+)
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.fake import FakeRFBackend
 from custom_components.proflame2.rf.yardstick import YardStickBackendUnavailableError
+from custom_components.proflame2.runtime import async_get_runtime_entries
 from custom_components.proflame2.version import ENABLE_FAKE_BACKEND_ENV
 
 
@@ -344,6 +363,7 @@ async def test_manual_entry_form_schema_exposes_fields(hass) -> None:
         context={"source": SOURCE_USER},
     )
     assert result["type"] is FlowResultType.MENU
+    assert "manual_legacy" in result["menu_options"]
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -352,7 +372,140 @@ async def test_manual_entry_form_schema_exposes_fields(hass) -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "manual"
-    assert _form_schema_fields(result["data_schema"])
+    assert set(_form_schema_fields(result["data_schema"])) == {
+        CONF_NAME,
+        CONF_FIREPLACE_SHORT_NAME,
+        CONF_BACKEND_TYPE,
+        CONF_LEARNING_ID,
+    }
+
+
+async def test_legacy_values_button_retains_old_form(hass) -> None:
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual_legacy"})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual_legacy"
+    fields = _form_schema_fields(result["data_schema"])
+    assert {CONF_REMOTE_ID, CONF_C1, CONF_D1, CONF_C2, CONF_D2}.issubset(fields)
+    assert CONF_LEARNING_ID not in fields
+
+
+@pytest.mark.parametrize("extended", [False, True])
+async def test_learning_id_import_loads_complete_runtime_profile(hass, monkeypatch, extended) -> None:
+    """Exercise the UI, persisted fields, sensor, and TX encoder end to end."""
+    _enable_fake_backend(monkeypatch)
+    profile = RemoteProfile(
+        0x123456,
+        ECCProfile(0, 0, 0, 0) if extended else ECCProfile(5, 7, 1, 8),
+        FireplaceFeatures(fan=True, light=False, front=True, aux=True, cpi=False),
+        PROTOCOL_VARIANT_EXTENDED_10_WORD if extended else PROTOCOL_VARIANT_LEGACY_7_WORD,
+        ExtendedFrameTemplate(0x84, 0x50, 0xC8, 2) if extended else None,
+    )
+    token = encode_learning_id(profile)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Imported Fireplace",
+            CONF_FIREPLACE_SHORT_NAME: " TEST ",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_LEARNING_ID: f"  {token}\n",
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_REMOTE_ID] == profile.serial_id
+    assert result["data"][CONF_PROTOCOL_VARIANT] == profile.protocol_variant
+    assert CONF_LEARNING_ID not in result["data"]
+    assert CONF_LEARNING_ID not in result["options"]
+    assert result["options"][CONF_FIREPLACE_SHORT_NAME] == "TEST"
+    assert {key: result["options"][key] for key in asdict(profile.features)} == asdict(profile.features)
+    if extended:
+        assert all(key not in result["data"] for key in (CONF_C1, CONF_D1, CONF_C2, CONF_D2))
+        assert [
+            result["data"][key] for key in (CONF_EXTENDED_W4_BASE, CONF_EXTENDED_W6, CONF_EXTENDED_W7, CONF_EXTENDED_W8)
+        ] == [0x84, 0x50, 0xC8, 2]
+    await hass.async_block_till_done()
+    entry = result["result"]
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    assert runtime.remote_profile == profile
+    assert runtime.learning_id == token
+    state = FireplaceState(True, flame=4, fan=3, front=True, aux=True)
+    assert encode_state(state, runtime.remote_profile) == encode_state(state, profile)
+    assert hass.states.get("sensor.imported_fireplace_learning_id").state == token
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert async_get_runtime_entries(hass)[entry.entry_id].remote_profile == profile
+
+
+@pytest.mark.parametrize("invalid", ["", "not-an-id", "PF2-2-L-CI2FMA2XDBVBZFK7", "PF2-1-L-CI2FMA2XDBVBZFKA"])
+async def test_learning_id_import_errors_allow_correction(hass, monkeypatch, invalid, caplog) -> None:
+    _enable_fake_backend(monkeypatch)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Imported Fireplace",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_LEARNING_ID: invalid,
+        },
+    )
+    assert result["step_id"] == "manual"
+    assert result["errors"] == {CONF_LEARNING_ID: "invalid_learning_id"}
+    assert not hass.config_entries.async_entries(DOMAIN)
+    if invalid:
+        assert invalid not in caplog.text
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Imported Fireplace",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_LEARNING_ID: "PF2-1-L-CI2FMA2XDBVBZFK7",
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.parametrize("extended", [False, True])
+async def test_learning_id_esphome_import_links_and_rejects_duplicates(hass, extended) -> None:
+    """Both protocols retain controller validation and per-controller uniqueness."""
+    linked = MockConfigEntry(domain="esphome", title="Test Controller", data={})
+    linked.add_to_hass(hass)
+    token = "PF2-1-E-CI2FMA4AILEBTPLKVK4Q" if extended else "PF2-1-L-CI2FMA2XDBVBZFK7"
+    for duplicate in (False, True):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Imported Fireplace",
+                CONF_BACKEND_TYPE: BACKEND_ESPHOME,
+                CONF_LEARNING_ID: token,
+            },
+        )
+        assert result["step_id"] == "manual_esphome"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_ESPHOME_ENTRY_ID: linked.entry_id}
+        )
+        if duplicate:
+            assert result["type"] is FlowResultType.ABORT
+            assert result["reason"] == "already_configured"
+        else:
+            assert result["type"] is FlowResultType.CREATE_ENTRY
+            assert result["data"][CONF_ESPHOME_ENTRY_ID] == linked.entry_id
+            assert result["options"][CONF_ACTIVE_LISTENING] is True
+            assert CONF_LEARNING_ID not in result["data"]
+
+
+def test_learning_id_and_legacy_form_labels_are_translated() -> None:
+    text = json.loads((Path(__file__).parents[1] / "custom_components/proflame2/translations/en.json").read_text())[
+        "config"
+    ]
+    assert text["step"]["user"]["menu_options"]["manual"] == "Enter Learning ID"
+    assert text["step"]["user"]["menu_options"]["manual_legacy"] == "Enter legacy values"
+    assert text["step"]["manual"]["data"][CONF_LEARNING_ID] == "Learning ID"
+    assert "invalid_learning_id" in text["error"]
 
 
 async def test_manual_rtl433_learning_captures_buttons_then_confirms_remote_learned(hass) -> None:
@@ -1284,10 +1437,10 @@ async def test_config_flow_can_fallback_to_manual_after_learn_failure(hass, monk
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        user_input={"next_step_id": "manual"},
+        user_input={"next_step_id": "manual_legacy"},
     )
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual"
+    assert result["step_id"] == "manual_legacy"
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],

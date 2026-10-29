@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from .const import (
@@ -19,15 +19,21 @@ from .const import (
     CONF_D2,
     CONF_DEBUG_LOGGING,
     CONF_ESPHOME_ENTRY_ID,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
     CONF_FRONT,
+    CONF_LEARNING_ID,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_PROTOCOL_VARIANT,
     CONF_REMOTE_ID,
     CONF_RTL433_SAMPLES,
     DEFAULT_DEBUG_LOGGING,
@@ -39,12 +45,17 @@ from .const import (
 )
 from .control import StateValidationError, build_requested_state
 from .protocol.ecc import derive_ecc_profile
+from .protocol.learning_id import decode_learning_id
 from .protocol.models import FireplaceFeatures
 from .rf.registry import normalize_controller_id
 
 
 class InvalidRemoteIdError(ValueError):
     """Raised when a remote ID does not represent a 24-bit hex value."""
+
+
+class InvalidLearningIdError(ValueError):
+    """Raised when a Learning ID fails decoding or validation."""
 
 
 class InvalidRtl433SamplesError(ValueError):
@@ -286,6 +297,45 @@ def normalize_manual_profile_input(user_input: dict[str, Any]) -> ManualProfileI
     return ManualProfileInput(
         data=data,
         options=normalize_entry_options(user_input),
+    )
+
+
+def normalize_learning_id_profile_input(user_input: dict[str, Any]) -> ManualProfileInput:
+    """Import permanent profile fields without persisting the supplied token."""
+
+    value = user_input.get(CONF_LEARNING_ID, "")
+    try:
+        profile = decode_learning_id(value.strip() if isinstance(value, str) else value)
+    except ValueError:
+        raise InvalidLearningIdError("Invalid Learning ID.") from None
+
+    backend_type = normalize_controller_id(user_input[CONF_BACKEND_TYPE])
+    if backend_type not in available_backend_types():
+        raise InvalidBackendError(f"Unsupported backend type: {backend_type}")
+    data = {
+        CONF_NAME: str(user_input[CONF_NAME]).strip(),
+        CONF_BACKEND_TYPE: backend_type,
+        CONF_REMOTE_ID: profile.serial_id,
+        CONF_PROTOCOL_VARIANT: profile.protocol_variant,
+    }
+    if profile.is_extended:
+        template = profile.extended_template
+        data.update(
+            {
+                CONF_EXTENDED_W4_BASE: template.w4_base,
+                CONF_EXTENDED_W6: template.w6,
+                CONF_EXTENDED_W7: template.w7,
+                CONF_EXTENDED_W8: template.w8,
+            }
+        )
+    else:
+        data.update(asdict(profile.ecc))
+    linked_esphome_entry_id = user_input.get(CONF_ESPHOME_ENTRY_ID)
+    if isinstance(linked_esphome_entry_id, str) and linked_esphome_entry_id:
+        data[CONF_ESPHOME_ENTRY_ID] = linked_esphome_entry_id
+    return ManualProfileInput(
+        data=data,
+        options=normalize_entry_options({**user_input, **asdict(profile.features)}),
     )
 
 

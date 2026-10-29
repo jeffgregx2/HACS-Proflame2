@@ -228,6 +228,7 @@ and 433.92 MHz.
 - [YardStick controller guide](docs/yardstick_controller.md)
 - [Add fireplace profile](docs/add_fireplace_profile.md)
 - [rtl_433-assisted manual learning](docs/rtl433_manual_learning.md)
+- [Learning ID diagnostic sensor and encoding](docs/learning_id_encoding.md)
 
 ## Relationship To SmartFire
 
