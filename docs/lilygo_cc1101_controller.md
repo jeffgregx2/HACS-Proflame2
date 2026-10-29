@@ -99,6 +99,28 @@ device identity settings. It also sets the ESP32 framework to ESP-IDF to support
 retained crash reporting, adds the Proflame2 package references, and
 adds a restart switch if one is not already present.
 
+## Firmware Framework
+
+Use ESP-IDF for the current LilyGO firmware. In the existing `esp32:` section,
+verify this setting before rebuilding:
+
+```yaml
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+```
+
+Keep the existing board selection and other device settings unless they are
+incorrect. Updating `proflame2_package_ref` alone does not change the framework
+in your device YAML. The public YAML helper follows the stable `main` branch;
+when testing a newer prerelease, check the framework setting even if the helper
+created the YAML. Older helper output may need this manual correction.
+
+ESP-IDF enables retained crash reporting on supported ESPHome builds. See the
+[manual setup guide](lilygo_cc1101_manual_yaml.md) for migration and diagnostic
+details.
+
 ## Radio Band
 
 The default LilyGO radio band is 315 MHz. If the label on the original remote
@@ -114,6 +136,22 @@ time, so fireplaces on different bands need separate LilyGO controllers.
 
 To manually update your YAML file instead, see
 [manual LilyGO YAML setup](lilygo_cc1101_manual_yaml.md).
+
+## Using The Original Remote
+
+LilyGO cannot listen to the original remote while it is transmitting. With
+**Delayed Retransmission** enabled, an HA command can produce a second transmit
+burst about two seconds after the first finishes. LilyGO listens between the
+bursts, but a remote command overlapping either burst may be missed or collide
+at the fireplace. A remote command received before the retry cancels that retry;
+a command that LilyGO cannot hear cannot cancel it.
+
+Avoid making conflicting changes through HA and the remote at the same time.
+The fireplace does not acknowledge commands, so HA and the LilyGO display show
+the last commanded or observed state, not independently confirmed fireplace
+state. The ESPHome device's **Delayed Retransmission** switch can disable the
+extra burst for troubleshooting, but the first burst still prevents listening
+while it is being sent.
 
 ## Build And Deploy
 

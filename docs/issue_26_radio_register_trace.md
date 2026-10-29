@@ -40,6 +40,30 @@ identifies the current beta1 instrumentation. Each snapshot also ends with
 `RFTRACE seq=N end=1`.
 New traces require rebuilding and flashing, not just changing the HA integration.
 
+## Native Remote Overlap
+
+The delayed retry does not hold TX throughout its two-second waiting period.
+For the tested five-repeat legacy configuration, the original and retry bursts
+each take about 0.42 seconds, with RMT restored between them. Other frame lengths
+and configurations have different durations. The extra burst nevertheless adds
+a second interval in which this single radio cannot receive a native command.
+
+Usable completed RMT captures are polled before retry dispatch and cancel a
+pending retry. A capture still in progress when TX begins, or a native command
+sent during either burst, may not be received. The fireplace can receive a
+different subset of commands than LilyGO. A collision can therefore leave HA's
+last commanded/observed state different from the actual fireplace state.
+There is no fireplace acknowledgement to determine a definitive winner.
+
+The reported missed native repeat is not yet localized. Correlate the APP
+command, native button press, retry schedule/result, and received capture times.
+If the native repeat occurs outside both transmit bursts, ordinary half-duplex
+operation does not by itself explain the miss. Compare with Delayed
+Retransmission OFF using the same placement and response-driven cadence.
+Do not change burst timings, shorten the validated packet train, or invent
+confirmed fireplace state without that evidence. Disabling the retry is a
+diagnostic comparison, not a guarantee against collisions during the first TX.
+
 ## Runtime Experiment Controls
 
 The controls require this diagnostic firmware, not the optional debug YAML

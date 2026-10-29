@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -152,6 +153,22 @@ def test_helper_adds_or_migrates_esp_idf_framework(framework: str) -> None:
 def test_overlay_uses_esp_idf_framework() -> None:
     source = (ROOT / "esphome/examples/lilygo_cc1101_overlay.yaml").read_text()
     assert _load_yaml(source)["esp32"]["framework"]["type"] == "esp-idf"
+
+
+def test_documented_lilygo_framework_examples_use_esp_idf() -> None:
+    paths = (
+        ROOT / "docs/lilygo_cc1101_controller.md",
+        ROOT / "docs/lilygo_cc1101_manual_yaml.md",
+        ROOT / "esphome/README.md",
+    )
+    examples = 0
+    for path in paths:
+        for block in re.findall(r"```yaml\n(.*?)```", path.read_text(), flags=re.DOTALL):
+            config = _load_yaml(block)
+            if isinstance(config, dict) and isinstance(config.get("esp32"), dict):
+                assert config["esp32"]["framework"]["type"] == "esp-idf", path.name
+                examples += 1
+    assert examples >= 3
 
 
 def test_helper_is_idempotent() -> None:
