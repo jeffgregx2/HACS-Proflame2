@@ -151,12 +151,14 @@ def test_firmware_logs_the_stamped_version_at_info_level() -> None:
     assert "FIRMWARE_VERSION_API_LOG_INTERVAL_MS" in implementation
     assert 'ESP_LOGI(TAG, "Proflame2 RF band: %s", this->rf_band_configuration_.name);' in implementation
     assert "firmware_version: ${proflame2_firmware_version}" in base
-    assert re.search(r'^  proflame2_firmware_version: "v\d+\.\d+\.\d+(?:-(?:alpha|beta)\d+)?"$', base, re.MULTILINE)
-    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
-    assert (
-        yaml.load(base, Loader=yaml.BaseLoader)["substitutions"]["proflame2_firmware_version"]
-        == f"v{manifest['version']}"
+    assert re.search(
+        r'^  proflame2_firmware_version: "v\d+\.\d+\.\d+(?:-(?:(?:alpha|beta)\d+|debug))?"$', base, re.MULTILINE
     )
+    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
+    assert yaml.load(base, Loader=yaml.BaseLoader)["substitutions"]["proflame2_firmware_version"] in {
+        f"v{manifest['version']}",
+        f"v{manifest['version'].split('-')[0]}-debug",
+    }
     assert "name: Proflame2 Firmware Version" in base
 
 
@@ -235,7 +237,8 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "native_group_timing_profile: ${proflame2_native_group_timing_profile_override}" in base
     assert 'proflame2_pre_burst_low_us_override: "834"' in base
     assert 'proflame2_pre_frame_low_us_override: "0"' in base
-    assert 'proflame2_diagnostic_repeat_count_override: "5"' in base
+    assert 'proflame2_diagnostic_repeat_count_override: "10"' in base
+    assert 'proflame2_tx_frequency_offset_hz: "0"' in base
     assert "pre_burst_low_us: ${proflame2_pre_burst_low_us_override}" in base
     assert "pre_frame_low_us: ${proflame2_pre_frame_low_us_override}" in base
     assert "diagnostic_repeat_count_override: ${proflame2_diagnostic_repeat_count_override}" in base

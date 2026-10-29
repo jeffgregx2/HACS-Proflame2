@@ -482,11 +482,19 @@ void Proflame2TEmbedComponent::setup() {
     ESP_LOGE(TAG, "Proflame2 T-Embed invalid RF band configuration");
     return;
   }
-  this->tx_frequency_hz_ = this->rf_band_configuration_.frequency_hz;
+  if (!resolve_tx_frequency(this->rf_band_, this->tx_frequency_offset_hz_, this->tx_frequency_hz_)) {
+    this->status_text_ = "fault";
+    this->last_error_ = "invalid_tx_frequency_offset";
+    this->last_tx_result_ = "error:invalid_tx_frequency_offset";
+    ESP_LOGE(TAG, "Proflame2 T-Embed invalid TX frequency offset");
+    return;
+  }
   this->rx_frequency_hz_ = this->rf_band_configuration_.frequency_hz;
   ESP_LOGI(TAG, "RF band selected: %s frequency_hz=%" PRIu32 " sw1=%s sw0=%s", this->rf_band_configuration_.name,
            this->rf_band_configuration_.frequency_hz, YESNO(this->rf_band_configuration_.rf_switch_sw1_high),
            YESNO(this->rf_band_configuration_.rf_switch_sw0_high));
+  ESP_LOGI(TAG, "RF tuning: tx_hz=%" PRIu32 " rx_hz=%" PRIu32 " tx_offset_hz=%" PRId32,
+           this->tx_frequency_hz_, this->rx_frequency_hz_, this->tx_frequency_offset_hz_);
 
   if (this->board_power_enable_pin_ != nullptr) {
     this->board_power_enable_pin_->setup();
@@ -539,9 +547,14 @@ void Proflame2TEmbedComponent::setup() {
                 YESNO(this->rf_band_configuration_.rf_switch_sw1_high),
                 YESNO(this->rf_band_configuration_.rf_switch_sw0_high));
   ESP_LOGCONFIG(TAG, "  TX frequency: %" PRIu32 " Hz", this->tx_frequency_hz_);
+  ESP_LOGCONFIG(TAG, "  TX-only frequency offset: %" PRId32 " Hz", this->tx_frequency_offset_hz_);
   ESP_LOGCONFIG(TAG, "  RX frequency: %" PRIu32 " Hz", this->rx_frequency_hz_);
   ESP_LOGCONFIG(TAG, "  data rate: %" PRIu32 " bps", this->data_rate_bps_);
-  ESP_LOGCONFIG(TAG, "  TX repeat count: %u", this->tx_repeat_count_);
+  ESP_LOGCONFIG(TAG, "  TX repeat count: %u (base=%u override=%u)",
+                static_cast<unsigned>(TxController::effective_repeat_count(
+                    this->tx_repeat_count_, this->diagnostic_repeat_count_override_)),
+                static_cast<unsigned>(this->tx_repeat_count_),
+                static_cast<unsigned>(this->diagnostic_repeat_count_override_));
   ESP_LOGCONFIG(TAG, "  TX mode requested: %s", this->tx_mode_requested_.c_str());
   ESP_LOGCONFIG(TAG, "  TX mode resolved: %s", tx_mode_to_string_(this->tx_mode_));
   ESP_LOGCONFIG(TAG, "  native-group timing profile requested: %s",
@@ -614,6 +627,10 @@ void Proflame2TEmbedComponent::loop() {
 }
 
 void Proflame2TEmbedComponent::set_capture_mode(const std::string& value) {
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  // Only the dedicated Start/Abort controls own diagnostic acquisition.
+  return;
+#endif
   const std::string normalized = value == "fifo_trailing_window" || value == "rmt_pulse" ? value : std::string("off");
   this->rx_fifo_debug_export_enabled_ = normalized == "fifo_trailing_window";
   this->rx_active_listener_requested_ = false;
@@ -634,6 +651,9 @@ void Proflame2TEmbedComponent::set_capture_mode(const std::string& value) {
 }
 
 void Proflame2TEmbedComponent::set_active_listener_rx_path(const std::string& value) {
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  return;
+#endif
   const bool use_rmt = value == "rmt_pulse";
   if (this->rx_active_listener_use_rmt_ == use_rmt) {
     return;
@@ -655,6 +675,9 @@ void Proflame2TEmbedComponent::set_active_listener_rx_path(const std::string& va
 
 void Proflame2TEmbedComponent::configure_active_listener(bool enabled, uint32_t serial_id, uint8_t c1, uint8_t d1,
                                                          uint8_t c2, uint8_t d2) {
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  return;
+#endif
   if (!enabled) {
     this->cancel_delayed_retransmission_("listener_disabled");
     const bool changed = this->rx_active_listener_requested_ || this->rx_active_listener_filter_configured_ ||
@@ -717,6 +740,10 @@ void Proflame2TEmbedComponent::configure_active_listener(bool enabled, uint32_t 
 }
 
 void Proflame2TEmbedComponent::set_fifo_capture_enabled(bool value) {
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  if (value)
+    return;
+#endif
   if (this->rx_fifo_capture_enabled_ == value) {
     return;
   }
@@ -756,6 +783,9 @@ void Proflame2TEmbedComponent::set_fifo_capture_enabled(bool value) {
 
 #if PROFLAME2_TEMBED_DEBUG
 void Proflame2TEmbedComponent::set_rx_fifo_profile(const std::string& value) {
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  return;
+#endif
   const std::string normalized =
       value == "rfcat_fixed_none_rfcat_defaults" || value == "rfcat_infinite_none_rfcat_defaults" ||
               value == "rfcat_fixed_none_rfcat_wide" || value == "rfcat_infinite_none_rfcat_wide" ||
@@ -787,6 +817,9 @@ void Proflame2TEmbedComponent::complete_rx_fifo_capture() {
 }
 
 void Proflame2TEmbedComponent::run_rx_fifo_probe() {
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  return;
+#endif
   const uint32_t probe_id = ++this->rx_fifo_probe_sequence_;
   constexpr uint32_t FIFO_PROBE_DURATION_MS = 3000U;
   ESP_LOGD(TAG,
@@ -1085,8 +1118,15 @@ void Proflame2TEmbedComponent::set_rmt_pulse_capture_enabled_(bool value) {
     return;
   }
   this->cc1101_gdo0_pin_->pin_mode(gpio::FLAG_INPUT);
+#ifdef USE_PROFLAME2_GPIO_EDGE_DIAGNOSTICS
+  this->rmt_ook_receiver_.set_gpio_edge_observer_pin(gdo0_pin);
+#endif
   if (!this->rmt_ook_receiver_.begin(gdo0_gpio, error)) {
     ESP_LOGW(TAG, "RX RMT pulse capture enable failed reason=%s", error.empty() ? "rmt_begin_failed" : error.c_str());
+#ifdef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
+    this->rx_rmt_pulse_capture_enabled_ = this->rmt_ook_receiver_.active();
+    return;
+#endif
     this->cc1101_gdo0_pin_->pin_mode(gpio::FLAG_OUTPUT);
     this->cc1101_gdo0_pin_->digital_write(false);
     std::string restore_error;
@@ -1110,6 +1150,17 @@ void Proflame2TEmbedComponent::poll_rmt_pulse_capture_() {
   }
   RmtOokCapture capture{};
   std::string error;
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  this->rmt_ook_receiver_.poll(capture, error);
+  this->rmt_ook_receiver_.export_raw_window();
+#ifdef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
+  if (!this->rmt_ook_receiver_.active()) {
+    this->rx_rmt_pulse_capture_enabled_ = false;
+    this->refresh_status_text_();
+  }
+#endif
+  return;
+#endif
   if (!this->rmt_ook_receiver_.poll(capture, error)) {
     if (error.empty() || error == "rmt_pcm_empty") {
       return;
@@ -1758,7 +1809,8 @@ void Proflame2TEmbedComponent::publish_telemetry_() {
   TelemetryPublisher::publish_uint32_if_changed(this->last_tx_elapsed_ms_sensor_,
                                                 &this->published_last_tx_elapsed_ms_cache_, this->last_tx_elapsed_ms_);
   TelemetryPublisher::publish_uint8_if_changed(this->tx_repeat_count_sensor_, &this->published_tx_repeat_count_cache_,
-                                               this->tx_repeat_count_);
+                                               TxController::effective_repeat_count(
+                                                   this->tx_repeat_count_, this->diagnostic_repeat_count_override_));
   TelemetryPublisher::publish_uint8_if_changed(this->firmware_protocol_version_sensor_,
                                                &this->published_firmware_protocol_version_cache_,
                                                this->get_firmware_protocol_version());
@@ -1937,6 +1989,8 @@ void Proflame2TEmbedComponent::log_firmware_version_if_due_() {
   this->firmware_version_api_log_initialized_ = true;
   ESP_LOGI(TAG, "Proflame2 firmware version: %s", this->firmware_version_.c_str());
   ESP_LOGI(TAG, "Proflame2 RF band: %s", this->rf_band_configuration_.name);
+  ESP_LOGI(TAG, "RF tuning: tx_hz=%" PRIu32 " rx_hz=%" PRIu32 " tx_offset_hz=%" PRId32,
+           this->tx_frequency_hz_, this->rx_frequency_hz_, this->tx_frequency_offset_hz_);
 }
 
 void Proflame2TEmbedComponent::handle_api_client_disconnected(const std::string& client_info) {
@@ -2477,6 +2531,10 @@ bool Proflame2TEmbedComponent::tx(const std::string& request_id, const std::stri
                                   int intended_power, int intended_flame, int intended_fan, int intended_light,
                                   int intended_pilot, int intended_thermostat, int intended_front, int intended_aux,
                                   const std::string& intended_action_label, const std::string& fireplace_name) {
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  ESP_LOGE(TAG, "TX disabled in receiver-only waveform diagnostic build");
+  return false;
+#endif
   // A higher-priority worker can finish before the main task handles its event.
   // Consume it before replacing metadata/display intent or checking busy state.
   this->consume_radio_runtime_events_();
@@ -2594,6 +2652,10 @@ bool Proflame2TEmbedComponent::tx(const std::string& request_id, const std::stri
 bool Proflame2TEmbedComponent::cc1101_test_pattern(const std::string& request_id, TestPatternMode mode,
                                                    uint32_t duration_ms, uint32_t period_us,
                                                    const std::string& status_text) {
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  ESP_LOGE(TAG, "TX test pattern disabled in receiver-only waveform diagnostic build");
+  return false;
+#endif
   this->consume_radio_runtime_events_();
   this->last_request_id_ = request_id;
   this->last_request_repeat_count_ = 0;
@@ -2919,6 +2981,12 @@ void Proflame2TEmbedComponent::pause_rx_for_tx_() {
     this->increment_rx_suppressed_for_tx_();
     this->strobe_(CC1101_SIDLE);
     this->strobe_(CC1101_SFRX);
+    if (this->tx_frequency_offset_hz_ != 0) {
+      // FIFO RX keeps its own carrier. Explicitly restore the TX profile for
+      // offset experiments; preserve the existing zero-offset transition.
+      std::string error;
+      this->apply_async_ook_registers_(error, false);
+    }
   }
 }
 

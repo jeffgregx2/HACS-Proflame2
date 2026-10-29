@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import esphome.automation as automation
 import esphome.codegen as cg
@@ -41,6 +42,7 @@ CONF_REPEAT_COUNT = "repeat_count"
 CONF_RF_SWITCH_SW0_PIN = "rf_switch_sw0_pin"
 CONF_RF_SWITCH_SW1_PIN = "rf_switch_sw1_pin"
 CONF_RF_BAND = "rf_band"
+CONF_TX_FREQUENCY_OFFSET_HZ = "tx_frequency_offset_hz"
 CONF_STATUS_TEXT = "status_text"
 CONF_ENDPOINT_STATUS = "endpoint_status"
 CONF_LAST_ERROR = "last_error"
@@ -88,18 +90,20 @@ CONF_FIRMWARE_VERSION = "firmware_version"
 CONF_FIRMWARE_VERSION_TEXT = "firmware_version_text"
 CONF_RADIO_READY_TIMEOUT_US = "radio_ready_timeout_us"
 CONF_PRE_TX_SETTLE_DELAY_US = "pre_tx_settle_delay_us"
+CONF_WAVEFORM_DIAGNOSTICS = "waveform_diagnostics"
+CONF_WAVEFORM_BUFFERED = "waveform_buffered_capture"
+CONF_WAVEFORM_GPIO_EDGE_OBSERVER = "waveform_gpio_edge_observer"
+CONF_WAVEFORM_CAPTURE_REJECTED = "waveform_capture_rejected"
+CONF_WAVEFORM_MAX_EXPORTS = "waveform_max_exports"
+CONF_WAVEFORM_SESSION_MS = "waveform_session_ms"
 
 proflame2_tembed_ns = cg.esphome_ns.namespace("proflame2_tembed")
 TXMode = proflame2_tembed_ns.enum("TXMode", is_class=True)
 TestPatternMode = proflame2_tembed_ns.enum("TestPatternMode", is_class=True)
 AsyncTxDataPin = proflame2_tembed_ns.enum("AsyncTxDataPin", is_class=True)
 RFBand = proflame2_tembed_ns.enum("RFBand", is_class=True)
-NativeGroupTimingProfile = proflame2_tembed_ns.enum(
-    "NativeGroupTimingProfile", is_class=True
-)
-NativeGroupRepeatBoundaryMode = proflame2_tembed_ns.enum(
-    "NativeGroupRepeatBoundaryMode", is_class=True
-)
+NativeGroupTimingProfile = proflame2_tembed_ns.enum("NativeGroupTimingProfile", is_class=True)
+NativeGroupRepeatBoundaryMode = proflame2_tembed_ns.enum("NativeGroupRepeatBoundaryMode", is_class=True)
 Proflame2TEmbedComponent = proflame2_tembed_ns.class_(
     "Proflame2TEmbedComponent",
     cg.Component,
@@ -124,125 +128,177 @@ Proflame2TEmbedDisplayStateUpdateAction = proflame2_tembed_ns.class_(
 )
 
 
-CONFIG_SCHEMA = cv.Schema(
-    {
-        cv.GenerateID(): cv.declare_id(Proflame2TEmbedComponent),
-        cv.GenerateID(CONF_SPI_ID): cv.use_id(spi.SPIComponent),
-        cv.Optional(CONF_RADIO_READY_TIMEOUT_US, default=10000): cv.int_range(min=100, max=100000),
-        cv.Optional(CONF_PRE_TX_SETTLE_DELAY_US, default=20000): cv.int_range(min=0, max=100000),
-        cv.Optional(CONF_RF_BAND, default="315"): cv.one_of("315", "433"),
-        cv.Optional(CONF_DATA_RATE_BPS, default=2_400): cv.positive_int,
-        cv.Optional(CONF_TX_REPEAT_COUNT, default=5): cv.int_range(min=1, max=20),
-        cv.Optional(CONF_INTER_FRAME_GAP_US, default=0): cv.positive_int,
-        cv.Optional(CONF_POST_FRAME_IDLE_GAP_US, default=0): cv.positive_int,
-        cv.Optional(CONF_DISPLAY_DEBUG_MODE, default=False): cv.boolean,
-        cv.Optional(CONF_DISPLAY_DIM_TIMEOUT_MIN, default=1): cv.int_range(min=0),
-        cv.Optional(CONF_DISPLAY_WAKE_ON_ACTIVITY, default=True): cv.boolean,
-        cv.Optional(CONF_FIRMWARE_VERSION, default="unknown"): cv.string,
-        cv.Optional(CONF_TX_MODE, default="repeated_strobe"): cv.one_of(
-            "continuous_burst",
-            "repeated_strobe",
-            "clean_timing_test",
-            "proflame_pwm_symbols",
-            "proflame_native_groups",
-            lower=True,
-        ),
-        cv.Optional(
-            CONF_NATIVE_GROUP_TIMING_PROFILE, default="yardstick_compat"
-        ): cv.one_of("yardstick_compat", "native_remote", lower=True),
-        cv.Optional(
-            CONF_NATIVE_GROUP_REPEAT_BOUNDARY_MODE, default="continuous_tx"
-        ): cv.one_of("continuous_tx", "reenter_tx", lower=True),
-        cv.Optional(CONF_PRE_BURST_LOW_US, default=0): cv.positive_int,
-        cv.Optional(CONF_PRE_FRAME_LOW_US, default=0): cv.positive_int,
-        cv.Optional(CONF_DIAGNOSTIC_REPEAT_COUNT_OVERRIDE, default=0): cv.int_range(min=0, max=20),
-        cv.Optional(CONF_PAYLOAD_BIT_LENGTH_OVERRIDE, default=0): cv.positive_int,
-        cv.Optional(CONF_ASYNC_TX_DATA_PIN, default="gdo0"): cv.one_of(
-            "gdo0", "gdo2", lower=True
-        ),
-        cv.Required(CONF_BOARD_POWER_ENABLE_PIN): pins.gpio_output_pin_schema,
-        cv.Required(CONF_CC1101_CS_PIN): pins.gpio_output_pin_schema,
-        cv.Required(CONF_CC1101_GDO0_PIN): pins.gpio_output_pin_schema,
-        cv.Required(CONF_CC1101_GDO2_PIN): pins.gpio_output_pin_schema,
-        cv.Required(CONF_RF_SWITCH_SW1_PIN): pins.gpio_output_pin_schema,
-        cv.Required(CONF_RF_SWITCH_SW0_PIN): pins.gpio_output_pin_schema,
-        cv.Optional(CONF_ENDPOINT_STATUS): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_ERROR): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_TX_RESULT): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_REQUEST_ID): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_TX_PATH): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_PAYLOAD_HEX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_MARCSTATE_BEFORE_TX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_MARCSTATE_AFTER_TX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_CC1101_PARTNUM): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_CC1101_VERSION): text_sensor.text_sensor_schema(entity_category="diagnostic"),
-        cv.Optional(CONF_FIRMWARE_VERSION_TEXT): text_sensor.text_sensor_schema(
-            entity_category="diagnostic"
-        ),
-        cv.Optional(CONF_TX_SUCCESS_COUNT): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
-        cv.Optional(CONF_TX_FAILURE_COUNT): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_PAYLOAD_LENGTH): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_REQUEST_REPEAT_COUNT): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
-        cv.Optional(CONF_LAST_TX_ELAPSED_MS): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
-        cv.Optional(CONF_TX_REPEAT_COUNT_SENSOR): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
-        cv.Optional(CONF_FIRMWARE_PROTOCOL_VERSION): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
-        cv.Optional(CONF_CONFIG_REVISION): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
-        cv.Optional(CONF_BATTERY_PERCENT): sensor.sensor_schema(
-            unit_of_measurement="%",
-            accuracy_decimals=0,
-            device_class="battery",
-            state_class="measurement",
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_DROPPED_PACKET_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_NO_RF_CAPTURE_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_INCOMPLETE_FIFO_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_DECODE_FAILED_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_PROFILE_MISMATCH_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_ACCEPTED_PACKET_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_TX_SUPPRESSED_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_TRANSPORT_UNAVAILABLE_COUNT): sensor.sensor_schema(
-            accuracy_decimals=0,
-            entity_category="diagnostic",
-        ),
-        cv.Optional(CONF_RX_LAST_REJECTION_SNAPSHOT): text_sensor.text_sensor_schema(
-            entity_category="diagnostic",
-        ),
-    }
-).extend(cv.COMPONENT_SCHEMA).extend(i2c.i2c_device_schema(0x55))
+CONFIG_SCHEMA = (
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(Proflame2TEmbedComponent),
+            cv.Optional(CONF_WAVEFORM_DIAGNOSTICS, default=False): cv.boolean,
+            cv.Optional(CONF_WAVEFORM_BUFFERED, default=False): cv.boolean,
+            cv.Optional(CONF_WAVEFORM_GPIO_EDGE_OBSERVER, default=False): cv.boolean,
+            cv.Optional(CONF_WAVEFORM_CAPTURE_REJECTED, default=False): cv.boolean,
+            cv.Optional(CONF_WAVEFORM_MAX_EXPORTS, default=32): cv.int_range(min=1, max=64),
+            cv.Optional(CONF_WAVEFORM_SESSION_MS, default=30000): cv.int_range(min=1000, max=120000),
+            cv.GenerateID(CONF_SPI_ID): cv.use_id(spi.SPIComponent),
+            cv.Optional(CONF_RADIO_READY_TIMEOUT_US, default=10000): cv.int_range(min=100, max=100000),
+            cv.Optional(CONF_PRE_TX_SETTLE_DELAY_US, default=20000): cv.int_range(min=0, max=100000),
+            cv.Optional(CONF_RF_BAND, default="315"): cv.one_of("315", "433"),
+            cv.Optional(CONF_TX_FREQUENCY_OFFSET_HZ, default=0): cv.int_range(min=-100000, max=100000),
+            cv.Optional(CONF_DATA_RATE_BPS, default=2_400): cv.positive_int,
+            cv.Optional(CONF_TX_REPEAT_COUNT, default=5): cv.int_range(min=1, max=20),
+            cv.Optional(CONF_INTER_FRAME_GAP_US, default=0): cv.positive_int,
+            cv.Optional(CONF_POST_FRAME_IDLE_GAP_US, default=0): cv.positive_int,
+            cv.Optional(CONF_DISPLAY_DEBUG_MODE, default=False): cv.boolean,
+            cv.Optional(CONF_DISPLAY_DIM_TIMEOUT_MIN, default=1): cv.int_range(min=0),
+            cv.Optional(CONF_DISPLAY_WAKE_ON_ACTIVITY, default=True): cv.boolean,
+            cv.Optional(CONF_FIRMWARE_VERSION, default="unknown"): cv.string,
+            cv.Optional(CONF_TX_MODE, default="repeated_strobe"): cv.one_of(
+                "continuous_burst",
+                "repeated_strobe",
+                "clean_timing_test",
+                "proflame_pwm_symbols",
+                "proflame_native_groups",
+                lower=True,
+            ),
+            cv.Optional(CONF_NATIVE_GROUP_TIMING_PROFILE, default="yardstick_compat"): cv.one_of(
+                "yardstick_compat", "native_remote", lower=True
+            ),
+            cv.Optional(CONF_NATIVE_GROUP_REPEAT_BOUNDARY_MODE, default="continuous_tx"): cv.one_of(
+                "continuous_tx", "reenter_tx", lower=True
+            ),
+            cv.Optional(CONF_PRE_BURST_LOW_US, default=0): cv.positive_int,
+            cv.Optional(CONF_PRE_FRAME_LOW_US, default=0): cv.positive_int,
+            cv.Optional(CONF_DIAGNOSTIC_REPEAT_COUNT_OVERRIDE, default=0): cv.int_range(min=0, max=20),
+            cv.Optional(CONF_PAYLOAD_BIT_LENGTH_OVERRIDE, default=0): cv.positive_int,
+            cv.Optional(CONF_ASYNC_TX_DATA_PIN, default="gdo0"): cv.one_of("gdo0", "gdo2", lower=True),
+            cv.Required(CONF_BOARD_POWER_ENABLE_PIN): pins.gpio_output_pin_schema,
+            cv.Required(CONF_CC1101_CS_PIN): pins.gpio_output_pin_schema,
+            cv.Required(CONF_CC1101_GDO0_PIN): pins.gpio_output_pin_schema,
+            cv.Required(CONF_CC1101_GDO2_PIN): pins.gpio_output_pin_schema,
+            cv.Required(CONF_RF_SWITCH_SW1_PIN): pins.gpio_output_pin_schema,
+            cv.Required(CONF_RF_SWITCH_SW0_PIN): pins.gpio_output_pin_schema,
+            cv.Optional(CONF_ENDPOINT_STATUS): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_LAST_ERROR): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_LAST_TX_RESULT): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_LAST_REQUEST_ID): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_LAST_TX_PATH): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_LAST_PAYLOAD_HEX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_LAST_MARCSTATE_BEFORE_TX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_LAST_MARCSTATE_AFTER_TX): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_CC1101_PARTNUM): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_CC1101_VERSION): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_FIRMWARE_VERSION_TEXT): text_sensor.text_sensor_schema(entity_category="diagnostic"),
+            cv.Optional(CONF_TX_SUCCESS_COUNT): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+            cv.Optional(CONF_TX_FAILURE_COUNT): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+            cv.Optional(CONF_LAST_PAYLOAD_LENGTH): sensor.sensor_schema(
+                accuracy_decimals=0, entity_category="diagnostic"
+            ),
+            cv.Optional(CONF_LAST_REQUEST_REPEAT_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0, entity_category="diagnostic"
+            ),
+            cv.Optional(CONF_LAST_TX_ELAPSED_MS): sensor.sensor_schema(
+                accuracy_decimals=0, entity_category="diagnostic"
+            ),
+            cv.Optional(CONF_TX_REPEAT_COUNT_SENSOR): sensor.sensor_schema(
+                accuracy_decimals=0, entity_category="diagnostic"
+            ),
+            cv.Optional(CONF_FIRMWARE_PROTOCOL_VERSION): sensor.sensor_schema(
+                accuracy_decimals=0, entity_category="diagnostic"
+            ),
+            cv.Optional(CONF_CONFIG_REVISION): sensor.sensor_schema(accuracy_decimals=0, entity_category="diagnostic"),
+            cv.Optional(CONF_BATTERY_PERCENT): sensor.sensor_schema(
+                unit_of_measurement="%",
+                accuracy_decimals=0,
+                device_class="battery",
+                state_class="measurement",
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_DROPPED_PACKET_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_NO_RF_CAPTURE_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_INCOMPLETE_FIFO_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_DECODE_FAILED_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_PROFILE_MISMATCH_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_ACCEPTED_PACKET_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_TX_SUPPRESSED_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_TRANSPORT_UNAVAILABLE_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_LAST_REJECTION_SNAPSHOT): text_sensor.text_sensor_schema(
+                entity_category="diagnostic",
+            ),
+        }
+    )
+    .extend(cv.COMPONENT_SCHEMA)
+    .extend(i2c.i2c_device_schema(0x55))
+)
 
-FINAL_VALIDATE_SCHEMA = spi.final_validate_device_schema(
-    "proflame2_tembed",
-    require_miso=True,
-    require_mosi=True,
+
+def _validate_waveform_target(config):
+    if config[CONF_WAVEFORM_BUFFERED] and not config[CONF_WAVEFORM_DIAGNOSTICS]:
+        raise cv.Invalid("waveform_buffered_capture requires waveform_diagnostics")
+    if config[CONF_WAVEFORM_GPIO_EDGE_OBSERVER] and not config[CONF_WAVEFORM_DIAGNOSTICS]:
+        raise cv.Invalid("waveform_gpio_edge_observer requires waveform_diagnostics")
+    if config[CONF_WAVEFORM_DIAGNOSTICS]:
+        esp32.only_on_variant(supported=["ESP32S3"], msg_prefix="Waveform diagnostics")(config)
+        if CORE.using_arduino:
+            raise cv.Invalid("Waveform diagnostics requires the esp-idf framework")
+    return config
+
+
+FINAL_VALIDATE_SCHEMA = cv.All(
+    spi.final_validate_device_schema(
+        "proflame2_tembed",
+        require_miso=True,
+        require_mosi=True,
+    ),
+    _validate_waveform_target,
 )
 
 
 async def to_code(config):
+    if config[CONF_WAVEFORM_DIAGNOSTICS]:
+        # Use ESPHome's include-directory handling for opt-in nested sources.
+        # Normal component discovery intentionally only copies root-level files.
+        from esphome.core.config import add_includes
+
+        CORE.add_job(add_includes, [str(Path(__file__).parent / "diagnostics")])
+        cg.add_define("USE_PROFLAME2_WAVEFORM_DIAGNOSTICS")
+    if config[CONF_WAVEFORM_BUFFERED]:
+        cg.add_define("USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS")
+    if config[CONF_WAVEFORM_GPIO_EDGE_OBSERVER]:
+        cg.add_define("USE_PROFLAME2_GPIO_EDGE_DIAGNOSTICS")
     # ESPHome excludes unused IDF drivers; our direct RMT API use needs this one.
     esp32.include_builtin_idf_component("esp_driver_rmt")
     var = cg.new_Pvariable(config[CONF_ID])
+    if config[CONF_WAVEFORM_DIAGNOSTICS]:
+        cg.add(
+            var.set_waveform_diagnostic_limits(
+                config[CONF_WAVEFORM_CAPTURE_REJECTED],
+                config[CONF_WAVEFORM_MAX_EXPORTS],
+                config[CONF_WAVEFORM_SESSION_MS],
+            )
+        )
     await cg.register_component(var, config)
     await i2c.register_i2c_device(var, config)
     await spi.register_spi_device(
@@ -262,6 +318,7 @@ async def to_code(config):
     cg.add(var.set_pre_tx_settle_delay_us(config[CONF_PRE_TX_SETTLE_DELAY_US]))
 
     cg.add(var.set_rf_band(RFBand.BAND_433 if config[CONF_RF_BAND] == "433" else RFBand.BAND_315))
+    cg.add(var.set_tx_frequency_offset_hz(config[CONF_TX_FREQUENCY_OFFSET_HZ]))
     cg.add(var.set_data_rate_bps(config[CONF_DATA_RATE_BPS]))
     cg.add(var.set_tx_repeat_count(config[CONF_TX_REPEAT_COUNT]))
     cg.add(var.set_inter_frame_gap_us(config[CONF_INTER_FRAME_GAP_US]))
@@ -271,22 +328,24 @@ async def to_code(config):
     cg.add(var.set_display_wake_on_activity(config[CONF_DISPLAY_WAKE_ON_ACTIVITY]))
     cg.add(var.set_firmware_version(config[CONF_FIRMWARE_VERSION]))
     cg.add(var.set_tx_mode_requested(config[CONF_TX_MODE]))
-    cg.add(
-        var.set_native_group_timing_profile_requested(
-            config[CONF_NATIVE_GROUP_TIMING_PROFILE]
-        )
-    )
+    cg.add(var.set_native_group_timing_profile_requested(config[CONF_NATIVE_GROUP_TIMING_PROFILE]))
     cg.add(
         var.set_tx_mode(
             TXMode.CONTINUOUS_BURST
             if config[CONF_TX_MODE] == "continuous_burst"
-            else TXMode.CLEAN_TIMING_TEST
-            if config[CONF_TX_MODE] == "clean_timing_test"
-            else TXMode.PROFLAME_PWM_SYMBOLS
-            if config[CONF_TX_MODE] == "proflame_pwm_symbols"
-            else TXMode.PROFLAME_NATIVE_GROUPS
-            if config[CONF_TX_MODE] == "proflame_native_groups"
-            else TXMode.REPEATED_STROBE
+            else (
+                TXMode.CLEAN_TIMING_TEST
+                if config[CONF_TX_MODE] == "clean_timing_test"
+                else (
+                    TXMode.PROFLAME_PWM_SYMBOLS
+                    if config[CONF_TX_MODE] == "proflame_pwm_symbols"
+                    else (
+                        TXMode.PROFLAME_NATIVE_GROUPS
+                        if config[CONF_TX_MODE] == "proflame_native_groups"
+                        else TXMode.REPEATED_STROBE
+                    )
+                )
+            )
         )
     )
     cg.add(
@@ -296,11 +355,7 @@ async def to_code(config):
             else NativeGroupTimingProfile.YARDSTICK_COMPAT
         )
     )
-    cg.add(
-        var.set_native_group_repeat_boundary_mode_requested(
-            config[CONF_NATIVE_GROUP_REPEAT_BOUNDARY_MODE]
-        )
-    )
+    cg.add(var.set_native_group_repeat_boundary_mode_requested(config[CONF_NATIVE_GROUP_REPEAT_BOUNDARY_MODE]))
     cg.add(
         var.set_native_group_repeat_boundary_mode(
             NativeGroupRepeatBoundaryMode.REENTER_TX
@@ -310,23 +365,15 @@ async def to_code(config):
     )
     cg.add(var.set_pre_burst_low_us(config[CONF_PRE_BURST_LOW_US]))
     cg.add(var.set_pre_frame_low_us(config[CONF_PRE_FRAME_LOW_US]))
-    cg.add(
-        var.set_diagnostic_repeat_count_override(
-            config[CONF_DIAGNOSTIC_REPEAT_COUNT_OVERRIDE]
-        )
-    )
+    cg.add(var.set_diagnostic_repeat_count_override(config[CONF_DIAGNOSTIC_REPEAT_COUNT_OVERRIDE]))
     cg.add(var.set_payload_bit_length_override(config[CONF_PAYLOAD_BIT_LENGTH_OVERRIDE]))
     cg.add(
         var.set_async_tx_data_pin(
-            AsyncTxDataPin.GDO0
-            if config[CONF_ASYNC_TX_DATA_PIN] == "gdo0"
-            else AsyncTxDataPin.GDO2
+            AsyncTxDataPin.GDO0 if config[CONF_ASYNC_TX_DATA_PIN] == "gdo0" else AsyncTxDataPin.GDO2
         )
     )
 
-    board_power_enable_pin = await cg.gpio_pin_expression(
-        config[CONF_BOARD_POWER_ENABLE_PIN]
-    )
+    board_power_enable_pin = await cg.gpio_pin_expression(config[CONF_BOARD_POWER_ENABLE_PIN])
     cc1101_gdo0_pin = await cg.gpio_pin_expression(config[CONF_CC1101_GDO0_PIN])
     cc1101_gdo2_pin = await cg.gpio_pin_expression(config[CONF_CC1101_GDO2_PIN])
     rf_switch_sw1_pin = await cg.gpio_pin_expression(config[CONF_RF_SWITCH_SW1_PIN])
@@ -455,7 +502,6 @@ async def tx_to_code(config, action_id, template_arg, args):
     return var
 
 
-
 @_register_action(
     "proflame2_tembed.tx_stateful",
     Proflame2TEmbedTxStatefulAction,
@@ -558,12 +604,8 @@ TEST_PATTERN_ACTION_SCHEMA = cv.Schema(
         cv.Optional(CONF_MODE, default="alternating_ook"): cv.templatable(
             cv.one_of("alternating_ook", "carrier_on", "carrier_off", lower=True)
         ),
-        cv.Optional(CONF_DURATION_MS, default=1500): cv.templatable(
-            cv.int_range(min=100, max=5000)
-        ),
-        cv.Optional(CONF_PERIOD_US, default=833): cv.templatable(
-            cv.int_range(min=100, max=1000000)
-        ),
+        cv.Optional(CONF_DURATION_MS, default=1500): cv.templatable(cv.int_range(min=100, max=5000)),
+        cv.Optional(CONF_PERIOD_US, default=833): cv.templatable(cv.int_range(min=100, max=1000000)),
         cv.Optional(CONF_STATUS_TEXT, default=""): cv.templatable(cv.string),
     }
 )

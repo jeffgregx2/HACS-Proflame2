@@ -34,6 +34,9 @@ LilyGO is a full-featured Proflame2 controller with a built-in display that show
 ![LilyGO Controller](docs/images/LilyGO-Display.png)
 
 Note: ESPHome Builder is required in order to configure the LilyGO firmware.
+Current LilyGO firmware uses the ESP-IDF framework. When upgrading an existing
+device, check `esp32.framework.type` in its device YAML; changing the package
+reference alone does not update that setting.
 The LilyGO setup guide includes a browser YAML helper that updates the ESPHome
 Builder generated YAML for Proflame2.
 

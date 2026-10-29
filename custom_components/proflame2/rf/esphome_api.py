@@ -119,6 +119,9 @@ class ESPHomeAPIBackend(RFBackend):
         self._connect_timeout_seconds = connect_timeout_seconds
         self._send_timeout_seconds = send_timeout_seconds
         self._close_timeout_seconds = close_timeout_seconds
+        observe_pcm = getattr(transport, "set_pcm_event_logger", None)
+        if callable(observe_pcm):
+            observe_pcm(self._log_rx_pcm)
 
     async def connect(self) -> None:
         """Open/configure the ESPHome transport boundary."""
@@ -217,6 +220,12 @@ class ESPHomeAPIBackend(RFBackend):
         )
         response = None
         try:
+            self.log_pcm(
+                "TX",
+                request.air_payload,
+                bit_length=request.air_payload_bit_length,
+                context=f"stage=request request_id={request.request_id}",
+            )
             response = await asyncio.wait_for(
                 self.transport.send_tx(request),
                 timeout=self._send_timeout_seconds,
@@ -742,6 +751,8 @@ class ESPHomeAPIBackend(RFBackend):
         strict_packet_policy: bool,
     ) -> bool:
         metadata = event.capture_metadata or {}
+        if not callable(getattr(self.transport, "set_pcm_event_logger", None)):
+            self._log_rx_pcm(event)
         event_kind = metadata.get("event_kind")
         accepted = metadata.get("accepted")
         qualifier = metadata.get("qualifier")
@@ -798,6 +809,15 @@ class ESPHomeAPIBackend(RFBackend):
                 )
                 return False
         return True
+
+    def _log_rx_pcm(self, event: ESPHomeRXEvent) -> None:
+        metadata = event.capture_metadata or {}
+        self.log_pcm(
+            "RX",
+            event.raw_payload,
+            bit_length=_parse_decimal_event_int(metadata.get("pcm_bit_length")),
+            context=f"event_id={event.event_id} event_kind={metadata.get('event_kind')}",
+        )
 
     def _scan_fifo_event(self, event: ESPHomeRXEvent) -> tuple[DecodeCandidate, ...]:
         if event.capture_metadata.get("event_kind") == "pulse_capture":

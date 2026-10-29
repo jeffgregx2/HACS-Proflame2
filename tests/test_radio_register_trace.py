@@ -13,6 +13,64 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = ROOT / "esphome/components/proflame2_tembed"
 
 
+@pytest.mark.parametrize("trace", [0, 1])
+def test_tx_frequency_offset_preserves_rx_and_both_frame_formats(tmp_path, trace):
+    component = (COMPONENT / "proflame2_tembed.cpp").read_text()
+    boundaries = [
+        (
+            "bool Proflame2TEmbedComponent::configure_rx_fifo_capture_mode_(",
+            "void Proflame2TEmbedComponent::set_rmt_pulse_capture_enabled_(",
+        ),
+        (
+            "void Proflame2TEmbedComponent::pause_rx_for_tx_()",
+            "void Proflame2TEmbedComponent::process_delayed_retransmission_()",
+        ),
+        (
+            "void Proflame2TEmbedComponent::restore_rx_after_tx_if_needed_()",
+            "void Proflame2TEmbedComponent::maybe_log_rx_fifo_capture_status_()",
+        ),
+    ]
+    methods = "\n".join(
+        component[component.index(start) : component.index(end, component.index(start))] for start, end in boundaries
+    )
+    harness = (ROOT / "tests/cpp/test_tx_frequency_offset.cpp").read_text()
+    source = tmp_path / "tx_frequency_offset.cpp"
+    source.write_text(harness.replace("// INSERT_PRODUCTION_TUNING_METHODS", methods))
+    executable = tmp_path / "tx_frequency_offset"
+    compiler = shutil.which("g++")
+    assert compiler
+    result = subprocess.run(
+        [
+            compiler,
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            # Existing TX diagnostic-only locals are unused with host log stubs.
+            "-Wno-error=unused-variable",
+            "-Wno-error=unused-but-set-variable",
+            f"-DPROFLAME2_RADIO_TRACE={trace}",
+            "-DPROFLAME2_TEMBED_TX_DEBUG=0",
+            "-DPROFLAME2_TX_CLEAN_MODE=0",
+            f"-I{ROOT / 'tests/cpp/radio_trace_stubs'}",
+            f"-I{COMPONENT}",
+            str(source),
+            str(COMPONENT / "radio_cc1101.cpp"),
+            str(COMPONENT / "radio_cc1101_tx.cpp"),
+            str(COMPONENT / "tx_payload_layout.cpp"),
+            str(COMPONENT / "rf_band.cpp"),
+            "-o",
+            str(executable),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    for payload, bits in _native_tx_payloads():
+        result = subprocess.run([str(executable), payload.hex(), str(bits)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+
 def test_wifi_diagnostics_and_api_summary(tmp_path: Path) -> None:
     component = (COMPONENT / "proflame2_tembed.cpp").read_text()
     method = component.split("void Proflame2TEmbedComponent::set_wifi_connected(", 1)[1].split(
@@ -317,7 +375,7 @@ def test_retry_runtime_wiring_keeps_rx_and_ha_authority() -> None:
     assert worker.index("event.finished_ms = millis()") < worker.index("event.marcstate_after_tx =")
     package = (ROOT / "esphome/packages/proflame2_tembed_base.yaml").read_text()
     switch = package.split("id: proflame2_delayed_retransmission", 1)[1].split("  - platform:", 1)[0]
-    assert "restore_mode: ALWAYS_ON" in switch
+    assert "restore_mode: ALWAYS_OFF" in switch
     assert "set_delayed_retransmission_enabled(true)" in switch
     assert "set_delayed_retransmission_enabled(false)" in switch
     assert 'proflame2_radio_ready_timeout_us: "10000"' in package

@@ -24,7 +24,8 @@ struct RunResult {
 };
 
 static RunResult run(const std::vector<uint8_t>& payload, uint32_t bits, uint32_t delay_us,
-                     NativeGroupRepeatBoundaryMode boundary, uint32_t startup_us = 750, bool never_ready = false) {
+                     NativeGroupRepeatBoundaryMode boundary, uint32_t startup_us = 750, bool never_ready = false,
+                     uint8_t repeat_count = 5) {
   test_clock_us = 0;
   test_pin_edges.clear();
   spi::commands.clear();
@@ -46,15 +47,16 @@ static RunResult run(const std::vector<uint8_t>& payload, uint32_t bits, uint32_
   uint32_t elapsed_ms = 0;
   TXTimingDiagnostics timing;
   std::string error;
-  const bool ok = radio.transmit_async_ook(payload.data(), payload.size(), bits, 5, 0, TXMode::PROFLAME_NATIVE_GROUPS,
-                                           NativeGroupTimingProfile::NATIVE_REMOTE, boundary, 834, 0, 0, elapsed_ms,
-                                           timing, error, radio.get_pre_tx_settle_delay_us());
+  const bool ok =
+      radio.transmit_async_ook(payload.data(), payload.size(), bits, repeat_count, 0, TXMode::PROFLAME_NATIVE_GROUPS,
+                               NativeGroupTimingProfile::NATIVE_REMOTE, boundary, 834, 0, 0, elapsed_ms, timing, error,
+                               radio.get_pre_tx_settle_delay_us());
   assert(ok && error.empty());
   assert(!test_pin_edges.empty() && test_pin_edges.front().second);
   assert(test_pin_edges.front().first >= spi::stx_times.front() + (never_ready ? 10000 : startup_us) + delay_us);
-  assert(spi::stx_count == (boundary == NativeGroupRepeatBoundaryMode::REENTER_TX ? 5U : 1U));
+  assert(spi::stx_count == (boundary == NativeGroupRepeatBoundaryMode::REENTER_TX ? repeat_count : 1U));
   assert(timing.payload_bits == bits);
-  assert(timing.inter_repeat_gap_samples == 4);
+  assert(timing.inter_repeat_gap_samples == repeat_count - 1U);
   if (never_ready) {
     assert(!trace_logs.empty());
     assert(trace_logs.front().find("TX readiness timeout after 10000 us") != std::string::npos);
@@ -92,6 +94,16 @@ int main(int argc, char** argv) {
     }
     const auto reset = run(payload, bits, 0, boundary);
     assert(reset.edges == baseline.edges);
+    for (const uint8_t copies : {8, 10}) {
+      const auto longer = run(payload, bits, 0, boundary, 750, false, copies);
+      assert(baseline.edges.size() % 5 == 0);
+      assert(longer.edges.size() == baseline.edges.size() / 5 * copies);
+      for (size_t i = 0; i < baseline.edges.size(); ++i) {
+        assert(longer.edges[i] == baseline.edges[i]);
+      }
+      assert(longer.timing.inter_repeat_gap_min_us == baseline.timing.inter_repeat_gap_min_us);
+      assert(longer.timing.inter_repeat_gap_max_us == baseline.timing.inter_repeat_gap_max_us);
+    }
     // Startup beyond the old 1.5 ms timeout now waits for confirmed TX.
     run(payload, bits, 0, boundary, 3000);
     run(payload, bits, 20000, boundary, 9000);

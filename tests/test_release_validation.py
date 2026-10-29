@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -24,8 +25,8 @@ def _load_release_validation_module():
     return module
 
 
-def test_current_source_passes_release_validation_after_docs_stamping(tmp_path: Path, monkeypatch) -> None:
-    """Branch sources should pass pre-tag checks after release links are stamped."""
+def test_current_source_passes_release_validation_after_stamping(tmp_path: Path, monkeypatch) -> None:
+    """Stamp development firmware identification as well as links before tagging."""
 
     release_validation = _load_release_validation_module()
     manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
@@ -41,6 +42,15 @@ def test_current_source_passes_release_validation_after_docs_stamping(tmp_path: 
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO_ROOT / relative_path, destination)
     monkeypatch.chdir(tmp_path)
+    firmware = tmp_path / "esphome/packages/proflame2_tembed_base.yaml"
+    firmware.write_text(
+        re.sub(
+            r'^  proflame2_firmware_version: "[^"]+"$',
+            f'  proflame2_firmware_version: "v{version}"',
+            firmware.read_text(),
+            flags=re.MULTILINE,
+        )
+    )
     release_validation._load_stamp_docs_ref_module().stamp_docs_ref(f"v{version}")
     release_validation.validate_release_source(f"v{version}", prerelease="-" in version)
 

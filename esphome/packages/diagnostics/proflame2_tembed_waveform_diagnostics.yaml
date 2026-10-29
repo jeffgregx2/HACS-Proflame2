@@ -1,0 +1,27 @@
+# Explicitly included only on a dedicated passive diagnostic receiver.
+proflame2_tembed:
+  firmware_version: "v0.7.0-debug"
+  waveform_diagnostics: true
+  waveform_buffered_capture: true
+  waveform_capture_rejected: false
+  waveform_max_exports: 32
+  waveform_session_ms: 30000
+
+button:
+  - platform: template
+    name: "Waveform Capture Start"
+    on_press:
+      - lambda: id(proflame2_radio).start_waveform_capture();
+  - platform: template
+    name: "Waveform Capture Stop"
+    on_press:
+      - lambda: id(proflame2_radio).abort_waveform_capture();
+
+api:
+  actions:
+    - action: proflame2_waveform_start
+      then:
+        - lambda: id(proflame2_radio).start_waveform_capture();
+    - action: proflame2_waveform_abort
+      then:
+        - lambda: id(proflame2_radio).abort_waveform_capture();

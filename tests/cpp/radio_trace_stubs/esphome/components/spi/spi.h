@@ -48,7 +48,7 @@ public:
   uint8_t read_byte() {
     assert(command_ & 0x80);
     if ((command_ & 0x3F) == 0x3E) {
-      assert(command_ == 0xFE && index_ < pa.size());
+      assert((command_ == 0xFE || command_ == 0xBE) && index_ < pa.size());
       return pa[index_++];
     }
     if (allow_radio_operations && (command_ & 0x3F) == 0x35) {

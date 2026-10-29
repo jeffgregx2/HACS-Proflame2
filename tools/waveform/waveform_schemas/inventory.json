@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Private waveform software inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "devices"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "devices": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/device"}}
+  },
+  "$defs": {
+    "unknownText": {"type": ["string", "null"], "minLength": 1},
+    "device": {
+      "type": "object", "additionalProperties": false,
+      "required": ["alias", "role", "source_sha", "firmware_version", "framework", "esphome_version", "sdk_version", "compiler_version", "configuration", "registers"],
+      "properties": {
+        "alias": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,47}$"},
+        "role": {"enum": ["native", "transmitter", "receiver", "sdr"]},
+        "source_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+        "firmware_version": {"$ref": "#/$defs/unknownText"},
+        "framework": {"$ref": "#/$defs/unknownText"},
+        "esphome_version": {"$ref": "#/$defs/unknownText"},
+        "sdk_version": {"$ref": "#/$defs/unknownText"},
+        "compiler_version": {"$ref": "#/$defs/unknownText"},
+        "configuration": {
+          "type": "object", "additionalProperties": false,
+          "required": ["rf_band", "profile", "rx_mode", "repeat_count", "delayed_retry", "pre_tx_settle_us", "radio_ready_timeout_us", "register_trace", "pcm_logging"],
+          "properties": {
+            "rf_band": {"enum": ["315", "433", null]},
+            "tx_frequency_offset_hz": {"type": ["integer", "null"], "minimum": -100000, "maximum": 100000},
+            "profile": {"type": ["object", "null"]},
+            "rx_mode": {"enum": ["fifo", "rmt_pulse", "diagnostic", null]},
+            "repeat_count": {"type": ["integer", "null"], "minimum": 1, "maximum": 20},
+            "delayed_retry": {"type": ["boolean", "null"]},
+            "pre_tx_settle_us": {"type": ["integer", "null"], "minimum": 0},
+            "radio_ready_timeout_us": {"type": ["integer", "null"], "minimum": 1},
+            "register_trace": {"type": ["boolean", "null"]},
+            "pcm_logging": {"type": ["boolean", "null"]}
+          }
+        },
+        "registers": {"type": ["object", "null"], "additionalProperties": {"type": "integer", "minimum": 0, "maximum": 255}}
+      }
+    }
+  }
+}

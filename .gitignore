@@ -149,6 +149,13 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+waveform.env
+native-pilot.json
+*.cu8
+*.cs8
+*.cf32
+session.tar.gz
+firmware.elf
 .venv
 .venv-macos/
 .venv-esphome/
@@ -230,6 +237,8 @@ __marimo__/
 
 # Protocol debug data, we don't want that checked in
 analysis/
+!tools/waveform/analysis/
+!tools/waveform/analysis/*.py
 
 # Ignore any private rtl_433 build with added instrumentation
 rtl_433/

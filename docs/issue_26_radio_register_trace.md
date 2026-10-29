@@ -40,6 +40,31 @@ identifies the current beta1 instrumentation. Each snapshot also ends with
 `RFTRACE seq=N end=1`.
 New traces require rebuilding and flashing, not just changing the HA integration.
 
+## Native Remote Overlap
+
+The optional delayed retry is OFF by default. When enabled, it does not hold TX
+throughout its two-second waiting period. With the current ten-copy legacy
+default, each transmit operation takes about 0.83 seconds, including the 20 ms
+pre-TX settling delay, with RMT restored between operations. Other frame lengths
+and configurations have different durations. The extra burst nevertheless adds
+a second interval in which this single radio cannot receive a native command.
+
+Usable completed RMT captures are polled before retry dispatch and cancel a
+pending retry. A capture still in progress when TX begins, or a native command
+sent during either burst, may not be received. The fireplace can receive a
+different subset of commands than LilyGO. A collision can therefore leave HA's
+last commanded/observed state different from the actual fireplace state.
+There is no fireplace acknowledgement to determine a definitive winner.
+
+The reported missed native repeat is not yet localized. Correlate the APP
+command, native button press, retry schedule/result, and received capture times.
+If the native repeat occurs outside both transmit bursts, ordinary half-duplex
+operation does not by itself explain the miss. Compare with Delayed
+Retransmission OFF using the same placement and response-driven cadence.
+Do not change burst timings, shorten the validated packet train, or invent
+confirmed fireplace state without that evidence. Disabling the retry is a
+diagnostic comparison, not a guarantee against collisions during the first TX.
+
 ## Runtime Experiment Controls
 
 The controls require this diagnostic firmware, not the optional debug YAML
@@ -61,14 +86,22 @@ Each boot restores trace OFF and the settling delay configured in YAML.
 Change the trace control only while the radio is idle so a capture is not intentionally
 split between tracing ON and OFF. The trace switch is atomic across tasks.
 
-- **Delayed Retransmission** defaults to ON and resets ON at every reboot,
-  including after it was manually disabled. It can still be turned OFF for
-  controlled tests. A Wi-Fi/API reconnect alone does not reset the switch. When
+- **Delayed Retransmission** defaults to OFF and resets OFF at every reboot,
+  including after it was manually enabled. It can still be turned ON when
+  wanted. A Wi-Fi/API reconnect alone does not reset the switch. When
   enabled, a successful normal command can send one extra full burst two seconds
   after the worker finishes the original burst, subject to main-loop scheduling.
   This uses the exact cached payload, frame count, timing profile, and settling
-  delay from the original command. It does not alter the five repetitions
+  delay from the original command. It does not alter the configured repetitions
   already inside that burst, and the extra burst cannot schedule another retry.
+- The current investigation defaults to ten frame copies per normal burst
+  (`proflame2_diagnostic_repeat_count_override: "10"`) and zero TX frequency
+  offset. This is a candidate configuration for stability testing, not a
+  demonstrated universal requirement of the fireplace receiver.
+- **Proflame2 TX Repeat Count** reports the effective configured count, including
+  the override. **Last Request Repeat Count** reports the effective count of the
+  most recent request. The base HA request count remains internal to validation;
+  it is not a minimum. A zero override falls back to the base count.
 - RX remains active during the two-second wait. Only the actual retry pauses RX,
   using the same handoff as a normal command and restoring it at completion.
 - Any successfully queued newer normal command replaces the pending retry and

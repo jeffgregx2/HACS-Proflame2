@@ -8,6 +8,11 @@ compatibility problems.
 The intent is to let a future controller implementation on different hardware
 reproduce a compliant waveform without rediscovering the protocol details.
 
+Optional raw waveform acquisition lives in `diagnostics/` and is excluded from
+normal builds. See the [developer diagnostic guide](../../../docs/diagnostics/README.md)
+for explicit receiver-only YAML packages, private configuration, SDR collection,
+and offline analysis tools. Captures and generated results are not source assets.
+
 ## Scope
 
 This is the reference for the working transmitter path:

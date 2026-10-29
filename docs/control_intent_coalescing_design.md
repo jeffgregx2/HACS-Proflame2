@@ -113,7 +113,7 @@ in controller ownership or reject conflicts explicitly.
    state, using the existing feature and off-state rules.
 3. Replace the pending intent atomically. Preserve every attribute, not just the
    latest edited field. Reset its UI deadline to the latest edit plus the existing
-   debounce interval (currently 1.5 seconds).
+   debounce interval (currently 1.0 second).
 4. Publish the new effective control values and pending status. Wake the dispatcher.
    Do not cancel controller retries for changes that exist only inside HA.
 

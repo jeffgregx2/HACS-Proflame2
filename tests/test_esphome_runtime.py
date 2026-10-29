@@ -627,6 +627,43 @@ async def test_transport_receives_rx_event_from_linked_esphome_device_id(hass) -
     assert event.capture_metadata["schema_version"] == "1"
 
 
+async def test_pcm_logging_observes_bus_event_before_consumption_once(hass, caplog) -> None:
+    linked_entry = _add_linked_esphome_entry(hass, _fake_esphome_runtime_data())
+    device_id = _add_linked_esphome_device(hass, linked_entry, connection=("mac", "00:00:00:00:00:01"))
+    transport = HomeAssistantESPHomeTransport(
+        hass,
+        linked_entry_id=linked_entry.entry_id,
+        controller_id="test-controller",
+        debug_logging_enabled=False,
+    )
+    backend = ESPHomeAPIBackend(transport=transport)
+    backend.set_pcm_logging_enabled(True)
+    await transport.connect()
+    await transport.configure_radio(backend.radio_config)
+    hass.bus.async_fire(
+        ESPHOME_RX_EVENT_TYPE,
+        {
+            ATTR_DEVICE_ID: device_id,
+            "schema_version": "2",
+            "protocol": "proflame2",
+            "event_kind": "pulse_capture",
+            "payload_hex": "dead80",
+            "pcm_bit_length": "17",
+            "packet_count": "1",
+        },
+    )
+    await hass.async_block_till_done()
+    lines = [record.getMessage() for record in caplog.records if record.name == "custom_components.proflame2.pcm"]
+    assert len(lines) == 1
+    assert "pcm_hex=dead80" in lines[0]
+    assert "bits=17" in lines[0]
+    event = await transport.receive_rx_event(timeout=0.1)
+    assert event is not None
+    backend._rx_event_is_decodable(event, strict_packet_policy=True)
+    assert len([record for record in caplog.records if record.name == "custom_components.proflame2.pcm"]) == 1
+    await transport.close()
+
+
 async def test_transport_receives_fifo_capture_event_from_linked_esphome_device_id(hass) -> None:
     linked_runtime_data = _fake_esphome_runtime_data()
     linked_entry = _add_linked_esphome_entry(hass, linked_runtime_data)

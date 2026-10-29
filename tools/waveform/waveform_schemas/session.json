@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Private waveform session manifest",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "session_id", "inventory_sha256", "tool_source_sha", "source_alias", "receiver_alias", "started_utc", "status", "sdr", "trials", "artifacts", "deliberate_changes"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "session_id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]{1,80}$"},
+    "inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "tool_source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_alias": {"type": "string", "minLength": 1},
+    "receiver_alias": {"type": "string", "minLength": 1},
+    "started_utc": {"type": "string", "format": "date-time"},
+    "status": {"enum": ["planned", "acquiring", "complete", "aborted", "failed"]},
+    "sdr": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sample_rate_hz", "center_frequency_hz", "gain_db", "sample_format", "tool_version", "dropped_samples"],
+      "properties": {
+        "sample_rate_hz": {"type": "integer", "minimum": 1},
+        "center_frequency_hz": {"type": "integer", "minimum": 1},
+        "gain_db": {"type": ["number", "null"]},
+        "sample_format": {"enum": ["cu8", "cs16", "cf32"]},
+        "tool_version": {"type": ["string", "null"]},
+        "dropped_samples": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "trials": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "artifacts": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false, "required": ["filename", "sha256", "bytes"],
+        "properties": {
+          "filename": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "bytes": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "deliberate_changes": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

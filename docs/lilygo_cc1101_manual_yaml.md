@@ -30,6 +30,8 @@ Do not copy the repository `esphome/components` directory into your ESPHome
 configuration. The package downloads the Proflame2 ESPHome component from
 GitHub using `proflame2_package_ref`.
 
+## ESP-IDF Migration
+
 Use ESP-IDF so ESPHome can retain a supported panic backtrace and report it
 after a restart, including through network logs. If an existing device uses
 Arduino, change only the framework type, keeping the board and other device
@@ -41,6 +43,12 @@ esp32:
   framework:
     type: esp-idf
 ```
+
+Changing the Proflame2 package reference does not migrate an existing device
+from Arduino to ESP-IDF. Edit the framework type in the device YAML explicitly.
+When using prerelease firmware with the public YAML helper, also check this
+setting: the published helper follows stable `main`, not the selected package
+reference.
 
 Crash reporting depends on the ESPHome version and build configuration; it is
 not a guarantee that every reset will produce a backtrace. During crash

@@ -1,0 +1,4 @@
+# Include alongside proflame2_tembed_waveform_diagnostics.yaml. Never enable in production.
+proflame2_tembed:
+  firmware_version: v0.7.0-debug-gpio
+  waveform_gpio_edge_observer: true

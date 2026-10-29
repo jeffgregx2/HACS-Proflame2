@@ -118,9 +118,12 @@ esp32:
     type: esp-idf
 ```
 
-Use ESP-IDF rather than Arduino for ESPHome's retained crash reporting on
-supported builds. Existing Arduino configurations should change the framework
-type, then rebuild and install the firmware. See the
+ESP-IDF is the framework for current LilyGO firmware and enables ESPHome's
+retained crash reporting on supported builds. When migrating an older Arduino
+configuration, change the framework type in the device YAML explicitly, then
+rebuild and install the firmware. Changing the package reference alone does not
+change the framework; neither does selecting a prerelease automatically update
+the public YAML helper, which follows stable `main`. See the
 [manual setup guide](../docs/lilygo_cc1101_manual_yaml.md) for crash-reporting
 limitations and preservation of the matching `firmware.elf` during debugging.
 

@@ -750,6 +750,12 @@ class YardStickBackend(RFBackend):
             if not self._worker_mode:
                 assert self._radio is not None
 
+            self.log_pcm(
+                "TX",
+                transmit_request.air_payload,
+                bit_length=transmit_request.air_payload_bit_length,
+                context="stage=request",
+            )
             tx_settings = await self._execute_yardstick_transmit_request(transmit_request)
             _LOGGER.info(
                 "Proflame2 Yard Stick TX remote_id=%06x tx_frequency_hz=%s modulation=%s data_rate=%s payload_length_bytes=%s payload_bit_length=%s transmission_mode=%s logical_repeat_count=%s repeat_separator_bits=%s rf_xmit_call_count=%s",
@@ -1004,11 +1010,17 @@ class YardStickBackend(RFBackend):
                 if response["kind"] == "NO_PACKET":
                     return None
                 raw_payload_hex = payload.get("raw_payload_hex")
-                return None if raw_payload_hex is None else bytes.fromhex(raw_payload_hex)
+                raw_payload = None if raw_payload_hex is None else bytes.fromhex(raw_payload_hex)
+                if raw_payload is not None:
+                    self.log_pcm("RX", raw_payload, context="event_kind=rfrecv")
+                return raw_payload
             finally:
                 if lock_acquired:
                     self._release_operation_lock("receive")
-        return await self._async_in_executor(self._recv_once, timeout)
+        raw_payload = await self._async_in_executor(self._recv_once, timeout)
+        if raw_payload is not None:
+            self.log_pcm("RX", raw_payload, context="event_kind=rfrecv")
+        return raw_payload
 
     async def receive(self, timeout: float | None = None):
         """Receive and decode one Proflame2 frame when possible."""

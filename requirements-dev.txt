@@ -14,6 +14,8 @@ pytest-homeassistant-custom-component>=0.13.211,<0.14; python_version >= "3.13"
 black>=25.1.0; python_version >= "3.13"
 ruff>=0.8.0; python_version >= "3.13"
 clang-format==20.1.8
+jsonschema>=4.23.0
+-r tools/waveform/requirements-waveform.txt
 
 # Python 3.9 fallback: older Home Assistant test stack that matches the system
 # interpreter, though some native dependencies may still fail to build on newer
