@@ -78,6 +78,29 @@ async def wait_for(predicate):
             await asyncio.sleep(0)
 
 
+async def test_default_debounce_is_one_second_after_the_latest_edit(hass):
+    _, runtime = await ready(hass)
+    hass.data[DOMAIN].pop(DATA_CONTROL_DEBOUNCE_SECONDS)
+    loop = asyncio.get_running_loop()
+    before = loop.time()
+    await services.async_stage_control_change(hass, runtime, {"flame": 3})
+    after = loop.time()
+    first = runtime.control_intents.pending
+    assert first is not None
+    assert before + 1.0 <= first.eligible_at <= after + 1.0
+    before = loop.time()
+    await services.async_stage_control_change(hass, runtime, {"light": 6})
+    after = loop.time()
+    pending = runtime.control_intents.pending
+    assert pending is not None
+    assert before + 1.0 <= pending.eligible_at <= after + 1.0
+    assert pending.eligible_at >= first.eligible_at
+    assert pending.state == FireplaceState(power=True, flame=3, light=6)
+    await services.async_stage_control_change(hass, runtime, {"flame": 1, "light": 0})
+    await wait_for(lambda: runtime.control_task is None)
+    assert not runtime.backend.sent_packets
+
+
 def held_send(monkeypatch, runtime, *, fail_at=None):
     original = runtime.backend.send
     states = []
