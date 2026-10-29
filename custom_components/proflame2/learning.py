@@ -39,6 +39,7 @@ from .const import (
     DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
 )
+from .control_intent import ControllerArbiter, controller_arbiter
 from .packet_debug import (
     async_disable_packet_debug_logging,
     async_enable_packet_debug_logging,
@@ -159,6 +160,9 @@ class LearnSession:
     packet_debug_logging_enabled: bool = False
     packet_debug_log_path: str | None = None
     _seen_frames: set[tuple[int, ...]] = field(default_factory=set)
+    controller_lease: ControllerArbiter | None = None
+    controller_lease_owner: object | None = None
+    suspended_runtimes: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -258,6 +262,65 @@ async def async_start_learning_session(
 ) -> LearnSession:
     """Create a backend and wrap it in a guided-learning session."""
 
+    from .runtime import async_get_runtime_entries
+    from .services import _async_stop_rx, _control_arbiter
+
+    key = (
+        f"esphome:{esphome_entry_id}"
+        if backend_type == BACKEND_ESPHOME
+        else "yardstick:0" if backend_type == BACKEND_YARDSTICK else None
+    )
+    lease = controller_arbiter(hass.data.setdefault(DOMAIN, {}), key) if key is not None else None
+    affected = [
+        entry
+        for entry in async_get_runtime_entries(hass).values()
+        if lease is not None and _control_arbiter(hass, entry) is lease
+    ]
+    if lease is not None and (
+        lease.lock.locked()
+        or lease.learning_owner is not None
+        or any(entry.desired_state is not None for entry in affected)
+    ):
+        raise RuntimeError("Controller is busy; finish existing controls or learning before starting another session.")
+    owner = object()
+    if lease is not None:
+        lease.learning_owner = owner
+    for entry in affected:
+        entry.learning_in_progress = True
+    try:
+        for entry in affected:
+            await _async_stop_rx(entry)
+        session = await _async_open_learning_session(
+            hass,
+            backend_type,
+            debug_logging=debug_logging,
+            esphome_entry_id=esphome_entry_id,
+            timeout=timeout,
+            receive_timeout=receive_timeout,
+        )
+    except BaseException:
+        if lease is not None and lease.learning_owner is owner:
+            lease.learning_owner = None
+        for entry in affected:
+            entry.learning_in_progress = False
+        raise
+    session.controller_lease = lease
+    session.controller_lease_owner = owner
+    session.suspended_runtimes = affected
+    return session
+
+
+async def _async_open_learning_session(
+    hass: HomeAssistant,
+    backend_type: str,
+    *,
+    debug_logging: bool,
+    esphome_entry_id: str | None,
+    timeout: float,
+    receive_timeout: float,
+) -> LearnSession:
+    """Open learning only after exclusive controller ownership is reserved."""
+
     _LOGGER.info(
         "Proflame2 learning debug logging is %s for backend=%s",
         "ENABLED" if debug_logging else "DISABLED",
@@ -339,6 +402,11 @@ async def async_close_learning_session(session: LearnSession | None) -> None:
                     _LOGGER.exception("Proflame2 learning-mode shutdown update failed")
             await session.backend.close()
         finally:
+            lease = session.controller_lease
+            if lease is not None and lease.learning_owner is session.controller_lease_owner:
+                lease.learning_owner = None
+                for entry in session.suspended_runtimes:
+                    entry.learning_in_progress = False
             if session.packet_debug_logging_enabled and session.hass is not None:
                 get_packet_debug_logger().info("Closed packet debug learning session")
                 await async_disable_packet_debug_logging(session.hass)

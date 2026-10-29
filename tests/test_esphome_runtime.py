@@ -524,6 +524,65 @@ async def test_service_path_tolerates_linked_esphome_diagnostic_repeat_override(
     assert runtime_entry.last_send_result.packet is runtime_entry.last_packet
 
 
+async def test_timeout_recovery_requires_correlated_terminal_telemetry(hass) -> None:
+    data = _fake_esphome_runtime_data()
+    linked_entry = _add_linked_esphome_entry(hass, data)
+    transport = HomeAssistantESPHomeTransport(
+        hass,
+        linked_entry_id=linked_entry.entry_id,
+        controller_id=f"esphome:{linked_entry.entry_id}",
+        debug_logging_enabled=False,
+    )
+    assert not await transport.recover_send_readiness("test-request")
+    await transport.connect()
+    # A ready value left over from an earlier request is not completion evidence.
+    assert not await transport.recover_send_readiness("test-request")
+    data.object_states["proflame2_last_request_id"].state = "test-request"
+    assert not await transport.recover_send_readiness("test-request")
+    data.object_states["proflame2_last_tx_result"].state = "ok"
+    assert await transport.recover_send_readiness("test-request")
+    data.available = False
+    assert not await transport.recover_send_readiness("test-request")
+
+
+async def test_request_identifiers_are_unique_across_backend_sessions() -> None:
+    first, second = ESPHomeAPIBackend(), ESPHomeAPIBackend()
+    assert first._next_request_id() != second._next_request_id()
+    assert first._next_request_id() != first._next_request_id()
+
+
+async def test_backend_recovery_adapter(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport)
+    await backend.connect()
+    recover = AsyncMock(return_value=True)
+    monkeypatch.setattr(transport, "recover_send_readiness", recover, raising=False)
+    assert await backend.recover_send_readiness("shared-controller-request")
+    recover.assert_awaited_once_with("shared-controller-request")
+
+
+async def test_backend_timeout_remains_distinguishable_for_quarantine(monkeypatch, remote_profile) -> None:
+    from custom_components.proflame2.protocol.encoder import encode_packet
+    from custom_components.proflame2.protocol.models import FireplaceState
+    from custom_components.proflame2.rf.waveform import build_transmission_plan
+
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport, send_timeout_seconds=0.01)
+    await backend.connect()
+
+    async def stalled_send(request):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(transport, "send_tx", stalled_send)
+    packet = encode_packet(FireplaceState(power=True, flame=3), remote_profile)
+    packet.transmission_plan = build_transmission_plan(packet.frame)
+    with pytest.raises(TimeoutError):
+        await backend.send(packet)
+    assert backend.latest_request_id is not None
+
+
 async def test_transport_receives_rx_event_from_linked_esphome_device_id(hass) -> None:
     linked_runtime_data = _fake_esphome_runtime_data()
     linked_entry = _add_linked_esphome_entry(hass, linked_runtime_data)
@@ -926,7 +985,7 @@ async def test_esphome_diagnostics_include_linked_transport_telemetry(hass) -> N
     assert transport_diagnostics["linked_entry_id"] == linked_entry.entry_id
     assert transport_diagnostics["action_name"] == "proflame2_tx_stateful"
     assert transport_diagnostics["last_tx_path"] == "cc1101_async_gdo0_msb_first"
-    assert transport_diagnostics["last_request_id"] == "proflame2-1"
+    assert transport_diagnostics["last_request_id"] == runtime_entry.backend.last_tx_response.request_id
     assert transport_diagnostics["last_payload_length"] == 25
     assert transport_diagnostics["last_payload_hex"] == (runtime_entry.last_packet.transmission_plan.air_payload.hex())
     assert transport_diagnostics["last_request_repeat_count"] == 5

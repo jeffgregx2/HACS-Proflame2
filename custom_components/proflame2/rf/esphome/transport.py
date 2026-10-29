@@ -443,6 +443,18 @@ class HomeAssistantESPHomeTransport:
         )
         return response
 
+    async def recover_send_readiness(self, request_id: str | None) -> bool:
+        """Require matching completion telemetry, not a stale pre-send ready value."""
+        if self._runtime_data is None or not getattr(self._runtime_data, "available", False):
+            return False
+        snapshot = self._collect_snapshot()
+        status = _status_from_snapshot(snapshot, getattr(self._runtime_data, "available", False))
+        if status not in (ESPHomeEndpointStatus.READY, ESPHomeEndpointStatus.RX_ACTIVE):
+            return False
+        return request_id is None or (
+            snapshot.last_request_id == request_id and snapshot.last_tx_result_text in {"ok", "error"}
+        )
+
     async def update_display_state(self, display_state: ESPHomeDisplayState) -> None:
         if not self.connected or not self.configured:
             raise RuntimeError("ESPHome backend is unavailable; transport is not configured.")

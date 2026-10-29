@@ -51,7 +51,7 @@ substitutions:
   proflame2_display_debug_mode: "false"
   # Stamped by the release workflow. This is independent of the source ref so
   # a local development build can still identify the released firmware version.
-  proflame2_firmware_version: "v0.7.0-beta2"
+  proflame2_firmware_version: "v0.7.0-beta3"
 
 i2c:
   sda: GPIO8

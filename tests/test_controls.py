@@ -340,6 +340,94 @@ async def test_controls_show_desired_state_during_debounce_and_active_send_witho
     assert primary.attributes["operational_status"] == "ready"
 
 
+async def _wait_for_control(predicate) -> None:
+    async with asyncio.timeout(2):
+        while not predicate():
+            await asyncio.sleep(0)
+
+
+async def test_edits_during_tx_preserve_one_latest_full_state(hass, monkeypatch) -> None:
+    """A completion must not erase newer intent or permit overlapping sends."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0
+    hass.data[DOMAIN][DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    active = 0
+    maximum_active = 0
+
+    async def blocked_send(self, packet):
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        self.sent_packets.append(packet)
+        try:
+            if len(self.sent_packets) == 1:
+                started.set()
+                await finish.wait()
+            return SendResult(packet=packet, backend_name=self.name)
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(FakeRFBackend, "send", blocked_send)
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    from custom_components.proflame2.services import async_stage_control_change
+
+    try:
+        await async_stage_control_change(hass, runtime, {CONF_FLAME: 2})
+        await started.wait()
+        await async_stage_control_change(hass, runtime, {CONF_LIGHT: 4})
+        await async_stage_control_change(hass, runtime, {CONF_LIGHT: 6, CONF_FAN: 5})
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert len(runtime.backend.sent_packets) == 1
+        assert runtime.desired_state.light == 6
+        finish.set()
+        await _wait_for_control(lambda: runtime.desired_state is None)
+        assert maximum_active == 1
+        assert len(runtime.backend.sent_packets) == 2
+        final = runtime.backend.sent_packets[-1].state
+        assert (final.flame, final.light, final.fan) == (2, 6, 5)
+        assert runtime_current_state(runtime) == final
+    finally:
+        finish.set()
+
+
+async def test_return_to_baseline_during_tx_sends_corrective_state(hass, monkeypatch) -> None:
+    """Returning to the accepted value is not a no-op while another value sends."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0
+    hass.data[DOMAIN][DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def blocked_send(self, packet):
+        self.sent_packets.append(packet)
+        if len(self.sent_packets) == 1:
+            started.set()
+            await finish.wait()
+        return SendResult(packet=packet, backend_name=self.name)
+
+    monkeypatch.setattr(FakeRFBackend, "send", blocked_send)
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    from custom_components.proflame2.services import async_stage_control_change
+
+    try:
+        await async_stage_control_change(hass, runtime, {CONF_FLAME: 3})
+        await started.wait()
+        await async_stage_control_change(hass, runtime, {CONF_FLAME: 1})
+        finish.set()
+        await _wait_for_control(lambda: runtime.active_send_task is None and runtime.debounce_task is None)
+        assert [packet.state.flame for packet in runtime.backend.sent_packets] == [3, 1]
+        assert runtime_current_state(runtime).flame == 1
+    finally:
+        finish.set()
+
+
 async def test_flame_control_forces_power_on(hass) -> None:
     """Setting flame while off should create an ON desired state."""
 
@@ -1036,7 +1124,7 @@ async def test_restarting_pre_send_debounce_logs_timer_cancel_without_terminal_c
     entry = _add_entry(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
 
-    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
+    caplog.set_level(logging.DEBUG, logger="custom_components.proflame2.services")
 
     await hass.services.async_call(
         "number",

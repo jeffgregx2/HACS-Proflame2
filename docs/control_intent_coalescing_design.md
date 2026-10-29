@@ -1,6 +1,7 @@
 # Editable Controls During Transmission
 
-Status: design only. Runtime implementation has not started.
+Status: implemented on `issue-control-intent-coalescing`; local automated
+validation passed. Hardware acceptance and release gates remain open.
 
 ## Goal and Agreed Policy
 
@@ -26,7 +27,9 @@ backends, without changing RF encoding, integrity calculations or timings.
 Pending state is semantic state, not an already encoded packet. Build the RF
 packet only when its intent is selected for transmission, using existing code.
 
-## Current Code and Gaps
+## Original Code and Gaps
+
+The following table records the pre-change behavior that motivated this work.
 
 | Area | Current behavior / required change |
 | --- | --- |
@@ -38,7 +41,7 @@ packet only when its intent is selected for transmission, using existing code.
 | `runtime.py` | Stores accepted state in `last_packet`, plus one ambiguous `desired_state`. Needs distinct pending/in-flight ownership and cancellation fencing. |
 | `number.py`, `switch.py` | Already display desired state ahead of accepted state. Preserve that behavior using a common effective-state accessor. |
 | ESPHome transport | Matches TX completion telemetry to a request. Preserve this correlation; enqueue/API dispatch alone is not completion. |
-| LilyGO retry scheduler | A new TX cancels an obsolete scheduled retry; a running retry can defer one normal TX. New HA pending intent needs to invalidate an obsolete scheduled retry before debounce finishes. |
+| LilyGO retry scheduler | Preserve existing cancellation when a replacement TX is accepted; a running retry can defer one normal TX. HA-only pending intent must not cancel an accepted command's repeat. |
 
 The existing no-flicker control test blocks a send but does not submit another
 edit after that send has started. New tests must reproduce that overlap.
@@ -72,10 +75,12 @@ for effective control state with this precedence:
 pending full state > in-flight full state > accepted baseline
 ```
 
-Keep `desired_state` as a derived compatibility view while existing consumers
-are migrated. It must no longer be independently assigned or cleared by send
-completion, RX or exception handlers. Pending/in-flight work is never persisted
-or restored after HA restart.
+Keep `desired_state` as a compatibility mirror of the owned intent while existing
+consumers are migrated. Staging, dispatch and fenced terminal transitions publish
+that mirror; RX must not clear it. After local TX is committed, its in-flight
+ownership may remain briefly for persistence/RX housekeeping, but that completed
+snapshot no longer overlays accepted state. Pending/in-flight work is never
+persisted or restored after HA restart.
 
 ### Controller Ownership
 
@@ -109,8 +114,8 @@ in controller ownership or reject conflicts explicitly.
 3. Replace the pending intent atomically. Preserve every attribute, not just the
    latest edited field. Reset its UI deadline to the latest edit plus the existing
    debounce interval (currently 1.5 seconds).
-4. Publish the new effective control values and pending status. Wake the dispatcher
-   and invalidate any obsolete scheduled LilyGO repeat where supported.
+4. Publish the new effective control values and pending status. Wake the dispatcher.
+   Do not cancel controller retries for changes that exist only inside HA.
 
 Never cancel an in-flight TX to accommodate a new edit. Deduplicate against the
 state expected after the in-flight command, not blindly against accepted state.
@@ -235,22 +240,21 @@ fake value changes to force events.
 
 ### LilyGO Delayed Retransmission
 
-A new pending local intent should invalidate an obsolete scheduled repeat even
-when its debounce has not expired. The current display-state update cancels a
-repeat on state changes, but display equality is not a sufficient request token.
+Preserve the controller's existing cancellation-on-acceptance behavior. A pending
+HA intent is not evidence that its replacement has reached the controller. Keep
+the prior accepted command's scheduled repeat until a replacement TX is accepted,
+subject to existing cancellation policies such as native-remote activity or
+disconnects. A rejected replacement must not cancel that repeat.
 
-Design an optional, capability-detected native action to invalidate the named
-original request's scheduled repeat. Fence it by request identity; an old cancel
-must not cancel a newer request's repeat. It must also suppress scheduling a repeat
-when the named original TX is still running and completes afterward. It must not
-abort an RF burst already underway. A running repeat completes, then a new normal
-TX proceeds using the existing deferred-TX mechanism.
+There is no separate early-cancellation action or HA-side cancellation task.
+Display-only synchronization is deferred while HA has pending/in-flight intent:
+existing firmware can cancel repeats when display values change, so publishing
+HA-only settings would otherwise bypass this policy.
 
-Older firmware retains the existing new-TX cancellation behavior; do not call an
-absent action, require simultaneous HA/firmware upgrades, or pretend that immediate
-pending-intent cancellation is guaranteed there. Document that compatibility limit.
-The primary command's success is not reversed by failure of its best-effort repeat.
-No RF timing or repeat interval change is part of this design.
+A running repeat completes before the new normal TX proceeds using the existing
+deferred-TX mechanism. The primary command's success is not reversed by failure
+of its best-effort repeat. No firmware update, RF timing change or repeat-interval
+change is required for this control-intent feature.
 
 ## Test and Validation Plan
 
@@ -277,8 +281,8 @@ accepted baseline, pending state, metadata and task cleanup.
 | Off-state retention, power reversal and feature combinations | Preserve established power/flame/light/fan/front/AUX/CPI behavior. |
 | Saved profile followed by edits/failure | Correct committed profile metadata or rollback; no stale profile marker. |
 | Unload, shutdown and backend replacement | No orphan dispatcher, timer, pending future or arbiter ownership. |
-| Retry cancellation before original completion / during repeat | No obsolete scheduled retry or interrupted burst; old cancel cannot affect a newer retry. |
-| Older firmware / TX-only backend | No absent-action calls or waiting for unsupported RX/acknowledgement. |
+| Pending replacement / replacement rejected / running repeat | HA staging preserves the accepted repeat; rejected firmware requests preserve it too; an active burst is not interrupted. |
+| Existing firmware / TX-only backend | No new firmware action or waiting for unsupported RX/acknowledgement. |
 
 Extend `test_controls.py`, `test_services.py`, runtime/ESPHome transport tests and
 the firmware retry host harness. Add focused pure state-machine/arbiter tests for
@@ -289,19 +293,20 @@ coverage percentage. Reuse the repository's automatic temporary-workspace cleanu
 
 ## Implementation Tasks and Release Gates
 
-- [ ] Add failing regressions for editing during an active send and for the
+- [x] Add failing regressions for editing during an active send and for the
       return-to-baseline/power-reversal case.
-- [ ] Implement immutable intent snapshots, revisions/epochs, effective-state
+- [x] Implement immutable intent snapshots, revisions/epochs, effective-state
       access and a single event-driven dispatcher.
-- [ ] Add physical-controller arbitration and audit YardStick identity/ownership.
-- [ ] Route all sending entrypoints through it; preserve service-call semantics.
-- [ ] Fence commit, rollback, RX, confirmation, persistence and display updates.
-- [ ] Add disconnect handling, unknown-completion quarantine and lifecycle cleanup.
-- [ ] Implement/test optional request-scoped retry invalidation and older-firmware
-      fallback without changing RF waveforms or timing.
-- [ ] Complete the deterministic matrix, full suite, lint/format and coverage review.
-- [ ] Validate ESPHome configurations and both tracing-enabled/disabled firmware
-      compile paths; include old-firmware interoperability tests.
+- [x] Add physical-controller arbitration and audit YardStick identity/ownership.
+- [x] Route runtime sending entrypoints through it; preserve service-call semantics.
+- [x] Fence commit, rollback, RX, confirmation, persistence and display updates.
+- [x] Add disconnect handling, unknown-completion quarantine and lifecycle cleanup.
+- [x] Preserve controller-managed retry cancellation on replacement acceptance;
+      do not cancel repeats for HA-only intent or publish pending display values.
+- [x] Run deterministic concurrency/rollback regressions, the full suite,
+      lint/format and branch-coverage collection.
+- [x] Validate ESPHome configurations and host-side C++ retry behavior, including
+      existing-firmware compatibility without additional actions.
 - [ ] Hardware-test rapid edits slower and faster than TX completion, pending
       power OFF, native-remote overlap, deliberate disconnect and reconnection.
       Test legacy locally and request extended-remote confirmation separately.
@@ -312,3 +317,37 @@ Log intent accepted/replaced/dispatched/completed/failed/rolled-back transitions
 with non-identifying correlation tokens. Use debug for routine transitions and
 clear failure reporting for actual errors; do not restore per-slider INFO spam
 or include identifying paths, network details or raw remote IDs in public evidence.
+
+## Implementation Notes
+
+- `tests/test_control_intents.py` exercises rollback, local-intent/RX precedence,
+  disconnect fencing, explicit-service supersession, shared/independent radios,
+  debounce overlap, unload, persistence failure and edits during persistence.
+- Guided learning reserves the same physical-controller identity and rejects
+  starting while sends are pending or active. While learning owns that radio,
+  controls cannot start TX. Its lease suspends normal runtime RX policy changes
+  until learning closes. Existing standalone low-level learning
+  helpers are not a second concurrent runtime control interface.
+- ESPHome endpoint availability is observed through HA's public entity registry
+  and state-change events. This does not replace the existing ESPHome transport
+  adapter or resolve the separately tracked private-runtime-API technical debt.
+- Timeout recovery requires matching terminal telemetry for the uncertain request
+  on the physical radio. Another fireplace entry cannot bypass that quarantine.
+  YardStick requires reload/reconnection when readiness cannot be established.
+- This feature uses the existing firmware contract without a new action or
+  firmware changes. Repeat cancellation remains a controller decision when the
+  replacement TX is accepted, not when HA stages its intent.
+- Routine state comparisons are against HA's accepted/optimistic baseline, not
+  an acknowledgement or measurement from the fireplace.
+
+## Local Validation
+
+- Full suite: 1,137 passed, with the optional real ESPHome configuration checks
+  enabled against ESPHome 2026.8.2.
+- Ruff, Black, changed C++ test formatting and whitespace checks passed.
+- Line and branch coverage were collected in repository-local ignored reports.
+- Firmware source and YAML are unchanged from the branch baseline. The host
+  harness verifies that invalid and queue-rejected replacements retain the prior
+  accepted command's retry for both legacy and extended payloads.
+- No new full-board firmware build or physical fireplace test was performed for
+  this HA-side change. Hardware acceptance remains a release requirement.
