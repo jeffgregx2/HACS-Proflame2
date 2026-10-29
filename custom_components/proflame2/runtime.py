@@ -42,6 +42,7 @@ from .const import (
     CONF_LIGHT,
     CONF_PROFILES,
     CONF_PROTOCOL_VARIANT,
+    CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
     DATA_ACTIVE_LISTENING,
     DATA_ESPHOME_TRANSPORT_FACTORY,
@@ -61,7 +62,7 @@ from .packet_debug import (
     async_disable_packet_debug_logging,
     async_enable_packet_debug_logging,
 )
-from .profile import normalize_profiles, sanitize_fireplace_short_name
+from .profile import normalize_profiles, sanitize_fireplace_short_name, validate_refresh_period
 from .protocol.encoder import encode_packet
 from .protocol.learning_id import encode_learning_id
 from .protocol.models import (
@@ -73,6 +74,7 @@ from .protocol.models import (
     RemoteProfile,
 )
 from .protocol.packet import ProflameFrame, ProflamePacket
+from .refresh import RefreshSchedule
 from .rf.base import RFBackend, SendResult
 from .rf.esphome.transport import ESPHomeTransport, HomeAssistantESPHomeTransport
 from .rf.esphome_api import ESPHomeAPIBackend
@@ -135,6 +137,8 @@ class Proflame2RuntimeEntry:
     confirmation_task: asyncio.Task[None] | None = None
     active_listener_task: asyncio.Task[None] | None = None
     display_sync_task: asyncio.Task[None] | None = None
+    refresh_schedule: RefreshSchedule = field(default_factory=RefreshSchedule)
+    refresh_task: asyncio.Task[None] | None = None
     last_display_sync_signature: tuple[Any, ...] | None = None
     last_display_sync_monotonic: float | None = None
     shutting_down: bool = False
@@ -606,6 +610,9 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
             entry.options.get(CONF_PROFILES, {}),
             features=features,
         ),
+        refresh_schedule=RefreshSchedule(
+            period_seconds=60 * validate_refresh_period(entry.options.get(CONF_REFRESH_PERIOD_MINUTES, 0))
+        ),
         active_listening_enabled=active_listening_enabled,
         debug_logging_enabled=debug_logging_enabled,
     )
@@ -701,6 +708,7 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
             runtime_entry.confirmation_task,
             runtime_entry.active_listener_task,
             runtime_entry.display_sync_task,
+            runtime_entry.refresh_task,
         ):
             if task is not None:
                 task.cancel()
@@ -713,6 +721,7 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
                 runtime_entry.confirmation_task,
                 runtime_entry.active_listener_task,
                 runtime_entry.display_sync_task,
+                runtime_entry.refresh_task,
             )
             if task is not None
         ]
@@ -751,6 +760,7 @@ async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
             runtime_entry.confirmation_task,
             runtime_entry.active_listener_task,
             runtime_entry.display_sync_task,
+            runtime_entry.refresh_task,
         ):
             if task is not None:
                 task.cancel()
@@ -763,6 +773,7 @@ async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
                 runtime_entry.confirmation_task,
                 runtime_entry.active_listener_task,
                 runtime_entry.display_sync_task,
+                runtime_entry.refresh_task,
             )
             if task is not None
         ]

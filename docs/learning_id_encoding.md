@@ -22,6 +22,10 @@ must use the canonical encoding below. Only the decoded profile fields are
 stored, not the supplied ID string. Feature flags are restored from the ID and
 can subsequently be changed through **Edit supported features**.
 
+**Refresh period in minutes** is configured separately during import and defaults
+to `0` (disabled). It is an installation option, not part of the Learning ID;
+copying a profile does not automatically enable keep-alive transmissions.
+
 For older records containing a remote ID and C/D values, use **Enter legacy
 values** in the setup menu instead. This path supports legacy profiles only.
 The companion capture tool can use the same pure Python codec without depending

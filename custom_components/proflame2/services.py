@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import voluptuous as vol
@@ -54,6 +54,12 @@ from .control import StateValidationError, build_requested_state, build_staged_s
 from .control_intent import ControlIntent, ControllerArbiter, controller_arbiter
 from .packet_debug import get_packet_debug_logger
 from .protocol.encoder import encode_packet
+from .refresh import (
+    SOURCE_REFRESH,
+    RefreshSkipped,
+    current_refresh_state,
+    record_received_activity,
+)
 from .rf.esphome.contract import ESPHomeDisplayState
 from .rf.waveform import build_transmission_plan
 from .runtime import (
@@ -417,6 +423,8 @@ def async_controller_connection_lost(hass: HomeAssistant, entry: Proflame2Runtim
             continue
         if candidate.control_intents.in_flight is not None:
             arbiter.uncertain_request_id = getattr(candidate.backend, "latest_request_id", None)
+        candidate.refresh_schedule.suspended = True
+        candidate.refresh_schedule.restart()
         if hasattr(candidate.backend, "connected"):
             candidate.backend.connected = False
         if candidate.control_intents.desired_state is not None:
@@ -444,8 +452,36 @@ def async_observe_controller_connection(hass: HomeAssistant, entry: Proflame2Run
         new = event.data.get("new_state")
         if old is not None and old.state != STATE_UNAVAILABLE and (new is None or new.state == STATE_UNAVAILABLE):
             async_controller_connection_lost(hass, entry)
+        elif new is not None and new.state != STATE_UNAVAILABLE and (old is None or old.state == STATE_UNAVAILABLE):
+            arbiter = _control_arbiter(hass, entry)
+            for candidate in async_get_runtime_entries(hass).values():
+                if _control_arbiter(hass, candidate) is arbiter:
+                    candidate.refresh_schedule.suspended = False
+                    candidate.refresh_schedule.restart()
 
+    entry.refresh_schedule.suspended = any(
+        (state := hass.states.get(entity_id)) is None or state.state == STATE_UNAVAILABLE for entity_id in entities
+    )
     entry.control_disconnect_unsub = async_track_state_change_event(hass, entities, state_changed)
+
+
+async def async_request_refresh(hass: HomeAssistant, entry: Proflame2RuntimeEntry) -> None:
+    """Submit one low-priority refresh through the ordinary owning dispatcher."""
+    state = current_refresh_state(entry)
+    if state is None or entry.control_intents.pending is not None or entry.control_intents.in_flight is not None:
+        return
+    completion = asyncio.get_running_loop().create_future()
+    completion.add_done_callback(lambda future: None if future.cancelled() else future.exception())
+    intent = _submit_control_intent(
+        hass, entry, state, source=SOURCE_REFRESH, clear_active_profile=False, completion=completion
+    )
+    try:
+        await asyncio.shield(completion)
+    except HomeAssistantError:
+        # A newer user edit can replace the low-priority pending refresh. Actual
+        # send failures invalidate the epoch and must retain normal reporting.
+        if entry.control_intents.epoch != intent.epoch:
+            raise
 
 
 def _submit_control_intent(
@@ -516,6 +552,16 @@ async def _async_control_dispatcher(hass: HomeAssistant, entry: Proflame2Runtime
                     continue
                 if entry.shutting_down:
                     break
+                if intent.source == SOURCE_REFRESH:
+                    state = current_refresh_state(entry)
+                    if state is None or arbiter.learning_owner is not None:
+                        intents.pending = None
+                        entry.desired_state = None
+                        entry.operational_status = OPERATIONAL_STATUS_READY
+                        _finish_intent(intent)
+                        async_notify_runtime_entry_updated(hass, entry.config_entry_id)
+                        continue
+                    intent = replace(intent, state=state)
                 intents.pending = None
                 intents.in_flight = intent
                 entry.debounce_task = None
@@ -546,6 +592,17 @@ async def _async_control_dispatcher(hass: HomeAssistant, entry: Proflame2Runtime
                     _log_control_event(
                         entry, "debounced send terminal result=succeeded state=%s", _state_summary(intent.state)
                     )
+                except RefreshSkipped:
+                    # RX was stopped for handoff, but no backend send ran to
+                    # restore it. Reapply policy even if the listener task lives.
+                    await async_sync_runtime_rx_policy(entry)
+                    _finish_intent(intent)
+                    entry.operational_status = (
+                        OPERATIONAL_STATUS_PENDING if intents.pending is not None else OPERATIONAL_STATUS_READY
+                    )
+                    if entry.active_listening_enabled:
+                        await async_start_active_listener(hass, entry)
+                    async_notify_runtime_entry_updated(hass, entry.config_entry_id)
                 except asyncio.CancelledError:
                     _finish_intent(intent, HomeAssistantError("Transmit cancelled."))
                     raise
@@ -714,6 +771,7 @@ async def async_apply_observed_packet(
 ) -> None:
     """Apply a valid observed packet as the current integration-known state."""
 
+    record_received_activity(runtime_entry, packet)
     runtime_entry.last_observed_packet = packet
     clear_active_profile_if_state_differs(runtime_entry, packet.state)
     local_work = runtime_entry.desired_state is not None
@@ -806,6 +864,7 @@ async def _async_confirmation_task(
                 _state_summary(packet.state),
                 "yes" if packet.state == requested_packet.state else "no",
             )
+            record_received_activity(runtime_entry, packet)
             if packet.state != requested_packet.state:
                 _log_control_event(
                     runtime_entry,
@@ -1274,6 +1333,8 @@ async def _async_transmit_requested_state(
             request_summary=request_summary,
         )
         send_result = await _async_send_prepared_request(runtime_entry, prepared_request)
+    except RefreshSkipped:
+        raise
     except asyncio.TimeoutError as exc:
         _mark_send_failed(
             runtime_entry,
@@ -1411,6 +1472,8 @@ async def _async_begin_send_execution(
     if not runtime_entry.control_intents.owns(intent):
         raise HomeAssistantError("Control sequence ended before transmission started.")
 
+    if source == SOURCE_REFRESH and current_refresh_state(runtime_entry) != requested_state:
+        raise RefreshSkipped
     runtime_entry.last_send_result = None
     runtime_entry.last_error = None
     runtime_entry.sending_in_progress = True
@@ -1574,6 +1637,7 @@ async def _async_record_successful_send(
 
     if not runtime_entry.control_intents.owns(prepared_request.intent):
         return
+    runtime_entry.refresh_schedule.record_activity()
     runtime_entry.sending_in_progress = False
     runtime_entry.last_send_result = send_result
     runtime_entry.last_error = None
@@ -1584,6 +1648,13 @@ async def _async_record_successful_send(
         send_result.backend_name,
         prepared_request.request_summary,
     )
+    if prepared_request.source == SOURCE_REFRESH:
+        # Refresh is an unchanged-state send, not a new user intent. In
+        # particular, an RX received during TX must remain the accepted state.
+        runtime_entry.desired_state = (
+            runtime_entry.control_intents.pending.state if runtime_entry.control_intents.pending is not None else None
+        )
+        return
     if clear_active_profile:
         runtime_entry.last_applied_profile_id = None
         runtime_entry.last_applied_profile_name = None
@@ -1620,6 +1691,13 @@ async def _async_finish_send_confirmation_policy(
         return
     if runtime_entry.control_intents.pending is not None:
         runtime_entry.operational_status = OPERATIONAL_STATUS_PENDING
+        if runtime_entry.active_listening_enabled:
+            await async_start_active_listener(hass, runtime_entry)
+        async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
+        return
+
+    if prepared_request.source == SOURCE_REFRESH:
+        runtime_entry.operational_status = OPERATIONAL_STATUS_READY
         if runtime_entry.active_listening_enabled:
             await async_start_active_listener(hass, runtime_entry)
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)

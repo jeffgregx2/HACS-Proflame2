@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+import voluptuous as vol
 
 homeassistant = pytest.importorskip("homeassistant")
 pytest.importorskip("pytest_homeassistant_custom_component")
@@ -52,6 +53,7 @@ from custom_components.proflame2.const import (
     CONF_PROFILE_ID,
     CONF_PROFILES,
     CONF_PROTOCOL_VARIANT,
+    CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
     CONF_RTL433_SAMPLES,
     CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
@@ -101,6 +103,104 @@ def _form_schema_fields(data_schema):
     """
 
     return {str(marker.schema): selector for marker, selector in data_schema.schema.items()}
+
+
+@pytest.mark.parametrize("schema_name", ["manual", "manual_legacy", "features"])
+def test_refresh_form_is_serializable_and_requires_whole_minutes(schema_name):
+    """The real HA frontend serializer must retain the numeric field and default."""
+    from homeassistant.helpers import config_validation as cv
+    from probatio import to_field_list
+
+    from custom_components.proflame2.config_flow import (
+        FEATURE_SELECTION_SCHEMA,
+        _manual_legacy_profile_schema,
+        _manual_profile_schema,
+    )
+
+    schema = {
+        "manual": _manual_profile_schema(),
+        "manual_legacy": _manual_legacy_profile_schema(),
+        "features": FEATURE_SELECTION_SCHEMA,
+    }[schema_name]
+    fields = to_field_list(schema, custom_serializer=cv.custom_serializer)
+    field = next(item for item in fields if item["name"] == CONF_REFRESH_PERIOD_MINUTES)
+    assert field["default"] == 0
+    validator = _form_schema_fields(schema)[CONF_REFRESH_PERIOD_MINUTES]
+    assert validator(10) == 10
+    for value in (-1, 1.5, "invalid"):
+        with pytest.raises(vol.Invalid):
+            validator(value)
+
+
+@pytest.mark.parametrize("route", ["manual_legacy", "learning_id_legacy", "learning_id_extended", "learn_features"])
+async def test_refresh_period_initial_setup_routes(hass, route):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+    from custom_components.proflame2.learning import LearnResult
+
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    if route == "manual_legacy":
+        submit = flow.async_step_manual_legacy
+        values = {
+            CONF_NAME: "Test Fireplace",
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+            CONF_REMOTE_ID: "3b3f02",
+            CONF_C1: "5",
+            CONF_D1: "7",
+            CONF_C2: "1",
+            CONF_D2: "8",
+            CONF_REFRESH_PERIOD_MINUTES: 10,
+        }
+    elif route.startswith("learning_id_"):
+        submit = flow.async_step_manual
+        values = {
+            CONF_NAME: "Test Fireplace",
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+            CONF_LEARNING_ID: (
+                "PF2-1-E-CI2FMA4AILEBTPLKVK4Q" if route.endswith("extended") else "PF2-1-L-CI2FMA2XDBVBZFK7"
+            ),
+            CONF_REFRESH_PERIOD_MINUTES: 10,
+        }
+    else:
+        # Guided and rtl_433-assisted learning finish through this shared form.
+        flow._learn_input = {CONF_NAME: "Test Fireplace", CONF_BACKEND_TYPE: BACKEND_YARDSTICK}
+        flow._learn_result = LearnResult(success=True, remote_id=0x3B3F02, c1=5, d1=7, c2=1, d2=8)
+        submit = flow.async_step_learn_features
+        values = {CONF_REFRESH_PERIOD_MINUTES: 10}
+    invalid = await submit({**values, CONF_REFRESH_PERIOD_MINUTES: 1.5})
+    assert invalid["type"] is FlowResultType.FORM
+    assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
+    result = await submit(values)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"][CONF_REFRESH_PERIOD_MINUTES] == 10
+
+
+async def test_refresh_options_preserve_saved_profiles_and_reopen(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_BACKEND_TYPE: BACKEND_YARDSTICK, CONF_REMOTE_ID: 0x3B3F02},
+        options={
+            CONF_ACTIVE_LISTENING: True,
+            CONF_REFRESH_PERIOD_MINUTES: 10,
+            CONF_PROFILES: {"evening": {CONF_NAME: "Evening", CONF_POWER: True, CONF_FLAME: 3}},
+        },
+    )
+    entry.add_to_hass(hass)
+    menu = await hass.config_entries.options.async_init(entry.entry_id)
+    form = await hass.config_entries.options.async_configure(menu["flow_id"], {"next_step_id": "features"})
+    invalid = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_REFRESH_PERIOD_MINUTES: True})
+    assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
+    result = await hass.config_entries.options.async_configure(
+        form["flow_id"], {CONF_REFRESH_PERIOD_MINUTES: 5, CONF_ACTIVE_LISTENING: True}
+    )
+    assert result["data"][CONF_REFRESH_PERIOD_MINUTES] == 5
+    assert result["data"][CONF_PROFILES]["evening"][CONF_NAME] == "Evening"
+    assert result["data"][CONF_ACTIVE_LISTENING] is True
+    await hass.async_block_till_done()
+    menu = await hass.config_entries.options.async_init(entry.entry_id)
+    form = await hass.config_entries.options.async_configure(menu["flow_id"], {"next_step_id": "features"})
+    marker = next(key for key in form["data_schema"].schema if key.schema == CONF_REFRESH_PERIOD_MINUTES)
+    assert marker.description["suggested_value"] == 5
 
 
 def _packet(
@@ -298,6 +398,7 @@ async def test_config_flow_creates_entry_with_normalized_profile_data(hass) -> N
         CONF_CPI: False,
         CONF_DEBUG_LOGGING: False,
         CONF_ACTIVE_LISTENING: False,
+        CONF_REFRESH_PERIOD_MINUTES: 0,
         CONF_FIREPLACE_SHORT_NAME: "---",
         CONF_PROFILES: {},
     }
@@ -377,6 +478,7 @@ async def test_manual_entry_form_schema_exposes_fields(hass) -> None:
         CONF_FIREPLACE_SHORT_NAME,
         CONF_BACKEND_TYPE,
         CONF_LEARNING_ID,
+        CONF_REFRESH_PERIOD_MINUTES,
     }
 
 
@@ -996,6 +1098,7 @@ async def test_options_flow_updates_feature_flags(hass) -> None:
         CONF_CPI: False,
         CONF_DEBUG_LOGGING: False,
         CONF_ACTIVE_LISTENING: False,
+        CONF_REFRESH_PERIOD_MINUTES: 0,
         CONF_FIREPLACE_SHORT_NAME: "---",
         CONF_PROFILES: {},
     }

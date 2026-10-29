@@ -296,6 +296,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_start_display_sync_listener(hass, runtime_entry)
     await async_start_active_listener(hass, runtime_entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    from .refresh import async_start_refresh
+
+    async_start_refresh(hass, runtime_entry)
     return True
 
 
