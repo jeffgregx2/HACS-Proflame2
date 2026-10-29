@@ -110,7 +110,7 @@ int main() {
   const auto summary = trace_logs.back();
   assert(summary.find("connected=YES disconnects=1 reconnects=1 last_outage_ms=3500") != std::string::npos);
   assert(summary.find("uptime_s=125 ssid='Home WiFi' bssid=AA:BB:CC:DD:EE:FF rssi_dbm=-47") != std::string::npos);
-  assert(summary.find("reset_reason='Software Reset CPU' retransmission=ON pre_tx_settle_ms=20.0") !=
+  assert(summary.find("last_boot_reason='Software Reset CPU' retransmission=ON pre_tx_settle_ms=20.0") !=
          std::string::npos);
   proflame2_radio.retry = false;
   api_summary(); // An API reconnect alone does not create a Wi-Fi edge.

@@ -33,6 +33,8 @@ def test_wifi_diagnostics_and_api_summary(tmp_path: Path) -> None:
     }
     summary = script["then"][-1]["lambda"]
     assert summary.count("ESP_LOGI(") == 1
+    assert "last_boot_reason='%s'" in summary
+    assert " reset_reason=" not in summary
     assert "id(proflame2_wifi_rssi).get_raw_state()" in summary
     assert ".raw_state" not in package
     api_connect = package.split("  on_client_connected:", 1)[1].split("  on_client_disconnected:", 1)[0]

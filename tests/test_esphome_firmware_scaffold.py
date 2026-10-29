@@ -76,7 +76,8 @@ def test_esphome_ci_compiles_the_checked_out_component_revision() -> None:
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
 
     assert "run: make esphome-validate" in workflow
-    assert "esphome-stage:" in makefile
+    assert "_esphome-stage:" in makefile
+    assert "bash tools/run_esphome_validation.sh _$@" in makefile
     assert 'cp -R "$(ESPHOME_STAGE)/esphome/components/proflame2_tembed"' in makefile
 
 

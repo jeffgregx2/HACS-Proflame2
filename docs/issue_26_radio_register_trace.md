@@ -290,11 +290,15 @@ Restart-mode scheduling coalesces simultaneous connection events. A Wi-Fi
 reconnection also refreshes diagnostics if an API socket survives the outage.
 No periodic summary is generated. It does not block TX or perform CC1101 register
 reads. The line includes Wi-Fi connection state, both counters, last outage,
-uptime, SSID, BSSID, RSSI, reset reason, delayed retransmission state, and settling delay:
+uptime, SSID, BSSID, RSSI, last boot reason, delayed retransmission state, and settling delay:
 
 ```text
-WiFi connected=YES disconnects=1 reconnects=1 last_outage_ms=3500 uptime_s=125 ssid='Home WiFi' bssid=AA:BB:CC:DD:EE:FF rssi_dbm=-47 reset_reason='Software Reset CPU' retransmission=ON pre_tx_settle_ms=20.0
+WiFi connected=YES disconnects=1 reconnects=1 last_outage_ms=3500 uptime_s=125 ssid='Home WiFi' bssid=AA:BB:CC:DD:EE:FF rssi_dbm=-47 last_boot_reason='Software Reset CPU' retransmission=ON pre_tx_settle_ms=20.0
 ```
+
+`last_boot_reason` describes the most recent boot, not an event occurring when
+this summary is printed. Use `uptime_s` to distinguish a recent restart from a
+log-client reconnect. The diagnostic sensor keeps its existing name and ID.
 
 Wi-Fi disconnect also emits one immediate INFO line with counters, uptime in
 milliseconds, the last sampled RSSI, and retransmission state. A dropped Wi-Fi

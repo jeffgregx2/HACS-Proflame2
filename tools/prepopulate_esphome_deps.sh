@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 set -euo pipefail
 
 usage() {
@@ -16,18 +16,21 @@ Defaults:
 
 Environment overrides:
   PROFLAME2_SOURCE_REPO   Source repo root. Defaults to script repo root.
-  PROFLAME2_BUILD_ROOT    No-space build workspace root.
-                          Default: ${TMPDIR:-/tmp}/hacs_proflame2_esphome_build
-  PROFLAME2_BUILD_DIR     Final synced worktree path inside build root.
-                          Default: $PROFLAME2_BUILD_ROOT/worktree
+  PROFLAME2_BUILD_ROOT    Parent for a unique temporary build workspace.
+                          Default: ${TMPDIR:-/tmp}
+  PROFLAME2_BUILD_DIR     Optional new, non-existing workspace path.
+                          Removed on exit; existing paths are never overwritten.
+  ESPHOME_CLI             Optional ESPHome executable path.
   PLATFORMIO_CORE_DIR     PlatformIO cache location.
   PIO_HOME_DIR            PlatformIO cache location.
 
 Notes:
-  - Safe to run repeatedly. Re-running refreshes the synced worktree and lets
+  - Safe to run repeatedly. Each run uses a fresh temporary worktree and lets
     ESPHome / PlatformIO update cached dependencies as needed.
   - This script does not treat the build worktree as authoritative source.
   - If dependencies are already cached, later runs are typically much faster.
+  - The temporary worktree is removed on success, failure, or interruption.
+    Persistent dependency caches outside that worktree are kept.
 EOF
 }
 
@@ -47,12 +50,21 @@ if [[ ! -f "$CONFIG_ABS" ]]; then
   exit 1
 fi
 
-BUILD_ROOT="${PROFLAME2_BUILD_ROOT:-${TMPDIR:-/tmp}/hacs_proflame2_esphome_build}"
-BUILD_DIR="${PROFLAME2_BUILD_DIR:-$BUILD_ROOT/worktree}"
-
-mkdir -p "$BUILD_ROOT"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
+BUILD_ROOT="${PROFLAME2_BUILD_ROOT:-${TMPDIR:-/tmp}}"
+if [[ -n "${PROFLAME2_BUILD_DIR:-}" ]]; then
+  BUILD_DIR="$PROFLAME2_BUILD_DIR"
+  # mkdir without -p refuses existing paths, including symlinks.
+  mkdir -- "$BUILD_DIR"
+else
+  mkdir -p -- "$BUILD_ROOT"
+  BUILD_DIR="$(mktemp -d "$BUILD_ROOT/proflame2-deps.XXXXXX")"
+fi
+cleanup() {
+  rm -rf -- "$BUILD_DIR"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 RSYNC_EXCLUDES=(
   --exclude .git
@@ -63,6 +75,10 @@ RSYNC_EXCLUDES=(
   --exclude .DS_Store
   --exclude analysis
   --exclude hacs_proflame2_work
+  --exclude '.venv*'
+  --exclude .esphome
+  --exclude tmp
+  --exclude build
 )
 
 echo "Syncing source repo into no-space build workspace..."
@@ -74,7 +90,11 @@ if [[ ! -f "$CONFIG_IN_BUILD" ]]; then
   exit 1
 fi
 
-if [[ -x "$REPO_ROOT/.venv/bin/esphome" ]]; then
+if [[ -n "${ESPHOME_CLI:-}" ]]; then
+  ESPHOME_BIN="$ESPHOME_CLI"
+elif [[ -x "$REPO_ROOT/.venv-esphome/bin/esphome" ]]; then
+  ESPHOME_BIN="$REPO_ROOT/.venv-esphome/bin/esphome"
+elif [[ -x "$REPO_ROOT/.venv/bin/esphome" ]]; then
   ESPHOME_BIN="$REPO_ROOT/.venv/bin/esphome"
 elif command -v esphome >/dev/null 2>&1; then
   ESPHOME_BIN="$(command -v esphome)"
@@ -93,4 +113,4 @@ echo "Config: $CONFIG_IN_BUILD"
 echo
 echo "Dependency pre-population complete."
 echo "PlatformIO cache: ${PLATFORMIO_CORE_DIR:-${PIO_HOME_DIR:-$HOME/.platformio}}"
-echo "Build workspace retained at: $BUILD_DIR"
+echo "Temporary build workspace will be removed on exit."

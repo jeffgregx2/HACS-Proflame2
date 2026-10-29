@@ -593,7 +593,7 @@ def test_quick_validation_written_and_counts_only_when_valid(tmp_path: Path) -> 
     lilygo = LilyGoSyslogCollector(receiver=receiver, source_host_filter="192.168.1.77")
 
     rtl433_source = InjectedRtl433Source()
-    rtl433 = Rtl433Collector(source=rtl433_source)
+    rtl433 = Rtl433Collector(source=rtl433_source, lock_path=tmp_path / "rtl433.lock")
     rtl433.source_mode = "subprocess"
 
     yardstick = YardStickDiagnosticCollector(
@@ -638,7 +638,7 @@ def test_runner_counts_valid_sample_when_quick_validation_passes(tmp_path: Path)
     base = time.monotonic() + 0.25
     for index, line in enumerate(RTL433_BLOCK):
         rtl433_source.feed_line(line, host_monotonic=base + index * 0.001)
-    rtl433 = Rtl433Collector(source=rtl433_source)
+    rtl433 = Rtl433Collector(source=rtl433_source, lock_path=tmp_path / "rtl433.lock")
     rtl433.source_mode = "subprocess"
 
     yardstick = YardStickDiagnosticCollector(

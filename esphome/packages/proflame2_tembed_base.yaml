@@ -144,7 +144,7 @@ script:
       - lambda: |-
           const auto &wifi = id(proflame2_radio).get_wifi_diagnostics();
           ESP_LOGI("proflame2.connection",
-                   "WiFi connected=%s disconnects=%u reconnects=%u last_outage_ms=%u uptime_s=%.0f ssid='%s' bssid=%s rssi_dbm=%.0f reset_reason='%s' retransmission=%s pre_tx_settle_ms=%.1f",
+                   "WiFi connected=%s disconnects=%u reconnects=%u last_outage_ms=%u uptime_s=%.0f ssid='%s' bssid=%s rssi_dbm=%.0f last_boot_reason='%s' retransmission=%s pre_tx_settle_ms=%.1f",
                    wifi.connected() ? "YES" : "NO",
                    static_cast<unsigned>(wifi.disconnect_count()),
                    static_cast<unsigned>(wifi.reconnect_count()),

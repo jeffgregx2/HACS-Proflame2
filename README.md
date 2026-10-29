@@ -108,16 +108,32 @@ For more detail on the setup choices, see
 
 ## Remote Compatibility
 
-The following Proflame2 remote part numbers have been tested with this project
-and appear to work:
+The following Proflame2 remote models have been identified in project testing.
+They have been tested and appear to work unless an ongoing investigation is
+noted below:
 
-- `0.584.040`
-- `0.584.043`
-- `0.584.053` (433.92 MHz CE variant)
-- `0.584.080`
+| Model / part number | Seen as FCC ID | `rf_band` | Notes |
+| --- | --- | --- | --- |
+| `0.584.040` | `T99058402300` | `"315"` | |
+| `0.584.043` | TBD | `"315"` | |
+| `0.584.053` | TBD | `"433"` | 433.92 MHz CE variant |
+| `0.584.080` | `T99058402300` | `"315"` | |
+| `0.584.090` | `T99058404300` | `"315"` | Mendota; control reliability under investigation ([issue #26](https://github.com/jeffgregx2/HACS-Proflame2/issues/26)) |
+
+Use the listed `rf_band` value for the full substitution parameter
+`proflame2_rf_band` under `substitutions:` in your
+LilyGO device YAML. One LilyGO controller can use only one band at a time.
+
+FCC IDs shown are examples reported on these models, not guaranteed identifiers
+for every remote of that model. Use them only as a lookup aid when the model
+number is not legible; they do not guarantee a model match or compatibility.
+For example, `T99058402300` has been observed on both `.040` and `.080` models.
 
 Other Proflame2 remotes may also work. These are simply the remote models for
-which this project has explicit test evidence.
+which this project has identification and test reports.
+
+See [remote identification records](docs/remote_identification.md) for additional
+reported labels, including models still being investigated.
 
 Remember: If you are using a LilyGO controller, you must install it first before adding the fireplace.
 

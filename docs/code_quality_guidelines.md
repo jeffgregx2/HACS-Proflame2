@@ -136,6 +136,12 @@ Guidelines:
   future engineering decisions.
 - Generated files such as `__pycache__/` are not source artifacts and should
   not be committed.
+- Build and test scratch directories must be uniquely owned by each invocation
+  and cleaned on success, failure, and handled interruption. Use context managers
+  or exit traps rather than relying on a later run or system reboot. Never prune
+  shared temporary directories, active worktrees, or capture/firmware evidence.
+  Keep deliberately retained reports in ignored project directories and document
+  any persistent coordination files or dependency caches.
 
 When reviewing `tools/`, focus on whether the workflow is understandable,
 reproducible, and safe from semantic/debug artifact confusion. Do not require
