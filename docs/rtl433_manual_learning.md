@@ -11,6 +11,9 @@ controlled by your selected Proflame2 controller, either LilyGO or YardStick.
 
 ## What You Need
 
+For an independent Learning ID workflow instead of pasting each command into
+Home Assistant, see [Standalone Learning ID Tool](#standalone-learning-id-tool).
+
 - A supported Proflame2 controller:
   - LilyGO T-Embed CC1101, already flashed and added to Home Assistant through
     ESPHome, or
@@ -218,3 +221,95 @@ rtl_433 -f 315M -R 207 -M level -F json -S all
 
 Attach the generated `.cu8` files to the GitHub issue along with the JSON lines
 from rtl_433 and your remote model number.
+
+## Standalone Learning ID Tool
+
+The development helper can create a Learning ID from saved rtl_433 JSON or a
+live pipe. It does not require Home Assistant or rtl_433 to be installed when
+reading a saved file. It never transmits, starts rtl_433, or changes HA settings.
+
+Install from this source checkout in a Python 3.10 or newer virtual environment:
+
+```bash
+python3 -m venv .venv-learning-id
+. .venv-learning-id/bin/activate
+python -m pip install .
+proflame2-learning-id --help
+```
+
+These commands describe the source version containing the helper, not a PyPI
+release. Extended ten-word input requires a version of rtl_433 with extended
+Proflame2 support. The baseline decoder reviewed for this implementation accepts
+legacy seven-word packets only; installing a distribution package alone does
+not establish extended support. The matching decoder adds explicit
+`protocol_variant`, complete `raw_words`, and extended W6-W10 fields.
+
+Declare the features your fireplace supports using `--features`: `fan`, `light`,
+`front`, `aux`, and `cpi`, separated by commas, or `none`. `front` means the
+front-burner control; `cpi` means continuous-pilot control. A control being off
+does not establish that the feature is absent. File and pipe use require this
+option; an interactive terminal may ask for it.
+
+For live collection:
+
+```bash
+rtl_433 -R 207 -f 315M -F json | proflame2-learning-id --features fan,light -v
+```
+
+Use your fireplace remote to change several settings, such as Light Up or Down
+and Fan Up or Down. Pause after each change to give the remote time to send it
+again. If a change still needs confirmation, make that same change again.
+
+The helper counts different commands separately from repeated copies. Each
+counted command must be received at least twice. It derives a profile after at
+least three different commands, checks two additional different commands, then
+checks two more: at least seven commands in total for full confirmation. Legacy
+commands must vary both command bytes; extended evidence must include different
+manual-mode W5 commands. `-v` explains missing evidence. Repeated identical
+commands and temperature changes alone cannot advance the different-command
+count. Confirmation means the capture checks passed; it does not establish
+successful operation with a physical fireplace.
+
+Live collection normally finishes only after full confirmation. The default
+time limit is 120 seconds; use `--timeout SECONDS` to select a limit up to 3600
+seconds. If input ends, times out, or exceeds a safety limit before confirmation,
+no ID is printed and the command exits unsuccessfully.
+
+For saved newline-delimited JSON:
+
+```bash
+proflame2-learning-id capture.json --features fan,light
+proflame2-learning-id --features fan,light < capture.json
+cat capture.json | proflame2-learning-id --input-mode file --features fan,light
+```
+
+Named files and regular-file input redirection default to file mode. Pipes
+default to live mode because the helper cannot tell a saved file piped through
+`cat` from a running rtl_433 process. Use `--input-mode file|live` to override.
+
+File mode checks the entire file before printing anything on stdout:
+
+- **Preliminary:** At least three different commands agree, each received at
+  least twice, and the profile can be generated. More different commands are
+  needed to finish confirmation.
+- **Confirmation incomplete:** At least five different commands agree, each
+  received at least twice. Additional checks passed, but full confirmation
+  requires at least seven different commands with matching repeats.
+- **Confirmed:** At least seven different commands agree, each received at least
+  twice, and no conflicting commands were found anywhere in the file.
+
+The final explanation always appears on stderr, even without `-v`. These labels
+describe evidence checks, not numerical probabilities. File mode may succeed
+with a preliminary or incompletely confirmed ID; below the first gate, no ID
+can be generated. Any contradictory or invalid relevant record prevents output,
+including a conflict after seven otherwise confirmed commands. The helper does
+not silently choose a different profile or ignore conflicting fireplace data.
+Clearly unrelated device records are ignored.
+
+Successful stdout contains exactly one Learning ID. Import it through the
+integration's existing Learning ID setup option, then validate your fireplace's
+controls. Installation options such as controller, RF frequency, and refresh
+period are not part of the ID; import keeps refresh disabled by default.
+The helper does not save raw input by default or include captured records in
+error messages. Input is limited to 16 KiB per line, 16 MiB total, and 100,000
+lines. The confirmation count is bounded to 4,096 different commands.

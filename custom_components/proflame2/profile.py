@@ -46,9 +46,11 @@ from .const import (
     available_backend_types,
 )
 from .control import StateValidationError, build_requested_state
-from .protocol.ecc import derive_ecc_profile
+from .protocol.derivation import LearningRequirements, derive_remote_profile
 from .protocol.learning_id import decode_learning_id
 from .protocol.models import FireplaceFeatures
+from .protocol.packet import ProflameFrame
+from .protocol.rtl433 import MODEL, normalize_rtl433_record
 from .rf.registry import normalize_controller_id
 
 
@@ -109,6 +111,12 @@ class Rtl433Sample:
     err1: int
     cmd2: int
     err2: int
+    extension_words: tuple[int, ...] = ()
+
+    @property
+    def frame(self) -> ProflameFrame:
+        """Preserve all wire words and the variant across the HA adapter."""
+        return ProflameFrame(self.remote_id, self.cmd1, self.err1, self.cmd2, self.err2, self.extension_words)
 
 
 @dataclass(frozen=True)
@@ -171,6 +179,16 @@ def _parse_rtl433_sample_line(line: str) -> Rtl433Sample:
         if not isinstance(decoded, dict):
             raise InvalidRtl433SamplesError("Each rtl_433 JSON sample must be an object.")
         payload = {str(key).lower(): value for key, value in decoded.items()}
+
+    if any(key in payload for key in ("protocol_variant", "raw_words", "w6", "w7", "w8", "w9", "w10")):
+        try:
+            normalized = normalize_rtl433_record({"model": MODEL, **payload})
+            if normalized is None:
+                raise ValueError("Not a Proflame2 record.")
+        except ValueError as exc:
+            raise InvalidRtl433SamplesError(str(exc)) from exc
+        frame = normalized.frame
+        return Rtl433Sample(frame.serial_id, frame.cmd1, frame.err1, frame.cmd2, frame.err2, frame.extension_words)
 
     required_fields = ("id", "cmd1", "cmd2", "err1", "err2")
     missing = [field for field in required_fields if field not in payload]
@@ -375,14 +393,29 @@ def normalize_manual_rtl433_profile_samples(
     if len(remote_ids) != 1:
         raise Rtl433RemoteIdMismatchError("All rtl_433 samples must have the same remote id.")
 
+    extended = any(sample.frame.is_extended for sample in samples)
     try:
-        ecc = derive_ecc_profile(
-            ((sample.cmd1, sample.err1) for sample in samples),
-            ((sample.cmd2, sample.err2) for sample in samples),
+        result = derive_remote_profile(
+            (sample.frame for sample in samples),
+            fireplace_features_from_options(user_input),
+            requirements=(
+                LearningRequirements()
+                if extended
+                else LearningRequirements(
+                    min_frames=1,
+                    min_commands=1,
+                    min_cmd1=1,
+                    min_cmd2=1,
+                )
+            ),
         )
+        if result.profile is None:
+            raise ValueError("More different manual commands are needed before creating this profile.")
     except ValueError as exc:
         raise Rtl433ProfileDerivationError(str(exc)) from exc
 
+    remote = result.profile
+    ecc = remote.ecc
     derived_input = {
         **user_input,
         CONF_REMOTE_ID: next(iter(remote_ids)),
@@ -391,10 +424,21 @@ def normalize_manual_rtl433_profile_samples(
         CONF_C2: ecc.c2,
         CONF_D2: ecc.d2,
     }
-    return Rtl433ManualProfileInput(
-        profile=normalize_manual_profile_input(derived_input),
-        samples=samples,
-    )
+    normalized = normalize_manual_profile_input(derived_input)
+    if extended:
+        template = remote.extended_template
+        for key in (CONF_C1, CONF_D1, CONF_C2, CONF_D2):
+            normalized.data.pop(key)
+        normalized.data.update(
+            {
+                CONF_PROTOCOL_VARIANT: remote.protocol_variant,
+                CONF_EXTENDED_W4_BASE: template.w4_base,
+                CONF_EXTENDED_W6: template.w6,
+                CONF_EXTENDED_W7: template.w7,
+                CONF_EXTENDED_W8: template.w8,
+            }
+        )
+    return Rtl433ManualProfileInput(profile=normalized, samples=samples)
 
 
 def remote_id_as_hex(remote_id: int) -> str:

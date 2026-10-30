@@ -63,6 +63,22 @@ def test_parser_handles_proflame2_block(tmp_path: Path) -> None:
     assert result.metadata["flame"] == 6
 
 
+def test_capture_collector_explicitly_rejects_extended_blocks(tmp_path: Path) -> None:
+    """Legacy coordination cannot mistake extended words for legacy errors."""
+    base = time.monotonic()
+    block = [*BLOCK_LINES, "Variant   : extended_10_word", "W6        : 15", "W10       : 6e", ""]
+    collector, _source = _build_collector([(line, base + index * 0.001, "stdout") for index, line in enumerate(block)])
+    collector.start_session(_session(tmp_path))
+    try:
+        collector.start_sample(_sample(tmp_path))
+        for _ in block:
+            collector.poll()
+        assert collector._state.parsed_blocks[0].valid is False
+        assert collector._state.parsed_blocks[0].reject_reason == "extended_protocol_not_supported_by_capture_collector"
+    finally:
+        collector.close()
+
+
 def test_parser_handles_label_comments(tmp_path: Path) -> None:
     base = time.monotonic()
     lines = [("# rtl_433 - Fan Up", base, "stdout")]

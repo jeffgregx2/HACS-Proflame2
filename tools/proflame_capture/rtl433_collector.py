@@ -484,10 +484,10 @@ class Rtl433Collector:
         if not line.strip():
             self._finalize_pending_block()
             return
-        if not self._state.pending_block.lines and not line.startswith("time"):
-            return
         if line.lstrip().startswith("{"):
             self._state.parse_errors.append("json_output_not_supported_in_text_parser")
+            return
+        if not self._state.pending_block.lines and not line.startswith("time"):
             return
         if line.startswith("time") and self._state.pending_block.lines:
             self._finalize_pending_block()
@@ -541,7 +541,12 @@ class Rtl433Collector:
         missing = sorted(required_fields - raw_fields.keys())
         reject_reason: str | None = None
         valid = True
-        if missing:
+        if raw_fields.get("variant") == "extended_10_word" or any(
+            name in raw_fields for name in ("w6", "w7", "w8", "w9", "w10")
+        ):
+            reject_reason = "extended_protocol_not_supported_by_capture_collector"
+            valid = False
+        elif missing:
             reject_reason = "incomplete_block"
             valid = False
         elif raw_fields["model"] != PROFLAME_MODEL:

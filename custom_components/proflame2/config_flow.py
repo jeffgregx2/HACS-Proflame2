@@ -31,6 +31,10 @@ from .const import (
     CONF_D2,
     CONF_DEBUG_LOGGING,
     CONF_ESPHOME_ENTRY_ID,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
@@ -43,6 +47,7 @@ from .const import (
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_PROTOCOL_VARIANT,
     CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
     CONF_RTL433_SAMPLES,
@@ -54,6 +59,7 @@ from .const import (
     DEFAULT_FIREPLACE_SHORT_NAME,
     DEFAULT_REFRESH_PERIOD_MINUTES,
     DOMAIN,
+    PROTOCOL_VARIANT_LEGACY_7_WORD,
     available_backend_labels,
     available_backend_types,
     available_learning_backend_labels,
@@ -103,7 +109,9 @@ from .profile import (
     remote_id_as_hex,
     sanitize_fireplace_short_name,
 )
-from .protocol.packet import ProflameFrame, ProflamePacket
+from .protocol.derivation import LearningRequirements, derive_remote_profile
+from .protocol.models import FireplaceFeatures
+from .protocol.packet import ProflamePacket
 from .rf.registry import get_backend_definition, normalize_controller_id
 from .rf.yardstick import YardStickBackendUnavailableError
 
@@ -843,6 +851,11 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _current_manual_rtl433_prompt(self) -> tuple[str, str]:
         """Return the current manual rtl_433 prompt, cycling as needed."""
 
+        if self._manual_rtl433_samples and self._manual_rtl433_samples[0].frame.is_extended:
+            return (
+                "manual_change",
+                "Use the remote in manual mode to change flame, fan, or light, then paste the rtl_433 JSON for a different command.",
+            )
         return RTL433_MANUAL_PROMPTS[self._manual_rtl433_prompt_index % len(RTL433_MANUAL_PROMPTS)]
 
     def _validate_manual_rtl433_samples(self, samples: list[Rtl433Sample]) -> None:
@@ -850,10 +863,18 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if self._manual_rtl433_input is None:
             raise InvalidRtl433SamplesError("Manual rtl_433 setup has not started.")
-        normalize_manual_rtl433_profile_samples(
-            self._manual_rtl433_input,
-            tuple(samples),
-        )
+        if len({sample.remote_id for sample in samples}) != 1:
+            raise Rtl433RemoteIdMismatchError("All rtl_433 samples must have the same remote id.")
+        try:
+            derive_remote_profile(
+                (sample.frame for sample in samples),
+                FireplaceFeatures(),
+                requirements=LearningRequirements(
+                    min_frames=1, min_commands=1, min_cmd1=1, min_cmd2=1, min_manual_w5=1
+                ),
+            )
+        except ValueError as exc:
+            raise Rtl433ProfileDerivationError(str(exc)) from exc
 
     def _try_build_manual_rtl433_learn_result(self) -> LearnResult | None:
         """Return a learned profile once pasted rtl_433 rows prove enough evidence."""
@@ -866,7 +887,19 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         cmd1_samples = {(sample.cmd1, sample.err1) for sample in samples}
         cmd2_samples = {(sample.cmd2, sample.err2) for sample in samples}
-        if len(cmd1_samples) < MIN_UNIQUE_CMD1_SAMPLES or len(cmd2_samples) < MIN_UNIQUE_CMD2_SAMPLES:
+        if not samples[0].frame.is_extended and (
+            len(cmd1_samples) < MIN_UNIQUE_CMD1_SAMPLES or len(cmd2_samples) < MIN_UNIQUE_CMD2_SAMPLES
+        ):
+            return None
+
+        if (
+            samples[0].frame.is_extended
+            and derive_remote_profile(
+                (sample.frame for sample in samples),
+                FireplaceFeatures(),
+            ).profile
+            is None
+        ):
             return None
 
         normalized = normalize_manual_rtl433_profile_samples(self._manual_rtl433_input, samples)
@@ -884,22 +917,21 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         final_sample = samples[-1]
         final_packet = ProflamePacket.from_frame(
-            ProflameFrame(
-                serial_id=final_sample.remote_id,
-                cmd1=final_sample.cmd1,
-                err1=final_sample.err1,
-                cmd2=final_sample.cmd2,
-                err2=final_sample.err2,
-            ),
+            final_sample.frame,
             source="rtl433_manual",
         )
         return LearnResult(
             success=True,
             remote_id=normalized.profile.data[CONF_REMOTE_ID],
-            c1=normalized.profile.data[CONF_C1],
-            d1=normalized.profile.data[CONF_D1],
-            c2=normalized.profile.data[CONF_C2],
-            d2=normalized.profile.data[CONF_D2],
+            c1=normalized.profile.data.get(CONF_C1),
+            d1=normalized.profile.data.get(CONF_D1),
+            c2=normalized.profile.data.get(CONF_C2),
+            d2=normalized.profile.data.get(CONF_D2),
+            protocol_variant=normalized.profile.data.get(CONF_PROTOCOL_VARIANT, PROTOCOL_VARIANT_LEGACY_7_WORD),
+            extended_w4_base=normalized.profile.data.get(CONF_EXTENDED_W4_BASE),
+            extended_w6=normalized.profile.data.get(CONF_EXTENDED_W6),
+            extended_w7=normalized.profile.data.get(CONF_EXTENDED_W7),
+            extended_w8=normalized.profile.data.get(CONF_EXTENDED_W8),
             packets_seen=len(samples),
             valid_packets=len(samples),
             final_packet=final_packet,
