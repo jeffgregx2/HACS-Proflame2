@@ -11,7 +11,7 @@ import stat
 import sys
 import time
 from collections.abc import Iterator
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from typing import BinaryIO
 
 from proflame2_protocol.derivation import ProfileConflictError
@@ -20,20 +20,17 @@ from proflame2_protocol.models import FireplaceFeatures
 from proflame2_protocol.rtl433 import normalize_rtl433_record
 
 from .evidence import Evidence
+from .guided import collect as collect_guided
 
 MAX_LINE = 16384
 MAX_INPUT = 16 * 1024 * 1024
 MAX_RECORDS = 100000
 GUIDANCE = (
-    "Use your fireplace remote to change several settings, such as Light Up or Down\n"
-    "and Fan Up or Down. Pause after each change to give the remote time to send it\n"
-    "again. If a change still needs confirmation, make that same change again."
+    "Keep power ON and thermostat OFF. Leave flame, front burner, auxiliary, and pilot unchanged.\n"
+    "Use Light and Fan values 0, 3, and 6. Repeat the SAME combinations of settings\n"
+    "so each combination is received twice. Intermediate levels on the native remote are OK.\n"
+    "The count tracks different received combinations, not individual button presses."
 )
-GATE_MESSAGES = {
-    1: "Step 1 of 3: Your remote has been identified. Keep making different changes.",
-    2: "Step 2 of 3: The additional commands match. A few more checks are needed.",
-    3: "Step 3 of 3: All checks passed. Your Learning ID is ready.",
-}
 
 
 def records(stream: BinaryIO, *, live: bool, timeout: float) -> Iterator[bytes]:
@@ -78,8 +75,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--input-mode", choices=("file", "live"), help="Pipes default to live; saved files default to file."
     )
-    parser.add_argument("--timeout", type=float, default=120, help="Live collection limit in seconds (default: 120).")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=120,
+        help="Seconds per requested guided action, or total unguided collection time (default: 120).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Explain progress and missing evidence.")
+    parser.add_argument("--unguided", action="store_true", help="Collect live JSON without terminal/button prompts.")
     args = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or not 0 < args.timeout <= 3600:
         parser.error("--timeout must be greater than zero and at most 3600 seconds.")
@@ -91,9 +94,21 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.file, "rb") if named else nullcontext(sys.stdin.buffer) as stream:
             mode = args.input_mode or ("file" if named or stat.S_ISREG(os.fstat(stream.fileno()).st_mode) else "live")
             live = mode == "live"
-            if live and args.verbose:
+            guided = live and not args.unguided
+            if guided:
+                with ExitStack() as stack:
+                    try:
+                        terminal = stack.enter_context(open("/dev/tty", encoding="utf-8"))
+                    except OSError:
+                        raise ValueError(
+                            "Guided learning needs an interactive terminal. Use --unguided for automation or process a saved JSON file."
+                        ) from None
+                    collect_guided(stream, evidence, args.timeout, terminal)
+            if live and not guided and args.verbose:
                 print(GUIDANCE, file=sys.stderr)
-            for line_number, line in enumerate(records(stream, live=live, timeout=args.timeout), 1):
+            last_progress = None
+            lines = () if guided else records(stream, live=live, timeout=args.timeout)
+            for line_number, line in enumerate(lines, 1):
                 try:
                     record = json.loads(line)
                 except (ValueError, UnicodeError, RecursionError) as exc:
@@ -103,10 +118,13 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 previous_gate = evidence.gate
                 evidence.add(normalized.frame)
+                if live and previous_gate == 0 and evidence.gate > 0:
+                    print("A plausible Learning ID has been created. Now we need to confirm it.", file=sys.stderr)
                 if args.verbose:
-                    if live and evidence.gate != previous_gate:
-                        print(GATE_MESSAGES[evidence.gate], file=sys.stderr)
-                    print(evidence.progress(), file=sys.stderr)
+                    progress = evidence.progress()
+                    if progress != last_progress:
+                        print(progress, file=sys.stderr)
+                        last_progress = progress
                 if live and evidence.gate == 3:
                     break
             if not live:

@@ -52,8 +52,6 @@ path to use.
 - **Learn from remote (Recommended)**: normal setup. This uses the selected
   LilyGO or YardStick controller to listen while you press buttons on the
   original fireplace remote. Most users should choose this option.
-- **Learn from rtl_433 output**: use only if normal learning does not complete
-  and you have, or are willing to obtain, a separate SDR receiver.
 - **Enter a Learning ID**: use an ID generated with rtl_433 or copied from an
   existing Proflame2 fireplace in Home Assistant. Supports both legacy and
   extended remotes. See [Using Learning IDs](#Using_learning_ids).
@@ -114,8 +112,8 @@ for normal use.
 
 See [Using rtl_433 for learning](Using_rtl_433_for_learning.md) for software
 requirements, installation, remote button presses, and troubleshooting. Older
-rtl_433 builds support only legacy remotes. The existing paste-output setup flow
-is also legacy-only; extended remotes must use normal learning or a Learning ID.
+rtl_433 builds support only legacy remotes. There is no separate JSON-paste
+option in setup: generate a Learning ID outside HA, then import that ID here.
 
 ## Select Supported Features
 

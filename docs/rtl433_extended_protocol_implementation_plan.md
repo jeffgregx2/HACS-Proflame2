@@ -10,13 +10,203 @@ contribution must be useful independently of Home Assistant and Learning IDs.
 
 ## Ownership and Dependencies
 
+### Remaining Integration Task List
+
+The HACS-Proflame2 `rtl433-enhancements` branch delivers the standalone helper,
+shared Python protocol boundary, HA Learning ID import, interoperability tests,
+and documentation. It is intended to merge into `dev`, not become a permanent
+parallel codeline. It does not own rtl_433 decoder development or firmware/RF
+timing changes. The authoritative rtl_433 repository is `/srv/Tools/rtl_433`;
+its session owns decoder edits, builds, decoder tests, and output handoff.
+
+Existing checked phase tasks below record earlier implementation. They do not
+mean that the remaining integration and live acceptance tasks here have passed.
+
+1. [x] **T1 Confirm the cross-session contract.** Record the decoder commit,
+   actual build used to generate fixture output, JSON field names/types,
+   variant markers, integrity labels, and unknown-pilot semantics. Keep Learning
+   IDs remote-only format v1. Coordinate any helper CLI or shared protocol change
+   before editing; request decoder/JSON changes from the rtl_433 owner.
+2. [x] **T2 Obtain decoder-generated JSON fixtures.** The rtl_433 owner runs
+   the real decoder on available representative legacy and extended captures
+   and supplies its emitted JSON. Include at least one case per known captured
+   remote and enough distinct commands/repeats per learnable remote to exercise
+   the helper's confirmation gates. Record generating commit, command, input
+   provenance, expected identity/protocol values, and whether replay used real
+   recordings or derived signals. Identify remotes with insufficient learning
+   evidence rather than inventing extra observations.
+3. [x] **T3 Review fixture privacy and storage.** Store compact, reviewed JSON
+   and a provenance manifest in a dedicated helper test-fixture directory. Do
+   not check in IQ recordings, credentials, personal paths, host addresses, or
+   unrelated metadata. Preserve protocol bytes necessary for real-remote
+   regressions; keep source captures in their approved external/private storage.
+4. [x] **T4 Test the installed helper against those fixtures.** Assert expected
+   legacy/extended Learning IDs and decoded remote values, confirmation-gate
+   behavior, file and pipe handling, and stdout/stderr/exit-status contracts.
+   Retain existing negative tests for corruption, conflicting fields, mixed
+   remotes/variants, insufficient evidence, and late contradictions. Normal
+   helper tests consume committed JSON and require neither an SDR nor an
+   rtl_433 executable or source checkout.
+5. [x] **T5 Confirm helper completion policy and installation.** Review the
+   existing file-mode preliminary results at Gates 1/2 versus live-mode Gate 3
+   completion, progress guidance, and timeout defaults. Document the agreed
+   behavior; coordinate any change with the helper owner. Verify clean wheel
+   installation without HA or rtl_433 and provide reproducible source/wheel
+   instructions without implying an unpublished PyPI package is available.
+6. [x] **T6 Finish the HA import transition.** Complete the HA-only adapter and
+   replace the old rtl_433 JSON-paste menu flow with Enter a Learning ID. Keep
+   guided learning and Enter legacy values. Ask for enabled features and
+   controller assignment in HA; do not encode those choices or RF band into the
+   ID. Reject invalid IDs and duplicate controller assignments without sending
+   RF. Review the currently uncommitted partial edits before extending them.
+7. [x] **T7 Exercise the real HA configuration flow.** Feed helper-generated
+   legacy and extended IDs through the actual forms, choose features/controller,
+   create and reload entries, and verify reconstructed profiles and regenerated
+   diagnostic IDs. Compare supported manual TX encodings using simulated
+   backends, not RF transmission. Test invalid input, feature independence,
+   unknown extended pilot, ownership conflicts, and unchanged guided/legacy
+   setup behavior.
+8. [x] **T8 Reconcile end-user documentation.** Update setup menus, translations,
+   links, and the dedicated rtl_433 guide. Explain the helper/decoder separation,
+   tested decoder build, installation, JSON collection, confirmation messages,
+   and saving a reusable Learning ID. Keep the main setup guide short and link
+   to detailed instructions; preserve useful old documentation links without
+   continuing to recommend the removed paste UI.
+9. [ ] **T9 Run offline acceptance.** Run the native invocation-owned Python
+   test environment, formatting/lint checks, installed-package tests, and HA
+   interoperability tests. The rtl_433 owner separately runs its decoder
+   regression suite and reports results. Record commands, revisions, passes,
+   skips, and gaps. Confirm test scratch files are cleaned on exit/interruption.
+10. [ ] **T10 Perform live end-to-end acceptance.** On hardware-equipped test
+    systems, receive native remote commands with the agreed rtl_433 build,
+    generate a Learning ID, import it into HA, and verify the expected profile.
+    Cover legacy and extended remotes where available; record unavailable
+    hardware/remote coverage explicitly. Any fireplace-control test is a
+    separate authorized hardware action, not an automated helper test.
+11. [ ] **T11 Review for integration into dev.** Check scope, privacy, concurrent
+    edits, and documentation consistency. Present validation evidence and
+    remaining live limitations. Commit, push, create a PR, merge, or publish
+    only when separately authorized; await required CI before merging.
+
+Execution order: T1 precedes the decoder-fixture handoff T2/T3 and fixture tests
+T4. T5 and HA work T6/T7 can proceed independently once the contract is frozen.
+Documentation T8 and offline acceptance T9 precede live acceptance T10 and the
+final integration review T11. Live hardware is not required for T1-T9.
+
+### HA Integration Execution Evidence
+
+- Decoder fixture generation used the clean linked `proflame2-extended` checkout
+  of the authoritative rtl_433 repository at commit
+  `13cae578111d92434a6c09212aae0afa0141a191`. The canonical checkout itself is
+  still on its older investigation baseline; do not assume its executable has
+  extended support. Neither decoder checkout was modified by this integration.
+- `tools/rtl433_decoder_tests/export_helper_fixtures.py` compiled and invoked
+  the decoder-owned C harness with ASan/UBSan in automatically cleaned scratch
+  storage. Its JSON export contains four legacy observations from two remotes
+  and 120 extended observations from two remotes. Provenance, input hashes,
+  generating revision, and replay classification accompany the fixture in
+  `tests/fixtures/rtl433_helper_decoder_output.json` and its companion Markdown.
+  This was read-only fixture generation, not a decoder implementation change or
+  a replacement for the decoder owner's full regression/pipeline suite.
+- Installed-package tests validate every exported record and preserve its wire
+  words. Real extended sequences use consistent observed manual-mode templates
+  and existing repeats, without synthesizing new evidence. The available legacy
+  captures lack sufficient commands/repeats and correctly produce no ID;
+  synthetic legacy sequences cover successful collection and all three gates.
+- The helper CLI and shared protocol implementation were not changed. File-mode
+  Gates 1/2 remain usable preliminary results with explicit warnings; live mode
+  requires Gate 3. Confirmation level is not encoded in an ID and HA cannot
+  infer it. Documentation explains that distinction and retains verbose guidance
+  with a 600-second collection example rather than changing the default policy.
+- HA now imports through the dedicated adapter, with feature/controller choices
+  remaining local. Main and failure menus no longer offer the JSON-paste flow.
+  Guided learning, legacy-value entry, and internal legacy parsing regressions
+  remain covered. Existing documentation links lead to the current workflow.
+- Offline validation used a fresh native Python environment with cleanup on
+  exit, rather than the shared architecture-dependent virtual environment:
+  **1,811 repository tests passed, 34 skipped, one deselected; 46 installed-helper
+  tests passed; six HA interoperability tests passed.** The latter include
+  helper-generated IDs from both real extended remotes through the actual HA
+  setup forms, runtime construction, manual encoding comparisons, and reload.
+  Installed-helper cases skipped by the ordinary suite ran separately against
+  the clean wheel. Ruff passed and Black accepted all 189 Python files.
+- T9's HACS-side checks are complete. A fresh full rtl_433 regression/pipeline
+  report remains owned by the decoder session; its earlier reported results
+  below are not presented as a new run here. T10 live end-to-end collection is
+  still pending. No RF was transmitted, firmware deployed, commits created,
+  branches merged, or changes pushed during this implementation.
+- Follow-up live-test setup uses `tools/learning_id/run.sh` instead of a forgotten
+  persistent virtual environment. Each invocation stages packaging sources and
+  installs in an owned `/tmp` directory; normal completion, errors, SIGINT, and
+  SIGTERM clean it up. Capture files and IDs remain caller-owned persistent
+  artifacts. Six focused runner tests passed, as did real temporary installation
+  with `--help` and captured extended JSON input. No runner scratch directories
+  remained after those checks. SIGKILL/power loss cannot execute cleanup.
+- Live usability testing then exposed a moving confirmation target: late required
+  command variation could consume more than three matches at Gate 1 and demand
+  another four. Gates now use fixed totals of 3/5/7 qualified commands, while
+  checking every observation against the candidate from the start. Regressions
+  cover late variation and the reported repeated Light/Fan sequence.
+- Live input is now guided by default using a controlling terminal separate from
+  the JSON pipe. Preparation waits for the operator to turn the fireplace OFF;
+  individual Up/Down targets are computed from received levels. Wrong controls
+  and overshoots do not advance a step. Confirmation ends with a received Power
+  OFF command before printing the ID. `--unguided` preserves automation;
+  saved-file processing is unchanged. No protocol/ID schema was changed.
+- Follow-up validation: **72 installed-helper tests passed**, including 20 real
+  PTY/JSON-pipe guided tests; **six HA interoperability tests passed**; **1,817
+  repository tests passed, 34 skipped, one deselected**. Ruff and Black passed.
+  The operator reported that an unguided live extended ID matched the known
+  profile ID. The operator subsequently confirmed that the guided live extended
+  flow also produced the same ID. No real Learning ID is stored in this plan.
+- Usability follow-up groups each control's changes into sweeps from 1 through
+  4 and back to 1, yielding seven repeatable combinations without constant mode
+  changes. Blank lines separate prompts and results. New managed reception via
+  `run.sh --rf-band 315|433 [--rtl433 executable]` starts and stops its own
+  rtl_433 child. External shell pipelines remain supported but their upstream
+  receiver is not owned or killed by the helper. This distinction explains the
+  apparent hang after an ID when the external receiver is quiet.
+- Follow-up checks passed: **81 installed-helper tests**, including owned-radio
+  success/failure/timeout/cancellation checks; **six HA interoperability tests**;
+  **1,819 repository tests, 34 skipped, one deselected**. Runner dispatch covers
+  both `--rf-band 315` and `--rf-band=433`. Ruff and Black passed. The grouped
+  sequence and managed receiver still need an operator live-hardware run.
+- Managed reception now checks receiver capability before opening the SDR:
+  `-c 0 -R 207 -y <synthetic PCM> -F json` must produce compatible legacy,
+  complete extended, and 259-bit extended JSON with the expected wire words.
+  Version strings are informational, not the acceptance criterion. Incompatible
+  or missing executables prompt for another path; noninteractive `--unguided`
+  runs fail with a `--rtl433` instruction. These checks require no hardware and
+  disable core dumps for obsolete decoders that might crash on test input.
+- Receiver stderr is drained concurrently into a bounded 32-KiB in-memory tail,
+  rather than interleaved with prompts. It is displayed on capture failure, not
+  routine success/cancellation. The accepted receiver version appears once
+  before preparation. No persistent log or machine-specific path is stored.
+- Validation passed: **87 installed-helper tests**, **six HA interoperability
+  tests**, and **1,819 repository tests (34 skipped, one deselected)**, plus Ruff
+  and Black. Capability tests ran against a temporary build of the actual C
+  decoder, with SDR drivers disabled, from an archived decoder checkout revision.
+  Neither decoder checkout was modified. Tests include rejecting legacy-only
+  and malformed decoder output before live startup, interactive replacement-path
+  validation, and suppressing startup diagnostics without hiding error evidence.
+- Operator testing confirmed the grouped Light/Fan prompts produce the expected
+  Learning ID. The next revision simplifies control selection to a Light/Fan
+  yes/no question, asking about Light alone only after No. It replaces the older
+  seven-repeated-command policy with three repeated derivation combinations
+  spanning required variation and two independent single-observation checks.
+  Guided sweeps now use levels 1 through 3. Validation: **101 installed-helper
+  tests passed, one optional decoder-binary test skipped; six HA interoperability
+  tests passed**, plus Ruff, Black, and whitespace checks. Tests cover all three
+  control paths, legacy/extended protocols, zero/high initial settings, automatic
+  repeats, question validation/cancellation, and independent-check accounting.
+
 | Responsibility | Owner | Dependency boundary |
 | --- | --- | --- |
 | Pulse detection and PCM slicing | Existing rtl_433 infrastructure | Retain existing timing and modulation settings unless replay evidence requires a change. |
 | Bounded word parsing, frame classification, integrity and semantic output | rtl_433 `src/devices/proflame2.c` | Use the existing device registration and decoder APIs. No HA or Learning ID code. |
 | Protocol models, extended integrity, profile derivation and Learning ID codec | HACS-Proflame2 pure Python protocol code | One implementation shared by the integration and standalone helper. |
-| JSON input, feature selection and Learning ID command line | HACS-Proflame2 `tools/learning_id/` | Read files or stdin. No rtl_433 source tree, build, shared library, or private debug output dependency. |
-| HA import forms and existing rtl_433-assisted learning | HACS-Proflame2 integration | Consume normalized frames/profiles through the shared Python boundary. |
+| JSON input and Learning ID command line | HACS-Proflame2 `tools/learning_id/` | Read files or stdin. No rtl_433 source tree, build, shared library, or private debug output dependency. |
+| HA Learning ID import and local feature/controller selection | HACS-Proflame2 integration | Decode remote-only IDs; do not launch rtl_433 or duplicate helper confirmation policy. |
 
 The decoder remains a small ordered workflow: parse words, classify the complete
 frame, validate the selected variant, then format output. The helper similarly
@@ -227,15 +417,16 @@ standalone protocol package imports and runs without Home Assistant or rtl_433.
   integrity before profile derivation. Accept existing legacy JSON without a
   variant marker only through an explicit legacy compatibility path. Never
   route an explicitly extended record into legacy C/D inference.
-- [x] **H4 Obtain supported features explicitly.** Capabilities cannot be
-  inferred from a control being OFF. Accept a declared feature list for
-  unattended use, or ask the user in interactive mode. Reuse integration
-  capability names and avoid prompts when stdin carries piped JSON. Do not
-  embed installation settings such as refresh period, backend, or RF band in
-  the Learning ID.
+- [x] **H4 Keep feature selection in HA.** Learning IDs contain remote identity
+  and learned protocol values only. The helper has no profile-feature argument
+  or feature-enablement prompt. Guided capture may ask which remote controls are
+  available solely to choose its capture sequence. HA asks which features to
+  enable during import. Do not embed
+  feature choices or installation settings such as refresh period, backend, or
+  RF band in the Learning ID. Unreleased schema revisions keep format v1.
 - [x] **H5 Generate using the shared codec.** Pass the derived profile to the
   existing `encode_learning_id` implementation. Encode and decode the resulting
-  ID and verify that the complete profile survives unchanged. Apply the
+  ID and verify that the learned remote fields survive unchanged. Apply the
   evidence gates and mode-specific completion rules below. Return a nonzero
   exit status when no ID can be generated because input is invalid,
   contradictory, ambiguous, or below Gate 1, or when live confirmation cannot
@@ -256,8 +447,8 @@ A distinct command state is a unique `(cmd1, cmd2)` pair for legacy frames or
 W7 temperature changes, do not count as additional commands. All contributing
 frames must belong to the same remote identity and protocol variant.
 
-Each command counted toward a gate must have at least two validated matching
-observations. For legacy frames, command/error bytes must agree. For extended
+Each command used for initial derivation must have at least two validated matching
+observations. The two independent checks need one observation each. For legacy frames, command/error bytes must agree. For extended
 frames, commands and learned fixed template fields must agree; telemetry may
 change, but both integrity lanes must validate on every observation. Automatic
 remote retransmissions may provide the matching observation. The helper cannot
@@ -268,8 +459,8 @@ additional commands or matching repeats.
 | Gate | Minimum evidence | Meaning |
 | --- | --- | --- |
 | 1: Profile derived | Three distinct commands, each observed at least twice, plus the variant requirements below. | A consistent profile can be generated; freeze it for subsequent checks. |
-| 2: Profile corroborated | Two additional distinct commands agree with the frozen profile, each observed at least twice: five total. | Additional independent commands support the profile; full confirmation is incomplete. |
-| 3: Profile confirmed | Two further distinct commands agree with the frozen profile, each observed at least twice: seven total. | All required capture-evidence checks passed. |
+| 2: Profile corroborated | One distinct command outside the frozen derivation set agrees with the profile. | An independent command supports the profile; full confirmation is incomplete. |
+| 3: Profile confirmed | A second distinct command outside the derivation set agrees with the profile: normally five combinations total. | All required capture-evidence checks passed. |
 
 At Gate 1, legacy evidence must contain at least two distinct `cmd1` values and
 two distinct `cmd2` values. Every observed command/error pair must yield the
@@ -286,8 +477,13 @@ the profile template rather than discovering a new integrity algorithm.
 Validate all relevant observations, including commands that have not yet
 received a matching repeat. A contradiction prevents output; it must not merely
 delay a gate. Matching repeats strengthen evidence but cannot increase the
-distinct-command count. Gates 2 and 3 must use additional command pairs beyond
-those counted at the preceding gate.
+distinct-command count. Freeze the actual repeated derivation set at Gate 1.
+Gates 2 and 3 must use two other command pairs, not commands used in derivation.
+The single-observation candidate is checked from the beginning, so previously
+received commands outside the derivation set may serve as independent checks.
+Multiple gates may therefore become satisfied on the same input. If required
+variation arrives late, choose three repeated commands spanning that variation
+for the derivation set; other combinations remain independent checks.
 
 These thresholds are deterministic acceptance policy, not numerical confidence
 probabilities. "Confirmed" means the documented capture-evidence policy passed;
@@ -307,11 +503,14 @@ Do not try to infer whether a pipe originates from `cat` or a running rtl_433.
   incomplete confirmation alone is not an error. Any contradictory or invalid
   relevant input prevents ID output, even if an earlier prefix reached Gate 3.
   Do not offer button-press guidance while processing a file.
-- **Live mode:** Continue collecting until Gate 3, then print exactly one ID
-  and finish successfully. Verbose messages describe progress and guide remote
-  use. EOF, timeout, or input limits before Gate 3 produce no ID and an
-  explanation with a nonzero exit status. A contradiction fails the collection
-  rather than resetting the candidate and continuing silently.
+- **Live mode:** Guide the operator by default through terminal preparation,
+  control choice, and individual button presses, confirming each requested
+  value from RF JSON. Preparation has no action countdown; `--timeout` limits
+  each requested action. After Gate 3, request and receive Power OFF before
+  printing the ID. `--unguided` instead collects until Gate 3 with a total
+  collection timeout, then prints exactly one ID. EOF, timeout, cancellation,
+  or input limits before completion produce no ID. A contradiction fails the
+  collection rather than resetting the candidate and continuing silently.
 
 There is no `--allow-unconfirmed` option. File mode provides the partial-evidence
 result after full-input validation; live mode requires Gate 3.
@@ -324,27 +523,32 @@ All progress, guidance, warnings, and confirmation explanations go to stderr;
 stdout is reserved for the single resulting Learning ID. Do not echo an ID or
 full captured records in diagnostics.
 
-With `--verbose` / `-v`, report actual counts and specific missing requirements,
-including commands still needing a repeat. Live-mode guidance should read:
+Guided live prompts do not require `-v`. Startup explicitly waits for the
+operator to turn the fireplace OFF and press Return, then asks whether the
+remote adjusts both Light and Fan (Return for Yes, n for No). Only after No,
+ask whether Light is available to select Light/Flame or Power/Flame. JSON input and keyboard input
+remain separate. After preparation, do not require Return after each button:
 
 ```text
-Use your fireplace remote to change several settings, such as Light Up or Down
-and Fan Up or Down. Pause after each change to give the remote time to send it
-again. If a change still needs confirmation, make that same change again.
+Press Power ON once. Waiting for its received command...
+Received: Power ON.
+Select Light on the remote. Press DOWN ONCE; the remote should show 2 bars. Waiting for receipt...
+Received: Light 2.
 ```
 
-Examples of verbose live progress and gate messages:
+Wrong control/level output should explain that the requested setting is still
+pending and repeat the correct direction, including reversal after an overshoot.
+The helper must not claim a fireplace acknowledgement. Keep the plausible-ID
+announcement once, then report final confirmation and request Power OFF.
+
+For explicit unguided collection with `-v`, print a single progress line only
+when it changes; do not repeat received-command counters or gate chatter:
 
 ```text
-3 different commands received.
-4 more needed before your Learning ID is ready.
-2 commands still need to be received again.
-
-Make another change using your remote, then pause.
-
-Step 1 of 3: Your remote has been identified. Keep making different changes.
-Step 2 of 3: The additional commands match. A few more checks are needed.
-Step 3 of 3: All checks passed. Your Learning ID is ready.
+2 more needed before your Learning ID is ready.
+A plausible Learning ID has been created. Now we need to confirm it.
+2 new command checks needed to confirm your Learning ID.
+Your Learning ID is ready.
 ```
 
 File-mode final messages must explain the labels, even without `-v`. Use actual
@@ -355,23 +559,22 @@ Gate 1:
 ```text
 Preliminary: A Learning ID was generated from 3 different commands.
 The commands agree, and each was received at least twice, but this file
-does not contain enough different commands to complete confirmation.
+Two additional different commands are needed to complete confirmation.
 ```
 
 Gate 2:
 
 ```text
-Confirmation incomplete: At least 5 different commands agree with this
-Learning ID, and each was received at least twice.
-Additional checks passed, but full confirmation requires 7 different
-commands, each received at least twice.
+Confirmation incomplete: The repeated derivation commands agree with this
+Learning ID, and one additional different command passed validation.
+One more different command is needed to complete confirmation.
 ```
 
 Gate 3:
 
 ```text
-Confirmed: At least 7 different commands agree with this Learning ID,
-and each was received at least twice. The entire file was checked,
+Confirmed: 3 different derivation commands were received at least twice,
+and at least two additional different commands passed validation. The entire file was checked,
 and no conflicting commands were found.
 All required checks passed.
 ```
@@ -399,8 +602,8 @@ do not describe every validation failure as a disagreement between commands.
 The intended unattended workflow is a normal process pipeline:
 
 ```text
-rtl_433 -R 207 -f 315M -F json | proflame2-learning-id --features fan,light
-cat capture.json | proflame2-learning-id --input-mode file --features fan,light
+rtl_433 -R 207 -f 315M -F json | proflame2-learning-id
+cat capture.json | proflame2-learning-id --input-mode file
 ```
 
 The frequency remains an rtl_433/controller choice. The helper must also work
@@ -422,7 +625,7 @@ being installed as a running service.
   explicit extended records or reject them clearly. The helper must not depend
   on those tools' private logging or timing envelopes.
 - [x] **I3 Document installation and use.** Describe separate installation,
-  feature selection, sufficient capture sequences, invalid-input behavior, and
+  HA-side feature selection, sufficient capture sequences, invalid-input behavior, and
   the existing HA Learning ID import path. Clearly distinguish rtl_433 releases
   that support extended output from the current legacy-only decoder.
 
@@ -438,10 +641,10 @@ being installed as a running service.
 | Pure Python derivation | Existing legacy and extended learning cases unchanged; stable template requirements; sufficient distinct observations; mixed identities/variants and invalid integrity rejected. |
 | Standalone packaging | Build and install the helper/library into a clean environment without HA or rtl_433; no HA imports, source loading tricks, or duplicate codec implementations. |
 | Helper input | File and pipe input; legacy compatibility; complete extended records; unknown models; malformed JSON; conflicting raw/expanded fields; bounds, timeout, EOF, and exit statuses. |
-| Helper evidence gates | Legacy and extended gates at 3/5/7 distinct commands with matching repeats; required command variation; automatic retransmissions; telemetry changes do not inflate counts; additional commands validate the frozen candidate; contradictions fail rather than reset it. |
+| Helper evidence gates | At least three repeated derivation combinations plus two independent single-observation checks for legacy and extended; required command variation; automatic retransmissions; telemetry changes do not inflate counts; derivation combinations cannot also count as independent checks; contradictions fail rather than reset it. |
 | Helper input modes | Named files and regular-file stdin default to file mode; pipes default to live mode; explicit override; file mode validates through EOF including contradictions after Gate 3; file Gates 1/2 emit explained partial results; live EOF/timeout before Gate 3 emits no ID. |
 | Helper user messages | `--verbose` and `-v` report accurate counts, missing repeats, and required variation; live remote guidance uses plain language; file mode never asks for button presses; final file confirmation labels always include explanations. |
-| Helper output | Codec vectors; explicit feature choices; stdout contains only the resulting ID; invalid inputs and diagnostics do not echo IDs or full captured records. |
+| Helper output | Codec vectors; IDs independent of HA feature choices; stdout contains only the resulting ID; invalid inputs and diagnostics do not echo IDs or full captured records. |
 | HA interoperability | Import each helper-generated ID, load the complete profile, and compare generated supported manual TX frames with the shared encoder expectations; refresh remains disabled by default. |
 
 RMT-derived PCM replay and synthesized IQ validate deterministic software

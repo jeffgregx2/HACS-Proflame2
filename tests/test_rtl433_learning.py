@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from dataclasses import asdict
+from pathlib import Path
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.config_entries import SOURCE_USER
+from homeassistant.data_entry_flow import FlowResultType
 
-from custom_components.proflame2.config_flow import Proflame2ConfigFlow
 from custom_components.proflame2.const import (
     BACKEND_ESPHOME,
     BACKEND_FAKE,
@@ -24,7 +26,6 @@ from custom_components.proflame2.const import (
 )
 from custom_components.proflame2.profile import (
     Rtl433ProfileDerivationError,
-    normalize_learning_id_profile_input,
     normalize_manual_rtl433_profile_samples,
     parse_rtl433_samples,
 )
@@ -38,7 +39,8 @@ from custom_components.proflame2.protocol.models import (
     RemoteProfile,
 )
 from custom_components.proflame2.protocol.variants import PROTOCOL_VARIANT_EXTENDED_10_WORD
-from custom_components.proflame2.runtime import async_setup_runtime_entry, async_unload_runtime_entry
+from custom_components.proflame2.rtl433_learning import normalize_learning_id_profile_input
+from custom_components.proflame2.runtime import async_get_runtime_entries
 
 FEATURES = FireplaceFeatures(fan=True, light=True)
 LEGACY = RemoteProfile(0x123456, ECCProfile(5, 7, 1, 8), FEATURES)
@@ -62,6 +64,25 @@ def records(profile, count=7):
     return result
 
 
+def captured_extended_profiles():
+    """Use recorded command sequences, never synthetic repetitions, for import."""
+    corpus = json.loads((Path(__file__).parent / "fixtures/rtl433_helper_decoder_output.json").read_text())
+    for remote in corpus["remotes"]:
+        if remote["records"][0]["protocol_variant"] != PROTOCOL_VARIANT_EXTENDED_10_WORD:
+            continue
+        fixed = 0x84 if "mendota" in remote["name"] else 0x80
+        observations = [row for row in remote["records"] if row["cmd1"] & 0x8C == fixed and row["thermostat"] == 0]
+        first = observations[0]
+        profile = RemoteProfile(
+            first["id"],
+            ECCProfile(0, 0, 0, 0),
+            FEATURES,
+            protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
+            extended_template=ExtendedFrameTemplate(fixed, first["w6"], 0xC8, first["w8"]),
+        )
+        yield pytest.param(profile, observations, id=remote["name"])
+
+
 def test_extended_paste_preserves_frame_and_shared_profile():
     samples = parse_rtl433_samples("\n".join(map(json.dumps, records(EXTENDED, 3)[::2])))
     assert all(sample.frame.is_extended for sample in samples)
@@ -74,35 +95,29 @@ def test_extended_paste_preserves_frame_and_shared_profile():
     assert normalized.profile.data[CONF_EXTENDED_W4_BASE] == 0x80
 
 
-def test_extended_config_flow_accumulates_then_completes():
-    flow = Proflame2ConfigFlow()
-    flow._manual_rtl433_input = {CONF_NAME: "Fireplace", CONF_BACKEND_TYPE: BACKEND_ESPHOME}
-    flow._manual_rtl433_samples = []
-    for index, row in enumerate(records(EXTENDED, 3)[::2]):
-        flow._manual_rtl433_samples.extend(parse_rtl433_samples(json.dumps(row)))
-        flow._validate_manual_rtl433_samples(flow._manual_rtl433_samples)
-        result = flow._try_build_manual_rtl433_learn_result()
-        if index < 2:
-            assert result is None
-    assert result.success
-    assert result.data[CONF_PROTOCOL_VARIANT] == EXTENDED.protocol_variant
-    assert result.final_packet.frame.is_extended
-
-
 def test_mixed_extended_and_legacy_paste_rejected():
     samples = parse_rtl433_samples("\n".join(map(json.dumps, records(EXTENDED, 3) + records(LEGACY, 3))))
     with pytest.raises(Rtl433ProfileDerivationError):
         normalize_manual_rtl433_profile_samples({CONF_NAME: "Fireplace", CONF_BACKEND_TYPE: BACKEND_ESPHOME}, samples)
 
 
-@pytest.mark.parametrize("profile", [LEGACY, EXTENDED])
-async def test_installed_helper_id_imports_into_ha_and_preserves_manual_encoding(profile, hass, monkeypatch):
+@pytest.mark.parametrize(
+    ("profile", "source_records"),
+    [
+        pytest.param(LEGACY, records(LEGACY), id="synthetic-legacy"),
+        pytest.param(EXTENDED, records(EXTENDED), id="synthetic-extended"),
+        *captured_extended_profiles(),
+    ],
+)
+async def test_installed_helper_id_imports_into_ha_and_preserves_manual_encoding(
+    profile, source_records, hass, monkeypatch, enable_custom_integrations
+):
     python = os.environ.get("PROFLAME2_HELPER_PYTHON")
     if not python:
         pytest.skip("Run validate_package.py --ha-interoperability for installed-helper validation")
     process = subprocess.run(
         [python, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", "file"],
-        input="\n".join(map(json.dumps, records(profile))),
+        input="\n".join(map(json.dumps, source_records)),
         capture_output=True,
         text=True,
     )
@@ -114,17 +129,32 @@ async def test_installed_helper_id_imports_into_ha_and_preserves_manual_encoding
     )
     assert normalized.data[CONF_REMOTE_ID] == profile.serial_id
     assert normalized.options[CONF_REFRESH_PERIOD_MINUTES] == 0
-    entry = MockConfigEntry(domain=DOMAIN, title="Fireplace", data=normalized.data, options=normalized.options)
-    entry.add_to_hass(hass)
-    runtime = await async_setup_runtime_entry(hass, entry)
-    try:
-        imported = runtime.remote_profile
-        assert imported == profile
-        assert runtime.refresh_schedule.period_seconds == 0
-        for flame in range(1, 7):
-            for light in range(8):
-                for fan in range(7):
-                    state = FireplaceState(True, flame=flame, light=light, fan=fan)
-                    assert encode_state(state, imported).wire_words == encode_state(state, profile).wire_words
-    finally:
-        await async_unload_runtime_entry(hass, entry)
+    # Exercise the UI boundary, rather than treating an adapter call as a
+    # substitute for importing a helper-generated ID through Home Assistant.
+    flow = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    assert flow["menu_options"] == ["learn", "manual", "manual_legacy"]
+    flow = await hass.config_entries.flow.async_configure(flow["flow_id"], {"next_step_id": "manual"})
+    flow = await hass.config_entries.flow.async_configure(
+        flow["flow_id"],
+        {CONF_NAME: "Helper Import", CONF_BACKEND_TYPE: BACKEND_FAKE, CONF_LEARNING_ID: process.stdout.strip()},
+    )
+    assert flow["step_id"] == "manual_features"
+    flow = await hass.config_entries.flow.async_configure(flow["flow_id"], asdict(profile.features))
+    assert flow["type"] is FlowResultType.CREATE_ENTRY
+    assert CONF_LEARNING_ID not in flow["data"]
+    await hass.async_block_till_done()
+    imported_entry = flow["result"]
+    assert imported_entry.data[CONF_REMOTE_ID] == profile.serial_id
+    runtime = async_get_runtime_entries(hass)[imported_entry.entry_id]
+    assert runtime.remote_profile == profile
+    assert runtime.learning_id == process.stdout.strip()
+    assert runtime.refresh_schedule.period_seconds == 0
+    for flame in range(1, 7):
+        for light in range(8):
+            for fan in range(7):
+                state = FireplaceState(True, flame=flame, light=light, fan=fan)
+                assert encode_state(state, runtime.remote_profile).wire_words == encode_state(state, profile).wire_words
+    assert await hass.config_entries.async_reload(imported_entry.entry_id)
+    await hass.async_block_till_done()
+    assert async_get_runtime_entries(hass)[imported_entry.entry_id].remote_profile == profile
+    assert await hass.config_entries.async_unload(imported_entry.entry_id)

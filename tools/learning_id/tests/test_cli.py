@@ -47,7 +47,7 @@ def commands(count=7, extended=False):
 def run(records, *args, mode="file"):
     text = "\n".join(json.dumps(record) for record in records) + "\n"
     return subprocess.run(
-        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", mode, *args],
+        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", mode, "--unguided", *args],
         input=text,
         capture_output=True,
         text=True,
@@ -55,14 +55,14 @@ def run(records, *args, mode="file"):
 
 
 @pytest.mark.parametrize("extended", [False, True])
-@pytest.mark.parametrize(("count", "label"), [(3, "Preliminary"), (5, "Confirmation incomplete"), (7, "Confirmed")])
+@pytest.mark.parametrize(("count", "label"), [(3, "Preliminary"), (4, "Confirmation incomplete"), (5, "Confirmed")])
 def test_file_levels_and_single_stdout_id(count, label, extended):
     result = run(commands(count, extended))
     assert result.returncode == 0, result.stderr
     assert result.stdout.startswith("PF2-1-E-" if extended else "PF2-1-L-")
     assert len(result.stdout.splitlines()) == 1
     assert label in result.stderr
-    assert "received at least twice" in result.stderr
+    assert "repeat" in result.stderr or "received at least twice" in result.stderr
     assert result.stdout.strip() not in result.stderr
     assert "Press" not in result.stderr
 
@@ -90,7 +90,8 @@ def test_repeats_do_not_increase_distinct_commands():
     result = run(commands(1) * 50, "-v")
     assert result.returncode != 0
     assert not result.stdout
-    assert "1 different commands received" in result.stderr
+    assert "2 more needed before your Learning ID is ready." in result.stderr
+    assert result.stderr.count("2 more needed before your Learning ID is ready.") == 1
 
 
 def test_seven_commands_without_repeats_do_not_pass_first_gate():
@@ -111,18 +112,107 @@ def test_extended_telemetry_is_not_a_new_command():
         )
     result = run(records, "-v")
     assert result.returncode != 0
-    assert "1 different commands received" in result.stderr
+    assert "2 more needed before your Learning ID is ready." in result.stderr
 
 
 @pytest.mark.parametrize("extended", [False, True])
 def test_live_stops_only_at_third_gate(extended):
-    result = run(commands(5, extended), mode="live")
+    result = run(commands(4, extended), mode="live")
     assert result.returncode != 0
     assert not result.stdout
-    result = run(commands(7, extended), "-v", mode="live")
+    result = run(commands(5, extended), "-v", mode="live")
     assert result.returncode == 0, result.stderr
-    assert "Step 3 of 3" in result.stderr
-    assert "Light Up or Down" in result.stderr
+    assert "Your Learning ID is ready." in result.stderr
+    assert "Use Light and Fan values 0, 3, and 6." in result.stderr
+    assert result.stderr.count("A plausible Learning ID has been created. Now we need to confirm it.") == 1
+    assert "different commands received" not in result.stderr
+    assert "commands still need" not in result.stderr
+    assert "Step 1 of 3" not in result.stderr
+
+
+def test_live_switches_from_discovery_to_matches_without_misleading_zero():
+    records = commands()
+    unique, repeats = records[::2], records[1::2]
+    result = run([*unique, *repeats], "-v", mode="live")
+    assert result.returncode == 0, result.stderr
+    lines = result.stderr.splitlines()
+    assert "2 more needed before your Learning ID is ready." in lines
+    assert "3 matches needed to confirm your Learning ID." in lines
+    assert "2 matches needed to confirm your Learning ID." in lines
+    assert "1 match needed to confirm your Learning ID." in lines
+    assert "0 more needed before your Learning ID is ready." not in lines
+    assert "0 matches needed to confirm your Learning ID." not in lines
+    assert "Your Learning ID is ready." in lines
+
+
+def test_plausible_notice_is_shown_without_verbose_mode():
+    result = run(commands(), mode="live")
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.strip() == "A plausible Learning ID has been created. Now we need to confirm it."
+
+
+@pytest.mark.parametrize("extended", [False, True])
+def test_late_required_variation_needs_independent_checks(extended):
+    records = commands(extended=extended)
+    for row in records[:-2]:
+        words = list(bytes.fromhex(row["raw_words"]))
+        words[4] = 6
+        if extended:
+            words[8:] = [lane(words[:8:2]), lane(words[1:8:2])]
+        else:
+            words[6] = transform(6, 0x18)
+        row["raw_words"] = bytes(words).hex()
+    # Previously seen but un-repeated commands can be held-out checks; commands
+    # actually used in derivation cannot also count as independent confirmation.
+    records = [*records[::2], records[1], records[3], records[-1]]
+    result = run(records, "-v", mode="live")
+    assert result.returncode == 0, result.stderr
+    assert "Your Learning ID is ready." in result.stderr
+    assert result.stdout.startswith("PF2-1-E-" if extended else "PF2-1-L-")
+
+
+@pytest.mark.parametrize("extended", [False, True])
+def test_reported_light_fan_sequence_completes_when_repeated(extended):
+    # Synthetic reproduction of the reported sequence, not a hardware capture.
+    light = fan = 0
+    records = []
+    for _ in range(2):
+        actions = [("power", 1)]
+        actions += [("light", value) for value in (1, 2, 3, 2, 1)]
+        actions += [("fan", value) for value in (1, 2, 3, 2, 1)]
+        actions += [("power", 0)]
+        for control, value in actions:
+            if control == "light":
+                light = value
+            elif control == "fan":
+                fan = value
+            power = value if control == "power" else 1
+            words = [0x12, 0x34, 0x56, (0x80 if extended else 0) | power | (light << 4), 6 | (fan << 4)]
+            if extended:
+                words += [0x15, 0xC8, 0]
+                words += [lane(words[:8:2]), lane(words[1:8:2])]
+            else:
+                words += [transform(words[3], 0x57), transform(words[4], 0x18)]
+            records.append(
+                dict(
+                    model="Proflame2-Remote",
+                    protocol_variant="extended_10_word" if extended else "legacy_7_word",
+                    raw_words=bytes(words).hex(),
+                )
+            )
+    result = run(records, "-v", mode="live")
+    assert result.returncode == 0, result.stderr
+    assert "Your Learning ID is ready." in result.stderr
+
+
+@pytest.mark.parametrize("extended", [False, True])
+def test_three_repeated_commands_and_two_single_checks_confirm(extended):
+    rows = commands(5, extended)
+    base = rows[:6]
+    for additional, expected in (([], 1), ([rows[6]], 2), ([rows[6], rows[8]], 3)):
+        result = run([*base, *base, *additional], mode="live")
+        assert result.returncode == (0 if expected == 3 else 1), result.stderr
+        assert bool(result.stdout) == (expected == 3)
 
 
 def test_legacy_compatibility_and_unrelated_models():
@@ -222,7 +312,7 @@ def test_bad_json_and_input_bounds_do_not_echo_input(payload):
 
 def test_live_timeout_on_partial_line():
     process = subprocess.Popen(
-        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--timeout", "0.05"],
+        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--unguided", "--timeout", "0.05"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

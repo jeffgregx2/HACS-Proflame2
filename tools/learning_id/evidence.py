@@ -20,9 +20,9 @@ class Evidence:
     counts: dict[tuple[int, int], int] = field(default_factory=dict)
     profile: RemoteProfile | None = None
     gate: int = 0
-    gate_commands: set[tuple[int, int]] = field(default_factory=set)
     missing: tuple[str, ...] = ("No fireplace commands have been received.",)
     _candidate: RemoteProfile | None = field(default=None, init=False, repr=False)
+    _basis: frozenset[tuple[int, int]] | None = field(default=None, init=False, repr=False)
 
     def add(self, frame: ProflameFrame) -> None:
         """Reject contradictions before deduplication, including unmatched commands."""
@@ -42,20 +42,41 @@ class Evidence:
         self.frames.setdefault(key, frame)
         previous_count = self.counts.get(key, 0)
         self.counts[key] = min(2, previous_count + 1)
-        if previous_count >= 2 or self.gate == 3:
+        if self._basis is not None:
+            checks = len(self.frames.keys() - self._basis)
+            self.gate = 3 if checks >= 2 else 2 if checks else 1
+            return
+        if previous_count >= 2:
             return
         qualified = {key for key, count in self.counts.items() if count >= 2}
         result = derive_remote_profile((self.frames[key] for key in qualified), self.features)
         self.missing = result.missing
         if not qualified:
             self.missing = ("Commands need to be received again before they count toward confirmation.",)
-        if self.gate == 0 and result.profile is not None:
+        if result.profile is not None:
             self.profile = result.profile
-            self.gate = 1
-            self.gate_commands = qualified
-        elif self.gate in (1, 2) and len(qualified - self.gate_commands) >= 2:
-            self.gate += 1
-            self.gate_commands = qualified
+            # Freeze the derivation set; only other combinations confirm it.
+            ordered = [key for key in self.frames if key in qualified]
+            if frame.is_extended:
+                manual = [key for key in ordered if key[0] & 3 == 1]
+                first = manual[0]
+                selected = [first, next(key for key in manual if key[1] != first[1])]
+            else:
+                first = ordered[0]
+                selected = [
+                    first,
+                    next(key for key in ordered if key[0] != first[0]),
+                    next(key for key in ordered if key[1] != first[1]),
+                ]
+            selected = list(dict.fromkeys(selected))
+            for key in ordered:
+                if len(selected) >= 3:
+                    break
+                if key not in selected:
+                    selected.append(key)
+            self._basis = frozenset(selected)
+            checks = len(self.frames.keys() - self._basis)
+            self.gate = 3 if checks >= 2 else 2 if checks else 1
 
     @property
     def awaiting_repeat(self) -> int:
@@ -63,16 +84,23 @@ class Evidence:
         return sum(count < 2 for count in self.counts.values())
 
     def progress(self) -> str:
-        """Explain actual evidence counts without exposing captured values."""
-        target = 7 if not self.gate else len(self.gate_commands) + 2 * (3 - self.gate)
+        """Show one actionable count without claiming missing variation is a match."""
+        if self.gate == 3:
+            return "Your Learning ID is ready."
+        if self._basis is not None:
+            matches = max(0, 2 - len(self.frames.keys() - self._basis))
+            noun = "check" if matches == 1 else "checks"
+            return f"{matches} new command {noun} needed to confirm your Learning ID."
+        target = 3
         remaining = max(0, target - len(self.frames))
-        lines = [
-            f"{len(self.frames)} different commands received.",
-            f"{remaining} more needed before your Learning ID is ready.",
-            f"{self.awaiting_repeat} commands still need to be received again.",
-        ]
-        lines.extend(self.missing)
-        return "\n".join(lines)
+        if remaining:
+            return f"{remaining} more needed before your Learning ID is ready."
+        repeated = len(self.frames) - self.awaiting_repeat
+        matches = max(0, target - repeated)
+        if matches:
+            noun = "match" if matches == 1 else "matches"
+            return f"{matches} {noun} needed to confirm your Learning ID."
+        return "Change both Light and Fan, then repeat those settings."
 
     def file_summary(self) -> str:
         """Always explain what the final file-mode confirmation level means."""
@@ -87,17 +115,16 @@ class Evidence:
             return (
                 f"Preliminary: A Learning ID was generated from {repeated} different commands.\n"
                 "The commands agree, and each was received at least twice, but this file\n"
-                "does not contain enough different commands to complete confirmation."
+                "Two additional different commands are needed to complete confirmation."
             )
         if self.gate == 2:
             return (
-                f"Confirmation incomplete: {repeated} different commands agree with this\n"
-                "Learning ID, and each was received at least twice.\n"
-                "Additional checks passed, but full confirmation requires at least 7 different\n"
-                "commands, each received at least twice."
+                "Confirmation incomplete: The repeated derivation commands agree with this\n"
+                "Learning ID, and one additional different command passed validation.\n"
+                "One more different command is needed to complete confirmation."
             )
         return (
-            f"Confirmed: {repeated} different commands agree with this Learning ID,\n"
-            "and each was received at least twice. The entire file was checked,\n"
+            f"Confirmed: {len(self._basis or ())} different derivation commands were received at least twice,\n"
+            "and at least two additional different commands passed validation. The entire file was checked,\n"
             "and no conflicting commands were found.\nAll required checks passed."
         )

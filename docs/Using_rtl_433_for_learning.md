@@ -32,7 +32,9 @@ fields that an older decoder never outputs.
 The extended-capable development decoder is maintained in the project's
 [rtl_433 fork](https://github.com/jeffgregx2/rtl_433), on the
 `proflame2-extended` branch. The tested source revision for these instructions
-is `13dfe201a490fb5d3f1ad12ad315ee8b6c5314b8`. The companion helper is in the
+is `13cae578111d92434a6c09212aae0afa0141a191`. This revision generated the
+capture-backed JSON fixtures used by the helper's offline interoperability tests;
+it is not a claim of completed live-radio acceptance. The companion helper is in the
 HACS-Proflame2 `rtl433-enhancements` development branch. Use the helper that
 generates remote-only IDs in the [documented format](learning_id_encoding.md).
 Rebuild older experimental helper installations if they still ask for features.
@@ -63,22 +65,36 @@ executable. With an extended remote, its JSON output should identify
 field, containing 20 hexadecimal characters. A row containing only legacy
 command/error fields is not sufficient evidence for an extended profile.
 
-## Install the Companion Helper
+## Run the Companion Helper Without Keeping an Environment
 
 Open a terminal in the helper-enabled HACS-Proflame2 source checkout supplied by
 the maintainer. It must contain both `tools/learning_id` and the package metadata
 in `pyproject.toml`; these instructions do not apply to an ordinary older checkout.
 
-On Linux or macOS:
+On Linux or macOS, use the temporary runner from that checkout:
 
 ```sh
-python3 -m venv .venv-learning-id
-. .venv-learning-id/bin/activate
-python -m pip install .
-proflame2-learning-id --help
+HELPER_RUNNER="$PWD/tools/learning_id/run.sh"
+bash "$HELPER_RUNNER" --help
 ```
 
-On Windows, use PowerShell from the same source directory:
+Each invocation creates a native Python environment and stages the helper's
+packaging sources under `/tmp`. It installs and runs the helper, then removes
+the environment and staged files on completion, failure, Ctrl-C, or termination.
+It does not create a persistent environment or build metadata in your checkout.
+Python's venv/pip support and access to install build dependencies are required.
+Setup messages go to stderr; stdout remains reserved for the Learning ID.
+Forced termination with SIGKILL or a machine failure cannot run cleanup.
+
+Keep captures and saved IDs in a private, persistent directory outside `/tmp`.
+The runner preserves your current directory and passes through all helper
+arguments. To choose a Python interpreter, set `LEARNING_ID_PYTHON`.
+
+### Optional Persistent Installation
+
+If you explicitly want an installed command instead, create a virtual environment
+and run `python -m pip install .` there. On Windows, use PowerShell from the
+source directory:
 
 ```powershell
 py -3 -m venv .venv-learning-id
@@ -86,13 +102,15 @@ py -3 -m venv .venv-learning-id
 .\.venv-learning-id\Scripts\proflame2-learning-id.exe --help
 ```
 
-For the following commands, Windows users can use the full helper executable
-path shown above. Use a terminal that preserves each rtl_433 JSON line when
+For saved-file processing, Windows users can replace `bash "$HELPER_RUNNER"`
+with the full helper executable path shown above. The managed `--rf-band` launch
+option belongs to the Linux/macOS runner, not the standalone helper command.
+Use a terminal that preserves each rtl_433 JSON line when
 piping or saving output. If installation or USB-driver setup is unfamiliar,
 ask for assistance and include the error text, operating system, and software
 version. Do not change USB drivers for unrelated devices.
 
-The live-pipe examples below use a Linux/macOS terminal. On Windows, use the
+The managed live examples below use a Linux/macOS terminal. On Windows, use the
 saved-JSON workflow instead; the helper's live pipe reader is not a Windows
 implementation. Record JSON with Command Prompt (`cmd.exe`), rather than older
 Windows PowerShell's default file redirection, to avoid changing the text encoding.
@@ -109,32 +127,95 @@ Use the band printed on your native remote:
 Extended frames do not imply a particular frequency. Configure the controller's
 band separately; a Learning ID does not contain the band.
 
-The helper does not ask which features your fireplace supports. The ID contains
-only learned remote information. Choose fan, light, front-burner, auxiliary,
-and CPI options later in Home Assistant's **Select supported features** step.
+The ID contains only learned remote information. Guided capture asks which
+remote controls are available solely to choose a button sequence; this does not
+configure fireplace features or change the ID's encoding. Choose fan, light,
+front-burner, auxiliary, and CPI options later in Home Assistant's **Select
+supported features** step.
 
 ## Generate a Learning ID
 
-Put the remote in manual mode with thermostat mode off. Use only one remote
-during collection. Leave pilot, auxiliary, and front-burner settings unchanged
-unless you need one of them to provide command variation.
+Start with the fireplace OFF and the remote's thermostat mode disabled. Use only
+one remote during collection and do not use HA controls during the test. The
+helper will give you time to prepare before it asks for the first button press.
 
 For a 315 MHz remote, run:
 
 ```sh
-rtl_433 -R 207 -f 315M -F json | proflame2-learning-id --timeout 600 -v
+bash "$HELPER_RUNNER" --rf-band 315 --timeout 600
 ```
 
-For a 433.92 MHz remote, change only the tuning option:
+For a 433.92 MHz remote:
 
 ```sh
-rtl_433 -R 207 -f 433.92M -F json | proflame2-learning-id --timeout 600 -v
+bash "$HELPER_RUNNER" --rf-band 433 --timeout 600
 ```
 
-Place the remote near the SDR antenna and follow the helper's progress messages. It collects radio
-output automatically; do not paste individual lines into HA.
+This managed mode starts rtl_433, supplies its JSON to the helper, and stops
+that receiver when learning finishes, fails, or is cancelled. Use
+`--rtl433 /path/to/rtl_433` to choose a particular executable. It stops only
+the receiver it started, not other SDR programs or processes.
 
-### Which Buttons to Press
+Before opening the SDR, the runner performs offline decoder checks with known
+legacy and extended test frames, including the extended terminal-bit case. It
+checks decoded JSON, not just the reported version. If the selected program is
+missing or incompatible, it asks for the full path to a compatible rtl_433;
+type `q` to cancel. The selected path is not saved. Use `--rtl433` on later runs
+to avoid choosing it again. With `--unguided`, an incompatible executable fails
+without an interactive path prompt.
+
+Managed reception requires an extended-capable build even for a legacy remote.
+Compatible older legacy JSON can still be processed with the saved-file flow.
+Shell aliases/functions are not used to start the receiver: if your working
+`rtl_433` command is an alias, supply its actual executable path. `type -a rtl_433`
+in another terminal can help locate available commands and aliases.
+
+One receiver version line appears before preparation. Other startup messages
+are captured separately so they do not interrupt the instructions. On failure,
+the runner prints a bounded diagnostic tail; it does not create a persistent
+log file. Offline compatibility does not establish SDR access or live reception.
+
+You can still supply JSON through an external pipeline, but then the shell owns
+the rtl_433 process. After the helper prints the ID, that receiver can keep
+running until another transmission or Ctrl-C; the helper has already finished.
+Managed mode avoids this apparent hang and releases the SDR automatically.
+
+Place the remote near the SDR antenna. Live collection is guided by default:
+
+1. Turn the fireplace OFF, disable thermostat mode, and press Return in the
+   terminal when ready. There is no preparation countdown.
+2. Answer whether your remote adjusts both Light and Fan: Return means Yes;
+   `n` means No. Only after No, answer whether Light is available. The helper
+   then uses Light and Flame, or Power and Flame if Light is unavailable.
+3. Follow the **Power ON** prompt. Then follow each individual button prompt,
+   such as **Select Light; press DOWN once; the remote should show 2 bars**. Reselect the named control
+   each time because some native remotes automatically return to Flame.
+4. Wait for **Received: Light 2** and the next instruction. Do not press Return
+   after remote button presses: receipt is confirmed from the decoded RF data.
+   The helper chooses the next setting and repeats combinations automatically.
+5. When confirmation passes, follow the final Power OFF prompt. The helper
+   confirms that received command and prints your Learning ID.
+
+The first plausible-ID announcement is not completion. A wrong control or level
+does not advance the requested action; read the corrected instruction. If the
+remote has moved past the requested value, the helper tells you which direction
+to press next. Type `q` and Return, or press Ctrl-C, to cancel without an ID.
+
+Light/Fan and Light/Flame sequences group changes by control, sweeping levels
+1 through 3 and back to 1 before switching modes. The helper stops the sequence
+as soon as the evidence checks pass, avoiding unnecessary presses. The Power/Flame
+fallback never requests flame zero and pauses for your confirmation before
+another power-on cycle; follow the fireplace's normal shutdown/startup guidance.
+With `--timeout 600`, each requested action has ten minutes for receipt. Terminal
+preparation and shutdown pauses have no countdown. These are received remote
+commands, not acknowledgements from the fireplace.
+
+Live guidance needs an interactive Linux/macOS terminal separate from the JSON
+pipe. For automation, add `--unguided`; that mode retains a total collection
+timeout and requires fully confirmed evidence before output. Saved-file input
+does not prompt for button presses.
+
+### Button Sequence for Saved Files or Unguided Collection
 
 If your fireplace supports fan and light, this is an example sequence:
 
@@ -146,7 +227,7 @@ If your fireplace supports fan and light, this is an example sequence:
    operating instructions and allow its normal shutdown/startup time.
 
 **Pause after each individual setting change**, not just after each numbered
-step. Each counted command must be received at least twice. Let the remote send
+step. Each initial derivation command must be received at least twice. Let the remote send
 its automatic repeat, watching `-v` progress to confirm it counted. Repeat timing
 varies between remotes; do not assume two seconds is sufficient. If necessary,
 return to a prior setting and then select the target setting again.
@@ -156,14 +237,16 @@ another supported control. Avoid flame zero during collection: depending on the
 mode and remote, it can shut the fireplace off. On native remotes that revert to
 the flame control after inactivity, reselect Light or Fan before adjusting it.
 
-At least seven different commands with matching repeats are needed for full
-confirmation, and the commands must provide the variation the helper requests.
-Seven commands alone do not guarantee completion. Repeated identical commands
-or temperature updates do not count as new commands.
+Full confirmation needs at least three different commands received twice with
+the required variation, followed by validation against two other combinations.
+Those two checks need only one observation each and cannot reuse commands used
+in derivation. Previously received combinations outside the derivation set can
+also supply these independent checks. Repeated identical commands or temperature
+updates do not count as new commands.
 
-Live collection prints a Learning ID only after full confirmation. With
-`--timeout 600`, it stops unsuccessfully after ten minutes if the required
-evidence has not arrived. A confirmed ID means the capture checks passed, not
+Live collection prints a Learning ID only after full confirmation. Unguided
+collection with `--timeout 600` stops unsuccessfully after ten minutes if the
+required evidence has not arrived. A confirmed ID means the capture checks passed, not
 that control of a physical fireplace has been tested.
 
 ## Use a Saved JSON Capture Instead
@@ -179,7 +262,7 @@ Perform the same button sequence, then press Ctrl-C to stop recording. For a
 `2>&1`, because startup/debug text is not JSON. Then run:
 
 ```sh
-proflame2-learning-id remote-capture.json -v
+bash "$HELPER_RUNNER" remote-capture.json -v
 ```
 
 File mode validates the entire file and may generate an ID labeled
@@ -188,6 +271,11 @@ full confirmation needs. Collect more commands/repeats before treating those
 results as fully confirmed. Conflicting relevant records prevent an ID from
 being generated. Explicitly use `--input-mode file` if piping a saved file
 through another command; pipes otherwise default to live collection.
+
+The confirmation level is reported alongside the ID, not encoded into it.
+Home Assistant checks the ID's format and checksum but cannot establish how
+many observations were collected. A successful import is not a substitute for
+the helper's full confirmation or a test with your fireplace.
 
 ## Save and Import the ID
 

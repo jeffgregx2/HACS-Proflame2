@@ -43,8 +43,6 @@ from custom_components.proflame2.const import (
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
     CONF_FRONT,
-    CONF_INITIAL_FRAME,
-    CONF_INITIAL_PACKET_SOURCE,
     CONF_LEARNING_DEBUG_LOGGING,
     CONF_LEARNING_ID,
     CONF_LIGHT,
@@ -55,7 +53,6 @@ from custom_components.proflame2.const import (
     CONF_PROTOCOL_VARIANT,
     CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
-    CONF_RTL433_SAMPLES,
     CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
     CONF_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DATA_FAKE_LEARNING_DELAY,
@@ -162,7 +159,7 @@ async def test_refresh_period_initial_setup_routes(hass, route):
             CONF_REFRESH_PERIOD_MINUTES: 10,
         }
     else:
-        # Guided and rtl_433-assisted learning finish through this shared form.
+        # Guided learning finishes through this shared form.
         flow._learn_input = {CONF_NAME: "Test Fireplace", CONF_BACKEND_TYPE: BACKEND_YARDSTICK}
         flow._learn_result = LearnResult(success=True, remote_id=0x3B3F02, c1=5, d1=7, c2=1, d2=8)
         submit = flow.async_step_learn_features
@@ -495,6 +492,19 @@ async def test_legacy_values_button_retains_old_form(hass) -> None:
     assert CONF_LEARNING_ID not in fields
 
 
+async def test_setup_menus_use_learning_ids_instead_of_json_paste(hass) -> None:
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    assert (await flow.async_step_user())["menu_options"] == ["learn", "manual", "manual_legacy"]
+    assert (await flow.async_step_learn_failed())["menu_options"] == ["retry_learn", "manual", "manual_legacy"]
+    text = json.loads(Path("custom_components/proflame2/translations/en.json").read_text())["config"]["step"]
+    for step in ("user", "learn_failed"):
+        assert "manual_rtl433" not in text[step]["menu_options"]
+    assert not any(step.startswith("manual_rtl433") for step in text)
+
+
 @pytest.mark.parametrize("extended", [False, True])
 async def test_learning_id_import_loads_complete_runtime_profile(hass, monkeypatch, extended) -> None:
     """Exercise the UI, persisted fields, sensor, and TX encoder end to end."""
@@ -670,135 +680,6 @@ async def test_learning_id_feature_selection_validates_options_and_rechecks_owne
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "controller_in_use"
     assert hass.config_entries.async_entries(DOMAIN) == [other]
-
-
-async def test_manual_rtl433_learning_captures_buttons_then_confirms_remote_learned(hass) -> None:
-    """rtl_433 manual learning should collect pasted rows before feature setup."""
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_USER},
-    )
-    assert "manual_rtl433" in result["menu_options"]
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={"next_step_id": "manual_rtl433"},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_NAME: "Living Room Fireplace",
-            CONF_FIREPLACE_SHORT_NAME: "---",
-            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
-        },
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_prompt"
-    assert "**Power**" in result["description_placeholders"]["instruction"]
-    assert result["description_placeholders"]["rtl433_command"] == "rtl_433 -f 315M -R 207 -M level -F json"
-    assert (
-        "rtl_433-assisted manual learning guide" in result["description_placeholders"]["rtl433_manual_learning_guide"]
-    )
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=01 cmd2=16 err1=76 err2=ef"},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_prompt"
-    assert "**Temp Down**" in result["description_placeholders"]["instruction"]
-    assert result["description_placeholders"]["sample_count"] == "1"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=31 cmd2=26 err1=25 err2=bc"},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_prompt"
-    assert "**Temp Up**" in result["description_placeholders"]["instruction"]
-    assert result["description_placeholders"]["sample_count"] == "2"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=51 cmd2=36 err1=83 err2=8d"},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_power_off"
-
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={})
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "learn_features"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_FAN: True,
-            CONF_LIGHT: True,
-            CONF_FRONT: False,
-            CONF_AUX: False,
-            CONF_CPI: False,
-            CONF_DEBUG_LOGGING: False,
-            CONF_ACTIVE_LISTENING: False,
-            CONF_FIREPLACE_SHORT_NAME: "---",
-        },
-    )
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_BACKEND_TYPE] == BACKEND_YARDSTICK
-    assert result["data"][CONF_REMOTE_ID] == 0x3B3F02
-    assert result["data"][CONF_C1] == 5
-    assert result["data"][CONF_D1] == 7
-    assert result["data"][CONF_C2] == 1
-    assert result["data"][CONF_D2] == 8
-    assert result["data"][CONF_INITIAL_PACKET_SOURCE] == "rtl433_manual"
-    assert result["data"][CONF_INITIAL_FRAME]["cmd1"] == 0x51
-    assert result["data"][CONF_INITIAL_FRAME]["cmd2"] == 0x36
-
-
-async def test_manual_rtl433_learning_rejects_invalid_paste_without_advancing(hass) -> None:
-    """Invalid rtl_433 rows should keep the user on the same prompt."""
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_USER},
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={"next_step_id": "manual_rtl433"},
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_NAME: "Living Room Fireplace",
-            CONF_FIREPLACE_SHORT_NAME: "---",
-            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
-        },
-    )
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=01 cmd2=16 err1=76"},
-    )
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_prompt"
-    assert result["errors"] == {CONF_RTL433_SAMPLES: "invalid_rtl433_samples"}
-    assert result["description_placeholders"]["sample_count"] == "0"
-    assert "**Power**" in result["description_placeholders"]["instruction"]
-
-
-def test_manual_rtl433_prompt_translation_warns_about_duplicate_output() -> None:
-    """The user-facing paste prompt should warn about delayed duplicate rtl_433 rows."""
-
-    translations = Path("custom_components/proflame2/translations/en.json").read_text(encoding="utf-8")
-
-    assert "Paste the newest rtl_433 JSON line" in translations
-    assert "Ignore duplicate lines from earlier button presses" in translations
-    assert "{rtl433_manual_learning_guide}" in translations
-    assert "github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/rtl433_manual_learning.md" not in translations
 
 
 async def test_manual_entry_form_exposes_only_hardware_backends_by_default(hass) -> None:

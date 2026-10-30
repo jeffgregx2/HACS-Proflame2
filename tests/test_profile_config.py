@@ -48,7 +48,6 @@ from custom_components.proflame2.const import (
 )
 from custom_components.proflame2.profile import (
     InvalidBackendError,
-    InvalidLearningIdError,
     InvalidNibbleError,
     InvalidRemoteIdError,
     InvalidRtl433SamplesError,
@@ -61,7 +60,6 @@ from custom_components.proflame2.profile import (
     default_feature_options,
     normalize_entry_options,
     normalize_feature_options,
-    normalize_learning_id_profile_input,
     normalize_manual_profile_input,
     normalize_manual_rtl433_profile_input,
     normalize_saved_profile_input,
@@ -78,6 +76,7 @@ from custom_components.proflame2.protocol.models import (
     RemoteProfile,
 )
 from custom_components.proflame2.rf.registry import get_backend_definition, normalize_controller_id
+from custom_components.proflame2.rtl433_learning import InvalidLearningIdError, normalize_learning_id_profile_input
 from custom_components.proflame2.version import (
     DEFAULT_INTEGRATION_VERSION,
     ENABLE_FAKE_BACKEND_ENV,
