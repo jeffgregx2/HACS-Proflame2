@@ -80,6 +80,25 @@ Local commits may later be pushed, so the same rule applies immediately.
   inform the maintainer. Editing a post does not guarantee removal from prior
   notifications or copies.
 
+## Development Checkouts
+
+- Perform mainline development in the primary repository checkout. Use normal
+  branches there for sequential work; a feature branch does not itself require
+  a separate worktree.
+- Use an additional worktree only for parallel work or an isolated baseline
+  where switching the primary checkout would disrupt or confuse ongoing
+  development. Identify its purpose and branch before creating it.
+- Additional worktrees must use the approved external worktree directory,
+  never a directory inside the primary repository or the projects directory.
+- Keep the primary checkout as the integration point. Changes in another
+  worktree are not present there until deliberately integrated.
+- Retire worktrees when their parallel effort is complete and all desired
+  changes have been integrated. Check tracked, untracked, and private files
+  for anything that still needs preserving before removal.
+- Preserve unrelated work and use normal Git worktree removal. Do not force
+  removal, discard changes, or delete unmerged branches without explicit
+  approval. Do not let completed worktrees accumulate indefinitely.
+
 ## Repository Structure
 
 Organize code by domain and responsibility, not by vague utility buckets.
