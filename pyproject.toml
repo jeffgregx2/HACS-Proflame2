@@ -37,8 +37,12 @@ description = "Offline Proflame2 protocol library and rtl_433 Learning ID tool"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.scripts]
+proflame2-learning-id = "proflame2_learning_id.cli:main"
+
 [tool.setuptools]
-packages = ["proflame2_protocol"]
+packages = ["proflame2_protocol", "proflame2_learning_id"]
 
 [tool.setuptools.package-dir]
 proflame2_protocol = "custom_components/proflame2/protocol"
+proflame2_learning_id = "tools/learning_id"
