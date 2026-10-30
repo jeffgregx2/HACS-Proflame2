@@ -48,8 +48,12 @@ def normalize_rtl433_record(record: object) -> Rtl433Frame | None:
         raise ValueError("Unsupported fireplace protocol format.")
     extended = variant == PROTOCOL_VARIANT_EXTENDED_10_WORD
     tail = ("w6", "w7", "w8", "w9", "w10") if extended else ("err1", "err2")
-    if extended and any(key in record for key in ("err1", "err2", "pilot")):
-        raise ValueError("Extended records must not contain legacy error or pilot fields.")
+    if extended and any(key in record for key in ("err1", "err2")):
+        raise ValueError("Extended records must not contain legacy error fields.")
+    # Extended pilot meaning is not yet established. Preserve compatibility
+    # with earlier records that omit it; never infer its value from W4 bit 7.
+    if extended and "pilot" in record and (type(record["pilot"]) is not int or record["pilot"] != -1):
+        raise ValueError("Extended pilot must be -1 (unknown) until its mapping is established.")
     if not extended and any(key in record for key in ("w6", "w7", "w8", "w9", "w10")):
         raise ValueError("Extended fields require an explicit extended protocol format.")
     expected_mic = "DIGEST" if extended else "PARITY"

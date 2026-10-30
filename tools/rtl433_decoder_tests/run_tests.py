@@ -76,6 +76,34 @@ class DecoderTests(unittest.TestCase):
                 with self.subTest(variant=expected["protocol_variant"], length=len(row)):
                     self.assertEqual(self.decode(row), expected)
 
+    def test_pretty_layout_uses_original_control_columns(self):
+        columns = (0, 25, 51, 77)
+        for variant, expected in GOLDEN.items():
+            row = encode(list(bytes.fromhex(expected["raw_words"])))
+            process = subprocess.run([str(self.binary), code(row), "kv"], capture_output=True, text=True)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertNotIn("Sanitizer", process.stderr)
+            lines = [line for line in process.stdout.splitlines() if line and not line.startswith("_")]
+            keys = [
+                ["time", None, "Variant"],
+                ["model", None, "Id"],
+                ["Cmd1", "Cmd2", "Err1", "Err2"] if variant == "legacy" else ["Cmd1", "Cmd2", "W6", "W7"],
+            ]
+            if variant == "extended":
+                keys.append(["W8", "W9", "W10"])
+            keys += [
+                ["Pilot", "Light", "Thermostat", "Power"],
+                ["Front", "Fan", "Aux", "Flame"],
+                ["Integrity", None, "Raw words"],
+            ]
+            self.assertEqual(len(lines), len(keys), process.stdout)
+            for line, row_keys in zip(lines, keys, strict=True):
+                for index, key in enumerate(row_keys):
+                    if key is not None:
+                        self.assertEqual(line.index(key), columns[index], process.stdout)
+            self.assertIn("Pilot     : -1" if variant == "extended" else "Pilot     : 0", process.stdout)
+            self.assertEqual(lines[-1].index("Raw words"), lines[-2].index("Aux"))
+
     def test_captured_corpus(self):
         accepted = 0
         for name in ("issue_15_tmfsla_extended_capture.json", "issue_26_mendota_extended_capture.json"):
@@ -162,6 +190,17 @@ class DecoderTests(unittest.TestCase):
                     self.assertEqual(actual["protocol_variant"], expected["protocol_variant"])
                     self.assertEqual(actual["raw_words"], expected["raw_words"])
                     self.assertEqual(actual["mic"], expected["mic"])
+                    self.assertEqual(actual["pilot"], str(expected["pilot"]))
+                result = subprocess.run([*command, "-F", "kv"], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = result.stdout.splitlines()
+                time_line = next(line for line in lines if line.startswith("time"))
+                controls = next(line for line in lines if line.startswith("Front"))
+                integrity = next(line for line in lines if line.startswith("Integrity"))
+                self.assertEqual(time_line.index("Variant"), controls.index("Aux"))
+                self.assertEqual(integrity.index("Raw words"), controls.index("Aux"))
+                pilot_line = next(line for line in lines if line.startswith("Pilot"))
+                self.assertTrue(pilot_line.startswith(f"Pilot     : {expected['pilot']}"))
                 # Silence and low-amplitude deterministic noise must not decode.
                 for data in (bytes((128, 128)) * 60000, bytes(126 + i % 5 for i in range(120000))):
                     path.write_bytes(data)

@@ -35,8 +35,17 @@ describes the documented custom alternating-word calculation, not a CRC.
 Legacy previously reported `CHECKSUM` despite checking word parity only. The new
 `PARITY` label is an intentional compatibility correction. Legacy command/error
 bytes remain available. Extended W6/W7 are not legacy error bytes, so extended
-records expose W6-W10 and omit `err1`, `err2`, and the unestablished `pilot` field.
+records expose W6-W10, omit `err1` and `err2`, and report integer `pilot=-1`
+to mean unknown. Extended W4 bit 7 is not yet a validated pilot mapping. Once
+that mapping is established, the decoder and consumers can be updated to use
+`0/1`; the current sentinel must not be treated as a pilot state.
 Power and flame zero are independent, including power on with flame zero.
+
+Pretty output preserves the original control columns (offsets 0, 25, 51, 77).
+`Variant` follows `time` in column 3, and `Raw words` follows `Integrity` in
+column 3, exactly under `Aux`. Extended command rows contain `Cmd1/Cmd2/W6/W7`
+followed by `W8/W9/W10`. Layout assertions exercise the actual KV formatter,
+including output redirected to a pipe; JSON and CSV checks cover the sentinel.
 
 Capture-derived rows retain their provenance in the existing
 `tests/fixtures/issue_15_tmfsla_extended_capture.json`,

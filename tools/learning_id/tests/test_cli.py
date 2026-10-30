@@ -162,6 +162,24 @@ def test_extended_never_enters_legacy_path():
     assert not result.stdout
 
 
+def test_extended_unknown_pilot_is_accepted():
+    records = commands(7, True)
+    for record in records:
+        record["pilot"] = -1
+    result = run(records)
+    assert result.returncode == 0, result.stderr
+    assert "Confirmed" in result.stderr
+
+
+@pytest.mark.parametrize("pilot", [0, 1, -2, True, "-1"])
+def test_extended_pilot_cannot_claim_an_unestablished_mapping(pilot):
+    records = commands(7, True)
+    records[-1]["pilot"] = pilot
+    result = run(records)
+    assert result.returncode != 0
+    assert not result.stdout
+
+
 def test_named_file_and_regular_stdin_defaults(tmp_path):
     path = tmp_path / "capture.json"
     path.write_text("\n".join(map(json.dumps, commands(3))))

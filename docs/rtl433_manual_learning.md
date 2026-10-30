@@ -243,6 +243,10 @@ Proflame2 support. The baseline decoder reviewed for this implementation accepts
 legacy seven-word packets only; installing a distribution package alone does
 not establish extended support. The matching decoder adds explicit
 `protocol_variant`, complete `raw_words`, and extended W6-W10 fields.
+Extended output reports `Pilot: -1` (`"pilot": -1` in JSON), meaning that the
+pilot setting is unknown. This is not an inferred on/off value. Once the
+extended pilot mapping is validated, the decoder and helper can be updated to
+use `0/1`. Earlier extended JSON records that omit this field remain accepted.
 
 Declare the features your fireplace supports using `--features`: `fan`, `light`,
 `front`, `aux`, and `cpi`, separated by commas, or `none`. `front` means the

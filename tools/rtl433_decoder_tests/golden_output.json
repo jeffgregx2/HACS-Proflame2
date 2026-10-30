@@ -37,6 +37,7 @@
     "fan": 2,
     "aux": 0,
     "flame": 0,
-    "mic": "DIGEST"
+    "mic": "DIGEST",
+    "pilot": -1
   }
 }

@@ -112,6 +112,9 @@ the parsing loop inside legacy and extended branches.
   thermostat, flame, fan, auxiliary, and burner mappings. Preserve power and
   flame zero independently. Interpret the pilot field only where established
   for that variant; extended W4 bit 7 must not be presented as legacy pilot.
+  Emit extended `pilot=-1` to explicitly mean unknown. Once a capture-backed
+  extended pilot mapping is established, update the decoder and consumers to
+  report validated `0/1` values. The sentinel is not a mapped pilot state.
   Retain W6-W8 as raw fields; additional temperature/setpoint output requires
   its own capture-backed mapping and tests.
 - [x] **D6 Emit the agreed output.** Update `output_fields`, source protocol
@@ -135,7 +138,7 @@ shared meanings retain their current names and types.
 | `err1`, `err2` | Existing legacy integrity bytes | Omit; W6/W7 are not legacy integrity bytes. |
 | `w6`, `w7`, `w8`, `w9`, `w10` | Omit | Preserve each received byte. |
 | `raw_words` | Complete seven-byte wire sequence | Complete ten-byte wire sequence |
-| `pilot` | Existing established mapping | Omit until its meaning is established. |
+| `pilot` | Existing established `0/1` mapping | Integer `-1` means unknown until its meaning is established. |
 | `mic` | Report the parity check actually performed. | Use rtl_433's accepted label for the validated custom integrity calculation. |
 
 Use a fixed-width hexadecimal string for `raw_words` in on-air order. Use
@@ -148,6 +151,29 @@ Correct that label explicitly to `PARITY`, with a documented compatibility
 note. Select the upstream-appropriate extended `mic` label during B3; retain
 the exact custom algorithm in the decoder documentation. Do not invent a CRC
 or claim legacy command-integrity validation that was not performed.
+
+### Human-Readable Output Layout
+
+The original control rows define the column starts: 0, 25, 51, and 77 characters
+from the left margin. Keep these sections and column anchors for both variants:
+
+- Header: `time` in column 1 and `Variant` in column 3; `model` in column 1 and
+  `Id` in column 3 on the next line.
+- Command/integrity bytes: legacy `Cmd1`, `Cmd2`, `Err1`, `Err2` occupy columns
+  1-4. Extended `Cmd1`, `Cmd2`, `W6`, `W7` occupy columns 1-4, followed by
+  `W8`, `W9`, `W10` in columns 1-3 on the next line.
+- Controls: `Pilot`, `Light`, `Thermostat`, `Power` occupy columns 1-4;
+  `Front`, `Fan`, `Aux`, `Flame` occupy columns 1-4 on the next line.
+  Extended `Pilot` is `-1` (unknown), preserving this same layout.
+- Final line: `Integrity` in column 1 and `Raw words` in column 3, aligned
+  exactly beneath `Aux`.
+
+This layout applies to the pretty key/value formatter for explicitly marked
+Proflame2 records. Other devices retain their normal formatting. JSON/CSV field
+names, types, and values remain unchanged except for the added extended
+`pilot=-1` field. Consumers accept prior extended records that omit `pilot`,
+and accept the integer `-1` sentinel when present. They must not interpret W4
+bit 7 as a known pilot state or accept `0/1` until the mapping is validated.
 
 Exit gate: the C decoder passes the captured corpus, malformed-input cases,
 sanitizers, and rtl_433's applicable tests without shared slicer changes.
@@ -476,4 +502,6 @@ python tools/learning_id/validate_package.py --ha-interoperability
 
 See the C runner README for the baseline overflow command. Run the normal Python
 suite separately; optional firmware and hardware checks are not counted as
-passes when skipped. Live SDR reception remains unvalidated.
+passes when skipped. User-provided live ARM/RTL-SDR output demonstrates extended
+power and light reception. Full live helper collection and broader hardware
+validation remain pending.
