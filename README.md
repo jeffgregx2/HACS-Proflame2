@@ -99,12 +99,15 @@ Once the Proflame2 integration is installed in Home Assistant, it is easy to add
 9. Select the fireplace features your installation supports.
 10. Validate basic controls from Home Assistant.
 
-During setup, learning mode asks you to press specific buttons on your original fireplace remote.  This is used to learn the proper control codes used to establish communications.   You must have a functioning original remote in order to set up this integration.
+When you choose **Learn from remote**, setup asks you to press specific buttons
+on your original fireplace remote to learn its control codes. A functioning
+original remote is required for this learning method; importing an existing
+Learning ID does not require repeating those button presses.
 
-If normal guided learning cannot decode your remote, you can use
-[rtl_433-assisted Learning ID generation](docs/Using_rtl_433_for_learning.md) with a
-separate SDR receiver. This is an advanced setup path; LilyGO and YardStick
-remain the controllers used after learning.
+If normal guided learning cannot decode your remote, you can instead
+[enter a Learning ID](docs/add_fireplace_profile.md#Using_learning_ids).
+Copy one from an existing configured fireplace or generate one with the
+companion helper. LilyGO and YardStick remain the controllers used after setup.
 
 For more detail on the setup choices, see
 [Add fireplace profile](docs/add_fireplace_profile.md).

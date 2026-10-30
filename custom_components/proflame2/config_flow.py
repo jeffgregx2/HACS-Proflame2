@@ -57,7 +57,7 @@ from .const import (
     available_learning_backend_types,
 )
 from .controller_assignment import controller_assignments
-from .docs_urls import learning_ids_url, lilygo_controller_url, rtl433_learning_ids_url
+from .docs_urls import learning_ids_url, lilygo_controller_url
 from .learning import (
     DEFAULT_LEARN_TIMEOUT_SECONDS,
     DEFAULT_RECEIVE_TIMEOUT_SECONDS,
@@ -306,7 +306,6 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
             description_placeholders={
-                "rtl433_learning_url": rtl433_learning_ids_url(),
                 "learning_ids_url": learning_ids_url(),
             },
         )

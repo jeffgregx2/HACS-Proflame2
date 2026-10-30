@@ -502,6 +502,7 @@ async def test_setup_menus_use_learning_ids_instead_of_json_paste(hass) -> None:
     text = json.loads(Path("custom_components/proflame2/translations/en.json").read_text())["config"]["step"]
     for step in ("user", "learn_failed"):
         assert "manual_rtl433" not in text[step]["menu_options"]
+        assert "rtl_433" not in json.dumps(text[step])
     assert not any(step.startswith("manual_rtl433") for step in text)
 
 
@@ -633,7 +634,7 @@ def test_learning_id_and_legacy_form_labels_are_translated() -> None:
 
 
 @pytest.mark.parametrize("invalid_input", [False, True])
-async def test_learning_id_form_links_to_both_sources_and_dedicated_help(hass, monkeypatch, invalid_input):
+async def test_learning_id_form_links_to_dedicated_help_without_receiver_details(hass, monkeypatch, invalid_input):
     """Initial and validation-error forms retain usable, ref-aware Markdown links."""
     from custom_components.proflame2.config_flow import Proflame2ConfigFlow
 
@@ -644,15 +645,15 @@ async def test_learning_id_form_links_to_both_sources_and_dedicated_help(hass, m
     result = await flow.async_step_manual(data if invalid_input else None)
     assert result["step_id"] == "manual"
     links = result["description_placeholders"]
-    assert links["rtl433_learning_url"].endswith("/blob/dev/docs/Using_rtl_433_for_learning.md")
+    assert set(links) == {"learning_ids_url"}
     assert links["learning_ids_url"].endswith("/blob/dev/docs/add_fireplace_profile.md#Using_learning_ids")
     translation = json.loads(Path("custom_components/proflame2/translations/en.json").read_text())["config"]
     description = translation["step"]["manual"]["description"].format(**links)
-    assert f"]({links['rtl433_learning_url']})" in description
     assert f"]({links['learning_ids_url']})" in description
     assert "Save the ID for future use" in description
     assert "{" not in description
-    assert "rtl_433" in translation["step"]["user"]["menu_option_descriptions"]["manual"]
+    assert "rtl_433" not in description
+    assert "companion Learning ID helper" in description
     assert bool(result["errors"]) == invalid_input
 
 

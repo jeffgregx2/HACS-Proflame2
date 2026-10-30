@@ -4,7 +4,7 @@ The old **Learn from rtl_433 output** JSON-paste setup has been replaced by
 **Enter a Learning ID**, which supports legacy and extended remotes.
 
 Use [Using rtl_433 for learning](Using_rtl_433_for_learning.md) for receiver and
-software requirements, helper installation, remote button instructions, and
+software requirements, helper download/inspection, remote button instructions, and
 troubleshooting. rtl_433 and the standalone helper run outside Home Assistant.
 
 Already have an ID? See [Using Learning IDs](add_fireplace_profile.md#Using_learning_ids)
