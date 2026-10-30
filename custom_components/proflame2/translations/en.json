@@ -6,20 +6,18 @@
         "title": "Add fireplace profile",
         "menu_options": {
           "learn": "Learn from remote (Recommended)",
-          "manual_rtl433": "Learn from rtl_433 output",
           "manual": "Enter a Learning ID",
           "manual_legacy": "Enter legacy values"
         },
         "menu_option_descriptions": {
           "learn": "Use your selected LilyGO or YardStick controller to learn from the original remote.",
-          "manual_rtl433": "Use a separate SDR with rtl_433 to learn, then control the fireplace with LilyGO or YardStick.",
-          "manual": "Use a Learning ID generated with rtl_433 or copied from an existing Proflame2 fireplace in Home Assistant.",
+          "manual": "Use a Learning ID for your native remote. Supports legacy and extended remotes.",
           "manual_legacy": "Enter a legacy remote ID and learned C/D values instead."
         }
       },
       "manual": {
         "title": "Enter a Learning ID",
-        "description": "Paste a Learning ID [generated using rtl_433]({rtl433_learning_url}) or [copied from an existing Proflame2 fireplace in Home Assistant]({learning_ids_url}). This supports both legacy and extended remotes.\n\nSave the ID for future use: it describes the specific native remote used to generate it. See [Using Learning IDs]({learning_ids_url}) for details.\n\nFor a Remote ID and C/D values instead, choose Enter legacy values from the Add fireplace profile menu.",
+        "description": "Paste the Learning ID for your native remote. This supports both legacy and extended remotes.\n\nYou can copy an ID from an existing Proflame2 fireplace in Home Assistant or generate one using the companion Learning ID helper. See [Using Learning IDs]({learning_ids_url}) for instructions.\n\nSave the ID for future use: it describes the specific native remote used to generate it.\n\nFor a Remote ID and C/D values instead, choose Enter legacy values from the Add fireplace profile menu.",
         "data": {
           "name": "Fireplace name",
           "fireplace_short_name": "Display short name",
@@ -72,34 +70,6 @@
           "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF."
         }
       },
-      "manual_rtl433": {
-        "title": "Learn from rtl_433 output",
-        "description": "Start rtl_433 outside Home Assistant before continuing. Run this command:\n\n    rtl_433 -f 315M -R 207 -M level -F json\n\nOnce the rtl_433 command is fully running, fill in the remaining fields on this form and select Submit.",
-        "data": {
-          "name": "Fireplace name",
-          "fireplace_short_name": "Display short name",
-          "backend_type": "Controller Type"
-        }
-      },
-      "manual_rtl433_esphome": {
-        "title": "Choose LilyGO ESPHome device",
-        "description": "{setup_text}",
-        "data": {
-          "esphome_entry_id": "LilyGO ESPHome device"
-        }
-      },
-      "manual_rtl433_prompt": {
-        "title": "Paste rtl_433 decoded row",
-        "description": "Ensure that the following command is running:\n`{rtl433_command}`\n\n**Do this now:**\n{instruction}\n\nPaste the newest rtl_433 JSON line that appears after this button press. Ignore duplicate lines from earlier button presses. See the {rtl433_manual_learning_guide} for details.\n\nThe integration has accepted {sample_count} sample(s) so far.",
-        "data": {
-          "rtl433_samples": "rtl_433 output"
-        }
-      },
-      "manual_rtl433_power_off": {
-        "title": "Remote learned",
-        "description": "Congratulations, the rtl_433 output allowed Home Assistant to learn your remote.\n\nSelect Submit to continue.",
-        "data": {}
-      },
       "manual_esphome": {
         "title": "Choose LilyGO ESPHome device",
         "description": "{setup_text}",
@@ -146,14 +116,12 @@
         "description": "Guided learning could not produce a trustworthy remote profile.\n\nReason: {error}",
         "menu_options": {
           "retry_learn": "Retry learning",
-          "manual_rtl433": "Learn from rtl_433 output",
           "manual": "Enter a Learning ID",
           "manual_legacy": "Enter legacy values"
         },
         "menu_option_descriptions": {
           "retry_learn": "Start guided learning again with the same backend.",
-          "manual_rtl433": "Run rtl_433 yourself, follow prompted remote button presses, and paste decoded rows.",
-          "manual": "Use a Learning ID generated with rtl_433 or copied from an existing Proflame2 fireplace in Home Assistant.",
+          "manual": "Use a Learning ID for your native remote. Supports legacy and extended remotes.",
           "manual_legacy": "Enter a known legacy remote ID and C/D values."
         }
       }
@@ -171,9 +139,6 @@
       "unknown_profile": "Choose an existing saved profile.",
       "required": "This field is required.",
       "invalid_esphome_entry": "Select a valid ESPHome device.",
-      "invalid_rtl433_samples": "Paste rtl_433 Proflame2 output containing id, cmd1, cmd2, err1, and err2.",
-      "rtl433_remote_id_mismatch": "All accepted rtl_433 rows must have the same remote ID.",
-      "rtl433_profile_derivation_failed": "Those rtl_433 rows contradict each other. Recapture the last button press and paste the decoded row again.",
       "invalid_refresh_period": "Enter a non-negative whole number of minutes (0 disables refresh)."
     },
     "abort": {

@@ -1,0 +1,48 @@
+name: Learning ID Package
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-archive:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.14"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Prepare package directory
+        run: |
+          directory=$(mktemp -d "$RUNNER_TEMP/proflame2-learning-id.XXXXXX")
+          echo "OUTPUT_DIR=$directory" >> "$GITHUB_ENV"
+      - name: Build inspectable source archive and checksum
+        run: make learning-id-package OUTPUT_DIR="$OUTPUT_DIR" PACKAGE_ARGS=--require-clean
+      - name: Test the actual archive without RF hardware
+        run: make learning-id-package-test ARCHIVE="$OUTPUT_DIR/proflame2-learning-id.pyz"
+      - name: Retain development downloads
+        uses: actions/upload-artifact@v4
+        with:
+          name: learning-id-${{ matrix.os }}-python-${{ matrix.python }}
+          path: |
+            ${{ env.OUTPUT_DIR }}/proflame2-learning-id.pyz
+            ${{ env.OUTPUT_DIR }}/proflame2-learning-id.pyz.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Clean package outputs
+        if: always()
+        run: if [[ -n "${OUTPUT_DIR:-}" ]]; then rm -rf -- "$OUTPUT_DIR"; fi

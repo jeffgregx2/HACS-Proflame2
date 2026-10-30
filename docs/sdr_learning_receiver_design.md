@@ -2,15 +2,13 @@
 
 ## Current Status
 
-This is a future-design document, not the implementation shipped in
-v0.5.4-beta3.
+This is a historical/future design document, not the current setup guide.
+The `manual_rtl433` JSON-paste forms described below are superseded. Current
+setup uses **Enter a Learning ID**; see [Using Learning IDs](add_fireplace_profile.md#Using_learning_ids).
 
-The current product direction is to ship rtl_433-assisted manual learning first.
-In that mode, Home Assistant does not control an SDR, run rtl_433, import
-rtl_433 code, or receive IQ samples. The user runs rtl_433 outside Home
-Assistant with their own SDR, follows the Home Assistant prompts, and pastes the
-decoded Proflame2 JSON rows into the setup flow. Home Assistant then derives the
-same remote profile values used by the existing LilyGO or YardStick controller.
+The companion helper runs outside Home Assistant with the user's SDR and
+compatible rtl_433 installation. It generates a Learning ID to import into HA;
+HA does not control an SDR, run rtl_433, import rtl_433 code, or receive IQ samples.
 
 If rtl_433-assisted manual learning proves to be needed often, the project may
 consider a tighter learning-only SDR integration so users only need to provide

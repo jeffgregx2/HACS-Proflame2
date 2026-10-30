@@ -99,12 +99,15 @@ Once the Proflame2 integration is installed in Home Assistant, it is easy to add
 9. Select the fireplace features your installation supports.
 10. Validate basic controls from Home Assistant.
 
-During setup, learning mode asks you to press specific buttons on your original fireplace remote.  This is used to learn the proper control codes used to establish communications.   You must have a functioning original remote in order to set up this integration.
+When you choose **Learn from remote**, setup asks you to press specific buttons
+on your original fireplace remote to learn its control codes. A functioning
+original remote is required for this learning method; importing an existing
+Learning ID does not require repeating those button presses.
 
-If normal guided learning cannot decode your remote, you can use
-[rtl_433-assisted manual learning](docs/rtl433_manual_learning.md) with a
-separate SDR receiver. This is an advanced setup path; LilyGO and YardStick
-remain the controllers used after learning.
+If normal guided learning cannot decode your remote, you can instead
+[enter a Learning ID](docs/add_fireplace_profile.md#Using_learning_ids).
+Copy one from an existing configured fireplace or generate one with the
+companion helper. LilyGO and YardStick remain the controllers used after setup.
 
 For more detail on the setup choices, see
 [Add fireplace profile](docs/add_fireplace_profile.md).
@@ -243,12 +246,35 @@ A LilyGO controller can use only one radio band at a time. Use separate
 LilyGO controllers for fireplaces that use different bands, such as 315 MHz
 and 433.92 MHz.
 
+## Developer Tests
+
+Run `make test` for the Python suite or `make firmware-unit-test` for the C++
+unit checks. Each command creates a fresh Python environment in `/tmp`, installs
+`requirements-dev.txt` for the current machine, and removes the environment on
+exit. The shared `.venv` is neither used nor replaced, so ARM and x86_64 machines
+can test the same checkout without carrying native packages between them.
+Dependency installation requires package-index access on each run.
+
+The bootstrap defaults to the current machine's `python3`; select another native
+interpreter with `TEST_BOOTSTRAP_PYTHON=/path/to/python3`. Pass pytest options with
+`PYTEST_ARGS`, for example `make test PYTEST_ARGS="-k learning_id"`.
+
+Build and test the inspectable Learning ID download:
+
+```sh
+make learning-id-package OUTPUT_DIR=/tmp/proflame2-learning-id
+make learning-id-package-test ARCHIVE=/tmp/proflame2-learning-id/proflame2-learning-id.pyz
+```
+
+See [Learning ID packaging](docs/learning_id_packaging.md) for development and
+release automation details.
+
 ## More Information
 
 - [LilyGO CC1101 controller guide](docs/lilygo_cc1101_controller.md)
 - [YardStick controller guide](docs/yardstick_controller.md)
 - [Add fireplace profile](docs/add_fireplace_profile.md)
-- [rtl_433-assisted manual learning](docs/rtl433_manual_learning.md)
+- [Using rtl_433 for learning](docs/Using_rtl_433_for_learning.md)
 - [Learning ID diagnostic sensor and encoding](docs/learning_id_encoding.md)
 
 ## Relationship To SmartFire

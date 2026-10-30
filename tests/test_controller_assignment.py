@@ -94,7 +94,7 @@ async def test_legacy_manual_rejects_other_remote(hass, backend):
 
 
 @pytest.mark.parametrize("backend", [BACKEND_YARDSTICK, BACKEND_ESPHOME])
-@pytest.mark.parametrize("step", ["learn", "retry_learn", "manual_rtl433_prompt"])
+@pytest.mark.parametrize("step", ["learn", "retry_learn"])
 async def test_learning_conflict_does_not_open_radio(hass, monkeypatch, backend, step):
     saved_entry(hass, backend)
     start = AsyncMock()
@@ -103,7 +103,6 @@ async def test_learning_conflict_does_not_open_radio(hass, monkeypatch, backend,
     flow.hass = hass
     data = {CONF_NAME: "Second", CONF_BACKEND_TYPE: backend, CONF_ESPHOME_ENTRY_ID: "controller-one"}
     flow._learn_input = data
-    flow._manual_rtl433_input = data
     # Begin after controller selection; no remote identity is known yet.
     method = flow._async_begin_learning_from_current_input if step == "learn" else getattr(flow, f"async_step_{step}")
     result = await method()

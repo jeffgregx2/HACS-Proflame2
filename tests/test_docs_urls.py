@@ -55,6 +55,9 @@ def test_learning_id_links_match_real_documents_and_explicit_anchor(monkeypatch)
     assert section.path.endswith("/blob/dev/docs/add_fireplace_profile.md")
     assert section.fragment == "Using_learning_ids"
     setup = Path(docs_urls.ADD_FIREPLACE_PROFILE_DOC).read_text()
+    assert "## Learn From rtl_433 Output" not in setup
+    assert "[Learn from rtl_433 output]" not in setup
+    assert '<a id="learn-from-rtl_433-output"></a>' in setup
     assert f'<a id="{section.fragment}"></a>' in setup
     assert f"]({Path(docs_urls.RTL433_LEARNING_IDS_DOC).name})" in setup
     guide = Path(docs_urls.RTL433_LEARNING_IDS_DOC)

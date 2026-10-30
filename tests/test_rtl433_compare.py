@@ -156,6 +156,16 @@ def test_parse_model_decoded_capture() -> None:
     assert result.missing_sections == []
 
 
+def test_extended_fields_are_preserved_and_compared() -> None:
+    text = "model : Proflame2-Remote\nVariant : extended_10_word\nW6 : 15\nW10 : 6e\nRaw words : 123456812015c800216e\n"
+    baseline = MODULE.parse_capture_text(text)
+    changed = MODULE.parse_capture_text(text.replace("W6 : 15", "W6 : 16"))
+    assert baseline.decoded_fields["Variant"] == "extended_10_word"
+    assert baseline.decoded_fields["Raw words"] == "123456812015c800216e"
+    assert "W6" in MODULE._normalized_diff_line(changed, baseline)
+    assert "extended_10_word" in MODULE._capture_summary_line(baseline, baseline)
+
+
 def test_parse_analyzer_only_capture_without_model_decode() -> None:
     result = MODULE.parse_capture_text(ANALYZER_ONLY_CAPTURE, source_filename="lilygo_on.txt")
 
