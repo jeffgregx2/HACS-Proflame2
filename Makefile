@@ -4,6 +4,8 @@
 # serial even when a caller invokes make with -j.
 .NOTPARALLEL: _esphome-validate
 
+TEST_BOOTSTRAP_PYTHON ?= python3
+PYTEST_ARGS ?=
 PYTHON ?= ./.venv/bin/python
 BLACK ?= ./.venv/bin/black
 RUFF ?= ./.venv/bin/ruff
@@ -22,10 +24,10 @@ ESPHOME_STAGE ?= $(ESPHOME_WORK_ROOT)/repo
 ESPHOME_STAGE_CLI ?= $(ESPHOME_WORK_ROOT)/esphome
 
 test:
-	$(PYTHON) -m pytest -q
+	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/run_tests.sh $(PYTEST_ARGS)
 
 firmware-unit-test:
-	$(PYTHON) -m pytest -q tests/test_esphome_cpp_unit.py tests/test_radio_register_trace.py
+	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/run_tests.sh $(PYTEST_ARGS) tests/test_esphome_cpp_unit.py tests/test_radio_register_trace.py
 
 lint-python:
 	$(RUFF) check custom_components tools tests

@@ -243,6 +243,19 @@ A LilyGO controller can use only one radio band at a time. Use separate
 LilyGO controllers for fireplaces that use different bands, such as 315 MHz
 and 433.92 MHz.
 
+## Developer Tests
+
+Run `make test` for the Python suite or `make firmware-unit-test` for the C++
+unit checks. Each command creates a fresh Python environment in `/tmp`, installs
+`requirements-dev.txt` for the current machine, and removes the environment on
+exit. The shared `.venv` is neither used nor replaced, so ARM and x86_64 machines
+can test the same checkout without carrying native packages between them.
+Dependency installation requires package-index access on each run.
+
+The bootstrap defaults to the current machine's `python3`; select another native
+interpreter with `TEST_BOOTSTRAP_PYTHON=/path/to/python3`. Pass pytest options with
+`PYTEST_ARGS`, for example `make test PYTEST_ARGS="-k learning_id"`.
+
 ## More Information
 
 - [LilyGO CC1101 controller guide](docs/lilygo_cc1101_controller.md)
