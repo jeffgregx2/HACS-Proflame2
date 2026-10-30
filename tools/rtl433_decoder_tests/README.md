@@ -1,55 +1,16 @@
-# rtl_433 Proflame2 C decoder checks
+# rtl_433 decoder regression compatibility entry point
 
-This runner compiles and invokes the actual external rtl_433 Proflame2 device
-decoder. It does not use the Python frame decoder as an acceptance oracle.
-The Python standard library and a C compiler are sufficient. Binaries and
-derived signals are created in an automatically cleaned temporary directory.
+The decoder runner, capture vectors, frozen JSON examples, and output-layout
+checks now live entirely in rtl_433 under `tests/proflame2/`. Its CMake/CTest
+configuration runs the corpus and detector replay when Python 3.10+ is available.
+No HACS-Proflame2 installation is needed to validate that checkout.
+
+This entry point delegates to that checkout for compatibility:
 
 ```sh
-python tools/rtl433_decoder_tests/run_tests.py --source /path/to/updated/rtl_433
+python tools/rtl433_decoder_tests/run_tests.py --source /path/to/rtl_433 --build-pipeline
 ```
 
-AddressSanitizer and UndefinedBehaviorSanitizer are enabled by default. Use
-`--no-sanitize` only for an additional ordinary build check, not as a substitute
-for sanitizer validation. To reproduce the historical overflow, point `--source`
-at the pre-fix checkout and `--harness-source` at the updated checkout containing
-`tests/proflame2-test.c`, then add `--baseline`.
-
-For actual pulse-detector, PCM-slicer, and C-device-decoder replay, also provide
-`--rtl433-binary /path/to/built/rtl_433`. Without this option, the pipeline test
-is explicitly skipped. Alternatively, `--build-pipeline` runs CMake/CTest and
-replay in an automatically cleaned build directory; CMake must be on PATH.
-Replay signals are synthesized from protocol words,
-including silence/noise controls. They are derived test signals, not live SDR
-recordings. JSON and CSV output are checked through the actual executable.
-
-`golden_output.json` freezes the JSON contract using synthetic identity
-`0x123456`. Compare records by keys and values, not object key order. `id` and
-all individual bytes are JSON integers; human-readable hexadecimal formatting
-does not change their JSON types. `raw_words` contains exactly 14 or 20 lowercase
-hexadecimal characters in on-air word order, with no prefix or separators.
-Legacy output uses `protocol_variant=legacy_7_word` and `mic=PARITY`; extended
-output uses `protocol_variant=extended_10_word` and `mic=DIGEST`. The latter
-describes the documented custom alternating-word calculation, not a CRC.
-
-Legacy previously reported `CHECKSUM` despite checking word parity only. The new
-`PARITY` label is an intentional compatibility correction. Legacy command/error
-bytes remain available. Extended W6/W7 are not legacy error bytes, so extended
-records expose W6-W10, omit `err1` and `err2`, and report integer `pilot=-1`
-to mean unknown. Extended W4 bit 7 is not yet a validated pilot mapping. Once
-that mapping is established, the decoder and consumers can be updated to use
-`0/1`; the current sentinel must not be treated as a pilot state.
-Power and flame zero are independent, including power on with flame zero.
-
-Pretty output preserves the original control columns (offsets 0, 25, 51, 77).
-`Variant` follows `time` in column 3, and `Raw words` follows `Integrity` in
-column 3, exactly under `Aux`. Extended command rows contain `Cmd1/Cmd2/W6/W7`
-followed by `W8/W9/W10`. Layout assertions exercise the actual KV formatter,
-including output redirected to a pipe; JSON and CSV checks cover the sentinel.
-
-Capture-derived rows retain their provenance in the existing
-`tests/fixtures/issue_15_tmfsla_extended_capture.json`,
-`tests/fixtures/issue_26_mendota_extended_capture.json`, and
-`tests/fixtures/real_remote_legacy_captures.json` files. The runner verifies all
-120 accepted extended rows, keeps malformed rows rejected, and exercises
-framing, bounds, integrity mutations, and terminal-bit cases.
+See `tests/proflame2/README.md` in rtl_433 for standalone commands, sanitizer
+options, capture provenance, and the JSON/output contract. HACS protocol-learning
+fixtures remain here for the independent Python tool's own tests.

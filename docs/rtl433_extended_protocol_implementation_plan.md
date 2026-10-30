@@ -458,6 +458,14 @@ the sanitizer tests, and the relevant HACS-Proflame2 Python suites and Ruff/Blac
 checks. Record unavailable external or hardware checks rather than counting
 them as passes.
 
+Upstream PR #3740 was merged on October 27, 2026, as
+`f35183aaf1d2d905d422fd70bcae4eb7349d6186`. It fixes the same write overflow
+by stopping after seven words and ignoring the rest of the row. Our complete-row
+classification remains necessary for ten-word support and rejection of damaged
+extended tails. Do not present the bounds fix as a new upstream security fix.
+The decoder branch is now rebased onto that commit, verified as upstream master
+on October 30, 2026. No action on the merged PR itself is required.
+
 Prepare the rtl_433 pull request from a clean baseline. Include only generic
 decoder changes, protocol documentation, and regression tests/capture references
 using upstream conventions. No Learning ID schema, helper package, HA code,
@@ -478,7 +486,11 @@ radio testing remain separate explicitly authorized actions.
   runner also checks legacy captures, JSON goldens, terminal-bit boundaries,
   malformed framing, oversized inputs, and all single-bit payload/integrity
   mutations with regenerated word parity.
-- rtl_433 Debug CMake/CTest passes all nine tests, including its style check.
+- The decoder runner, frozen JSON examples, capture vectors, and output-layout
+  checks belong to rtl_433 under `tests/proflame2/`. CTest registers the corpus
+  and detector replay when Python 3.10+ is available; the core C test remains
+  available without Python. HACS retains only a compatibility entry point.
+- After rebasing, rtl_433 Debug CMake/CTest passes all 18 tests, including its style check.
   Derived CU8 replay passes through its actual detector, unchanged PCM slicer,
   and C device decoder, with JSON/CSV output and silence/noise controls.
 - The helper wheel installs and imports in a clean environment without HA or
