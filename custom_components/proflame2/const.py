@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from .protocol.variants import (
+    PROTOCOL_VARIANT_EXTENDED_10_WORD as PROTOCOL_VARIANT_EXTENDED_10_WORD,
+)
+from .protocol.variants import (
+    PROTOCOL_VARIANT_LEGACY_7_WORD as PROTOCOL_VARIANT_LEGACY_7_WORD,
+)
 from .version import fake_backend_enabled, is_dev_build
 
 DOMAIN = "proflame2"
@@ -50,9 +56,6 @@ CONF_FIREPLACE_SHORT_NAME = "fireplace_short_name"
 BACKEND_FAKE = "fake"
 BACKEND_ESPHOME = "lilygo_cc1101"
 BACKEND_YARDSTICK = "yardstick"
-
-PROTOCOL_VARIANT_LEGACY_7_WORD = "legacy_7_word"
-PROTOCOL_VARIANT_EXTENDED_10_WORD = "extended_10_word"
 
 
 def available_backend_types() -> tuple[str, ...]:

@@ -45,8 +45,9 @@ from .packet_debug import (
     async_enable_packet_debug_logging,
     get_packet_debug_logger,
 )
+from .protocol.derivation import LearningRequirements, ProfileConflictError, derive_remote_profile
 from .protocol.ecc import derive_ecc_profile
-from .protocol.models import EXTENDED_W4_FIXED_MASK, PROTOCOL_VARIANT_EXTENDED_10_WORD
+from .protocol.models import PROTOCOL_VARIANT_EXTENDED_10_WORD, FireplaceFeatures
 from .protocol.packet import ProflameFrame, ProflamePacket
 from .rf.base import RFBackend
 from .rf.esphome.transport import HomeAssistantESPHomeTransport
@@ -67,7 +68,6 @@ MIN_VALID_PACKETS = 3
 DEFAULT_LEARN_TIMEOUT_SECONDS = 120.0
 DEFAULT_RECEIVE_TIMEOUT_SECONDS = 1.0
 DEFAULT_FAKE_LEARN_DELAY_SECONDS = 2.0
-DEFAULT_EXTENDED_MANUAL_W7 = 0xC8
 
 ERROR_TIMEOUT = "timeout"
 ERROR_INCONSISTENT_REMOTE_ID = "inconsistent_remote_id"
@@ -824,48 +824,18 @@ def _build_prompt_timeout_result(session: LearnSession) -> LearnResult:
 
 
 def derive_learn_result_from_session(session: LearnSession) -> LearnResult | None:
-    """Attempt to derive a stable profile from the packets seen so far."""
-
-    extended_packets = [packet for packet in session.packets if packet.frame.is_extended]
-    if extended_packets:
-        return _derive_extended_learn_result(session, extended_packets)
-
-    cmd1_samples = {(packet.frame.cmd1, packet.frame.err1) for packet in session.packets}
-    cmd2_samples = {(packet.frame.cmd2, packet.frame.err2) for packet in session.packets}
-
-    if (
-        session.valid_packets < MIN_VALID_PACKETS
-        or len(cmd1_samples) < MIN_UNIQUE_CMD1_SAMPLES
-        or len(cmd2_samples) < MIN_UNIQUE_CMD2_SAMPLES
-    ):
-        _session_debug(
-            session,
-            "insufficient distinct samples valid_packets=%s unique_cmd1=%s unique_cmd2=%s",
-            session.valid_packets,
-            len(cmd1_samples),
-            len(cmd2_samples),
-        )
+    """Adapt shared profile derivation to the existing HA session contract."""
+    if session.valid_packets < MIN_VALID_PACKETS:
         return None
-
     try:
-        ecc = derive_ecc_profile(sorted(cmd1_samples), sorted(cmd2_samples))
-    except ValueError as exc:
-        message = str(exc)
-        if "No stable" in message:
-            _session_debug(session, "contradictory profile derivation: %s", message)
-            return LearnResult(
-                success=False,
-                remote_id=session.remote_id,
-                packets_seen=session.packets_seen,
-                valid_packets=session.valid_packets,
-                warnings=session.warnings,
-                error_code=ERROR_CONTRADICTORY_PROFILE,
-                error=("Observed packets contradict each other and do not converge " "to one stable C/D profile."),
-            )
-        if "Ambiguous stable" in message:
-            _session_debug(session, "ambiguous profile derivation: %s", message)
-            return None
-        _session_debug(session, "unexpected profile derivation failure: %s", message)
+        result = derive_remote_profile(
+            (packet.frame for packet in session.packets),
+            FireplaceFeatures(),
+            # HA's existing session policy requires command-byte diversity,
+            # without the standalone helper's repeat/confirmation gates.
+            requirements=LearningRequirements(min_commands=0),
+        )
+    except ProfileConflictError as exc:
         return LearnResult(
             success=False,
             remote_id=session.remote_id,
@@ -873,83 +843,35 @@ def derive_learn_result_from_session(session: LearnSession) -> LearnResult | Non
             valid_packets=session.valid_packets,
             warnings=session.warnings,
             error_code=ERROR_CONTRADICTORY_PROFILE,
-            error=message,
+            error=str(exc),
         )
-
-    _session_debug(
-        session,
-        "learned stable profile remote_id=%06x c1=%s d1=%s c2=%s d2=%s",
-        session.remote_id,
-        ecc.c1,
-        ecc.d1,
-        ecc.c2,
-        ecc.d2,
-    )
-    return LearnResult(
+    profile = result.profile
+    if profile is None:
+        return None
+    common = dict(
         success=True,
-        remote_id=session.remote_id,
-        c1=ecc.c1,
-        d1=ecc.d1,
-        c2=ecc.c2,
-        d2=ecc.d2,
+        remote_id=profile.serial_id,
+        protocol_variant=profile.protocol_variant,
         packets_seen=session.packets_seen,
         valid_packets=session.valid_packets,
         warnings=session.warnings,
         final_packet=session.packets[-1] if session.packets else None,
     )
-
-
-def _derive_extended_learn_result(
-    session: LearnSession,
-    extended_packets: list[ProflamePacket],
-) -> LearnResult | None:
-    """Build a manual ten-word profile from integrity-validated RMT frames."""
-
-    if len(extended_packets) != len(session.packets):
+    if profile.is_extended:
+        template = profile.extended_template
         return LearnResult(
-            success=False,
-            remote_id=session.remote_id,
-            packets_seen=session.packets_seen,
-            valid_packets=session.valid_packets,
-            warnings=session.warnings,
-            error_code=ERROR_CONTRADICTORY_PROFILE,
-            error="Learning observed a mixture of legacy and extended Proflame frame formats.",
+            **common,
+            extended_w4_base=template.w4_base,
+            extended_w6=template.w6,
+            extended_w7=template.w7,
+            extended_w8=template.w8,
         )
-    if len(extended_packets) < MIN_VALID_PACKETS:
-        return None
-
-    manual_frames = [packet.frame for packet in extended_packets if (packet.frame.cmd1 & 0x03) == 0x01]
-    # The normal Power On/Off/restore sequence retains only two distinct
-    # packets. Require the following Flame change before promoting an extended
-    # profile, so W5 is proven to be the manual state word.
-    if len(manual_frames) < 2 or len({frame.cmd2 for frame in manual_frames}) < 2:
-        return None
-    w4_base_values = {frame.cmd1 & EXTENDED_W4_FIXED_MASK for frame in manual_frames}
-    w6_values = {frame.err1 for frame in manual_frames}
-    w8_values = {frame.extension_words[0] for frame in manual_frames}
-    if len(w4_base_values) != 1 or len(w6_values) != 1 or len(w8_values) != 1:
-        return LearnResult(
-            success=False,
-            remote_id=session.remote_id,
-            packets_seen=session.packets_seen,
-            valid_packets=session.valid_packets,
-            warnings=session.warnings,
-            error_code=ERROR_CONTRADICTORY_PROFILE,
-            error="Extended-frame learning observed inconsistent fixed template fields.",
-        )
-
     return LearnResult(
-        success=True,
-        remote_id=session.remote_id,
-        protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
-        extended_w4_base=next(iter(w4_base_values)),
-        extended_w6=next(iter(w6_values)),
-        extended_w7=DEFAULT_EXTENDED_MANUAL_W7,
-        extended_w8=next(iter(w8_values)),
-        packets_seen=session.packets_seen,
-        valid_packets=session.valid_packets,
-        warnings=session.warnings,
-        final_packet=extended_packets[-1],
+        **common,
+        c1=profile.ecc.c1,
+        d1=profile.ecc.d1,
+        c2=profile.ecc.c2,
+        d2=profile.ecc.d2,
     )
 
 
