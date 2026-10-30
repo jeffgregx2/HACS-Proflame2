@@ -121,7 +121,7 @@ def render_invalidation_index(root: Path, invalidated: list[Path], *, reason: st
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Mark invalidated Stage 5 analysis outputs without deleting raw data.")
-    parser.add_argument("--root", default="analysis/live", help="Root directory to scan.")
+    parser.add_argument("--root", default="docs/private/analysis/live", help="Root directory to scan.")
     parser.add_argument(
         "--reason", default="stage5q_yardstick_whole_stream_not_packet_normalized", help="Invalidation reason."
     )

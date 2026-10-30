@@ -73,6 +73,15 @@ files in the repository or `/tmp`. Only disposable build/test scratch uses `/tmp
 with exit cleanup. Archives can contain private network details; review and
 sanitize before sharing them publicly.
 
+The older coordinated capture and YardStick probe tools use the same exported
+`PROFLAME2_CAPTURE_ROOT`, with `coordinated/` and `yardstick_probe/` subdirectories.
+Without it, they use the user-state storage above, not the current directory.
+Their explicit `--output-root` and `--output-dir` options still take precedence.
+To load the private environment file when invoking these modules, launch them
+through `python3 -B -m tools.waveform.environment -- python3 -B -m MODULE`.
+Historical analysis maintenance still defaults to `docs/private/analysis/live`;
+this is a relocated archive, not the destination for new recordings.
+
 ## Commands
 
 From the repository root, use a Python environment with `jsonschema` and the

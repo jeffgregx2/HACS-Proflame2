@@ -34,7 +34,11 @@ EXACT_TARGET_FIELDS = ("power", "flame", "fan", "cmd1", "cmd2", "err1", "err2")
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run one coordinated Proflame2 capture session.")
-    parser.add_argument("--output-root", default="analysis/captures", help="Root directory for session output.")
+    parser.add_argument(
+        "--output-root",
+        default=str(CaptureSessionConfig().output_root),
+        help="Session output directory; defaults to coordinated under PROFLAME2_CAPTURE_ROOT or user state storage.",
+    )
     parser.add_argument("--valid-samples-target", type=int, default=10, help="Number of valid samples to collect.")
     parser.add_argument("--max-attempts", type=int, default=20, help="Maximum number of sample attempts.")
     parser.add_argument(

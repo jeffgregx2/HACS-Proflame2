@@ -25,15 +25,30 @@ def _rtl433_source_root() -> Path:
     configured = os.environ.get("PROFLAME2_RTL433_SOURCE")
     candidates = [
         Path(configured).expanduser() if configured else None,
+        Path("/srv/Tools/rtl_433"),
         Path.home() / "Tools" / "rtl_433",
-        REPO_ROOT / "rtl_433",
     ]
     for candidate in candidates:
         if candidate is not None and (candidate / "src" / "pulse_slicer.c").is_file():
             return candidate
     raise AssertionError(
-        "rtl_433 source tree not found. Set PROFLAME2_RTL433_SOURCE or clone it under ~/Tools/rtl_433."
+        "rtl_433 source tree not found. Set PROFLAME2_RTL433_SOURCE to the external instrumented checkout."
     )
+
+
+def test_rtl433_source_override_has_precedence(tmp_path, monkeypatch) -> None:
+    checkout = tmp_path / "decoder"
+    (checkout / "src").mkdir(parents=True)
+    (checkout / "src/pulse_slicer.c").touch()
+    monkeypatch.setenv("PROFLAME2_RTL433_SOURCE", str(checkout))
+    assert _rtl433_source_root() == checkout
+
+
+def test_rtl433_source_uses_external_checkout(monkeypatch) -> None:
+    monkeypatch.delenv("PROFLAME2_RTL433_SOURCE", raising=False)
+    external = Path("/srv/Tools/rtl_433")
+    monkeypatch.setattr(Path, "is_file", lambda path: path == external / "src/pulse_slicer.c")
+    assert _rtl433_source_root() == external
 
 
 MODEL_CAPTURE = """

@@ -10,12 +10,17 @@ from tools.proflame_capture.yardstick_collector import (
     LiveYardStickDiagnosticSource,
     YardStickDiagnosticCollector,
 )
+from tools.waveform.environment import capture_root
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run one receive-only YardStick diagnostic probe.")
     parser.add_argument("--timeout-seconds", type=float, default=5.0, help="Receive window duration.")
-    parser.add_argument("--output-dir", default=None, help="Optional directory for artifacts.")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Artifact directory; defaults to yardstick_probe under PROFLAME2_CAPTURE_ROOT or user state storage.",
+    )
     return parser
 
 
@@ -33,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
             "started_at_utc": "now",
         },
     )()
-    sample_dir = Path(args.output_dir) if args.output_dir else Path("analysis/yardstick_probe")
+    sample_dir = Path(args.output_dir) if args.output_dir else capture_root() / "yardstick_probe"
     sample_dir.mkdir(parents=True, exist_ok=True)
     sample = type("Sample", (), {"sample_dir": sample_dir, "identity": None, "state_before": None})()
 
