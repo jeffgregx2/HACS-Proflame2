@@ -352,7 +352,7 @@ def normalize_learning_id_profile_input(user_input: dict[str, Any]) -> ManualPro
         data[CONF_ESPHOME_ENTRY_ID] = linked_esphome_entry_id
     return ManualProfileInput(
         data=data,
-        options=normalize_entry_options({**user_input, **asdict(profile.features)}),
+        options=normalize_entry_options(user_input),
     )
 
 

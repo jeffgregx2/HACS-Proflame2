@@ -157,7 +157,7 @@ async def test_refresh_period_initial_setup_routes(hass, route):
             CONF_NAME: "Test Fireplace",
             CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
             CONF_LEARNING_ID: (
-                "PF2-1-E-CI2FMA4AILEBTPLKVK4Q" if route.endswith("extended") else "PF2-1-L-CI2FMA2XDBVBZFK7"
+                "PF2-1-E-CI2FNACCZAMYKTI4W4" if route.endswith("extended") else "PF2-1-L-CI2FMVYYTNVRS7Q"
             ),
             CONF_REFRESH_PERIOD_MINUTES: 10,
         }
@@ -171,6 +171,9 @@ async def test_refresh_period_initial_setup_routes(hass, route):
     assert invalid["type"] is FlowResultType.FORM
     assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
     result = await submit(values)
+    if route.startswith("learning_id_"):
+        assert result["step_id"] == "manual_features"
+        result = await flow.async_step_manual_features({})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["options"][CONF_REFRESH_PERIOD_MINUTES] == 10
 
@@ -515,6 +518,11 @@ async def test_learning_id_import_loads_complete_runtime_profile(hass, monkeypat
             CONF_LEARNING_ID: f"  {token}\n",
         },
     )
+    assert result["step_id"] == "manual_features"
+    assert not hass.config_entries.async_entries(DOMAIN)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**asdict(profile.features), CONF_FIREPLACE_SHORT_NAME: "TEST"}
+    )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_REMOTE_ID] == profile.serial_id
     assert result["data"][CONF_PROTOCOL_VARIANT] == profile.protocol_variant
@@ -540,7 +548,7 @@ async def test_learning_id_import_loads_complete_runtime_profile(hass, monkeypat
     assert async_get_runtime_entries(hass)[entry.entry_id].remote_profile == profile
 
 
-@pytest.mark.parametrize("invalid", ["", "not-an-id", "PF2-2-L-CI2FMA2XDBVBZFK7", "PF2-1-L-CI2FMA2XDBVBZFKA"])
+@pytest.mark.parametrize("invalid", ["", "not-an-id", "PF2-1-L-CI2FMA2XDBVBZFK7", "PF2-1-L-CI2FMA2XDBVBZFKA"])
 async def test_learning_id_import_errors_allow_correction(hass, monkeypatch, invalid, caplog) -> None:
     _enable_fake_backend(monkeypatch)
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
@@ -563,9 +571,11 @@ async def test_learning_id_import_errors_allow_correction(hass, monkeypatch, inv
         {
             CONF_NAME: "Imported Fireplace",
             CONF_BACKEND_TYPE: "fake",
-            CONF_LEARNING_ID: "PF2-1-L-CI2FMA2XDBVBZFK7",
+            CONF_LEARNING_ID: "PF2-1-L-CI2FMVYYTNVRS7Q",
         },
     )
+    assert result["step_id"] == "manual_features"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
@@ -574,7 +584,7 @@ async def test_learning_id_esphome_import_links_and_rejects_duplicates(hass, ext
     """Both protocols retain controller validation and per-controller uniqueness."""
     linked = MockConfigEntry(domain="esphome", title="Test Controller", data={})
     linked.add_to_hass(hass)
-    token = "PF2-1-E-CI2FMA4AILEBTPLKVK4Q" if extended else "PF2-1-L-CI2FMA2XDBVBZFK7"
+    token = "PF2-1-E-CI2FNACCZAMYKTI4W4" if extended else "PF2-1-L-CI2FMVYYTNVRS7Q"
     for duplicate in (False, True):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
@@ -592,8 +602,10 @@ async def test_learning_id_esphome_import_links_and_rejects_duplicates(hass, ext
         )
         if duplicate:
             assert result["type"] is FlowResultType.ABORT
-            assert result["reason"] == "already_configured"
+            assert result["reason"] == "controller_in_use"
         else:
+            assert result["step_id"] == "manual_features"
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_ACTIVE_LISTENING: True})
             assert result["type"] is FlowResultType.CREATE_ENTRY
             assert result["data"][CONF_ESPHOME_ENTRY_ID] == linked.entry_id
             assert result["options"][CONF_ACTIVE_LISTENING] is True
@@ -604,10 +616,60 @@ def test_learning_id_and_legacy_form_labels_are_translated() -> None:
     text = json.loads((Path(__file__).parents[1] / "custom_components/proflame2/translations/en.json").read_text())[
         "config"
     ]
-    assert text["step"]["user"]["menu_options"]["manual"] == "Enter Learning ID"
+    assert text["step"]["user"]["menu_options"]["manual"] == "Enter a Learning ID"
     assert text["step"]["user"]["menu_options"]["manual_legacy"] == "Enter legacy values"
     assert text["step"]["manual"]["data"][CONF_LEARNING_ID] == "Learning ID"
     assert "invalid_learning_id" in text["error"]
+
+
+@pytest.mark.parametrize("invalid_input", [False, True])
+async def test_learning_id_form_links_to_both_sources_and_dedicated_help(hass, monkeypatch, invalid_input):
+    """Initial and validation-error forms retain usable, ref-aware Markdown links."""
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    monkeypatch.setenv("PROFLAME2_DOCUMENTATION_REF", "dev")
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    data = {CONF_NAME: "Fireplace", CONF_BACKEND_TYPE: BACKEND_YARDSTICK, CONF_LEARNING_ID: "invalid"}
+    result = await flow.async_step_manual(data if invalid_input else None)
+    assert result["step_id"] == "manual"
+    links = result["description_placeholders"]
+    assert links["rtl433_learning_url"].endswith("/blob/dev/docs/Using_rtl_433_for_learning.md")
+    assert links["learning_ids_url"].endswith("/blob/dev/docs/add_fireplace_profile.md#Using_learning_ids")
+    translation = json.loads(Path("custom_components/proflame2/translations/en.json").read_text())["config"]
+    description = translation["step"]["manual"]["description"].format(**links)
+    assert f"]({links['rtl433_learning_url']})" in description
+    assert f"]({links['learning_ids_url']})" in description
+    assert "Save the ID for future use" in description
+    assert "{" not in description
+    assert "rtl_433" in translation["step"]["user"]["menu_option_descriptions"]["manual"]
+    assert bool(result["errors"]) == invalid_input
+
+
+async def test_learning_id_feature_selection_validates_options_and_rechecks_ownership(hass):
+    """A controller claimed while the feature form is open cannot be reused."""
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    form = await flow.async_step_manual(
+        {
+            CONF_NAME: "Imported",
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+            CONF_LEARNING_ID: "PF2-1-L-CI2FMVYYTNVRS7Q",
+            CONF_REFRESH_PERIOD_MINUTES: 10,
+        }
+    )
+    assert form["step_id"] == "manual_features"
+    invalid = await flow.async_step_manual_features({CONF_REFRESH_PERIOD_MINUTES: 1.5, CONF_LIGHT: False})
+    assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
+    assert not hass.config_entries.async_entries(DOMAIN)
+    other = MockConfigEntry(domain=DOMAIN, data={CONF_BACKEND_TYPE: BACKEND_YARDSTICK, CONF_REMOTE_ID: 0x654321})
+    other.add_to_hass(hass)
+    result = await flow.async_step_manual_features({CONF_LIGHT: False})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "controller_in_use"
+    assert hass.config_entries.async_entries(DOMAIN) == [other]
 
 
 async def test_manual_rtl433_learning_captures_buttons_then_confirms_remote_learned(hass) -> None:

@@ -1,5 +1,10 @@
 # rtl_433-Assisted Manual Learning
 
+This page describes the existing **legacy-only** paste-output setup flow. To
+generate a reusable Learning ID for a legacy or extended remote instead, see
+[Using rtl_433 for learning](Using_rtl_433_for_learning.md). That guide explains
+the required decoder build and separate companion helper.
+
 Most users should use normal `Learn from remote` setup with their selected
 controller. Use rtl_433-assisted manual learning only when normal learning does
 not decode your original remote, or when a maintainer asks you to collect

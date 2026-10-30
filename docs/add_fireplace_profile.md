@@ -19,6 +19,13 @@ The controller you choose is the device Home Assistant will use to control the
 fireplace after setup. The learning option controls how Home Assistant obtains
 the original remote profile values during setup.
 
+Each controller must be dedicated to one fireplace. Setup rejects a controller
+that is already assigned, even when the new remote has a different Learning ID.
+Use another controller, or remove the old fireplace entry before reusing it.
+Disabled entries still reserve their controller. If an older installation has
+duplicate assignments, only the first enabled entry loads; the other entry shows
+a setup error until the conflict is resolved. No profiles are deleted automatically.
+
 ## Add Fireplace Profile Options
 
 The Home Assistant help button opens this page for multiple setup screens. Use
@@ -34,6 +41,8 @@ this index to jump to the section that matches the screen you are viewing:
   fireplace controls Home Assistant should expose.
 - [Manual fireplace profile](#manual-fireplace-profile): enter known remote
   profile values directly.
+- [Using Learning IDs](#Using_learning_ids): obtain, save, and import a Learning
+  ID for a specific remote.
 
 ## Add Fireplace Profile
 
@@ -45,8 +54,9 @@ path to use.
   original fireplace remote. Most users should choose this option.
 - **Learn from rtl_433 output**: use only if normal learning does not complete
   and you have, or are willing to obtain, a separate SDR receiver.
-- **Enter Learning ID**: copy an existing profile using its Learning ID
-  diagnostic sensor. Supports both legacy and extended remotes.
+- **Enter a Learning ID**: use an ID generated with rtl_433 or copied from an
+  existing Proflame2 fireplace in Home Assistant. Supports both legacy and
+  extended remotes. See [Using Learning IDs](#Using_learning_ids).
 - **Enter legacy values**: use older records containing a remote ID and C/D
   values. This option supports legacy remotes only.
 
@@ -96,39 +106,16 @@ instructions.
 
 ## Learn From rtl_433 Output
 
-Occasionally, normal `Learn from remote` does not complete successfully. If that
-happens, you can use the separate rtl_433 utility and an SDR receiver to decode
-your original Proflame2 remote.
+If normal learning fails, a separate SDR receiver, a suitable rtl_433 build, and
+the companion Learning ID helper can generate an ID from your native remote.
+Then choose **Enter a Learning ID** in Home Assistant. Your LilyGO or YardStick
+still controls the fireplace afterward; neither the SDR nor rtl_433 is needed
+for normal use.
 
-An SDR receiver is a small USB radio receiver that can be tuned by software to
-listen for many types of radio signals. In this setup, rtl_433 uses the SDR
-receiver to listen for and decode the Proflame2 remote.
-
-This option is only for learning the remote. Your LilyGO or YardStick controller
-will still be the device Home Assistant uses to control the fireplace after
-setup.
-
-Use this option only after `Learn from remote` has failed.
-
-This option requires hardware and software that are separate from the normal
-Proflame2 controller:
-
-- a LilyGO or YardStick controller to control the fireplace after setup,
-- an SDR receiver (hardware to be obtained separately),
-- the rtl_433 utility installed on the computer that will use the SDR receiver.
-
-Home Assistant will not run rtl_433 for you. You will run rtl_433 yourself in a
-terminal window, either on the Home Assistant computer or on another computer
-connected to the SDR receiver.
-
-On the `Learn from rtl_433 output` screen, fill in the same fireplace fields
-described in [Learn fireplace profile](#learn-fireplace-profile).
-
-Home Assistant will then tell you which remote buttons to press. After each
-button press, paste the rtl_433 JSON output into the setup flow.
-
-Full instructions including example SDR receivers needed can be found at:
-[rtl_433-assisted manual learning](rtl433_manual_learning.md).
+See [Using rtl_433 for learning](Using_rtl_433_for_learning.md) for software
+requirements, installation, remote button presses, and troubleshooting. Older
+rtl_433 builds support only legacy remotes. The existing paste-output setup flow
+is also legacy-only; extended remotes must use normal learning or a Learning ID.
 
 ## Select Supported Features
 
@@ -168,22 +155,52 @@ Manual entry is not a normal setup path. Use it only when you already know the
 exact remote profile values from prior troubleshooting.
 
 In almost all situations, use `Learn from remote` first. If that fails, use
-`Learn from rtl_433 output`.
+[rtl_433 to generate a Learning ID](Using_rtl_433_for_learning.md).
 
-To copy an existing profile, open its Proflame2 fireplace device in Home
-Assistant and copy the **Learning ID** from the Diagnostic section. Choose
-**Enter Learning ID** when adding the new profile, paste the complete value,
+<a id="Using_learning_ids"></a>
+
+## Using Learning IDs
+
+A Learning ID lets you set up a specific native remote without repeating the
+learning process. It supports both legacy and extended remotes. You can obtain
+one in either of these ways:
+
+- **From an existing HA fireplace:** open its Proflame2 device in Home Assistant
+  and copy **Learning ID** from the Diagnostic section.
+- **Using rtl_433:** use an SDR receiver and the companion helper to generate an
+  ID. Follow [Using rtl_433 for learning](Using_rtl_433_for_learning.md); rtl_433
+  does not generate Learning IDs on its own.
+
+### Save Your Learning ID
+
+Once generated, save the complete Learning ID with your fireplace records and
+label it with the native remote it belongs to. It continues to describe that
+specific remote, even if you remove the HA fireplace entry, reinstall the
+integration, or replace the controller. It is not a shared code for every remote
+with the same model number. A replacement native remote needs its own ID.
+
+The ID contains only the information needed to identify and learn the remote.
+It does not contain your fireplace's enabled-feature choices. Changing those
+choices in HA does not change the ID, and you do not need to save it again.
+
+### Import a Learning ID
+
+Choose **Enter a Learning ID** when adding a fireplace profile, paste the complete value,
 and provide the name and controller for this installation. For LilyGO, select
-the ESPHome controller in the next step.
+the ESPHome controller in the next step. Then choose which fireplace features
+to enable on the **Select supported features** screen.
 
-The ID restores the remote's identity, protocol, and supported-feature choices.
-You can adjust the features afterward using **Edit supported features**. It does
-not copy the current fireplace settings, controller connection, or radio band.
+The ID restores the remote's identity, protocol, and learned transmit values.
+You select supported features during setup and can adjust them afterward using
+**Edit supported features**. The ID does not copy the current fireplace settings,
+controller connection, or radio band.
 Make sure the LilyGO is configured for the original remote's frequency.
 
 Learning IDs contain enough information to reproduce commands for that remote;
 do not publish them without considering that exposure. They identify a particular
 remote, not every remote with the same model number.
+
+### Enter Legacy Values Instead
 
 If you have older remote ID and C/D records instead, choose **Enter legacy
 values** in the setup menu. This alternative requires:

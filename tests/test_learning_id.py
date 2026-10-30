@@ -38,8 +38,8 @@ def _checked_id(prefix: str, payload: bytes) -> str:
 @pytest.mark.parametrize(
     ("profile", "expected", "payload"),
     [
-        (LEGACY, "PF2-1-L-CI2FMA2XDBVBZFK7", "123456035718"),
-        (EXTENDED, "PF2-1-E-CI2FMA4AILEBTPLKVK4Q", "123456038042c819"),
+        (LEGACY, "PF2-1-L-CI2FMVYYTNVRS7Q", "1234565718"),
+        (EXTENDED, "PF2-1-E-CI2FNACCZAMYKTI4W4", "1234568042c819"),
     ],
 )
 def test_documented_vectors(profile, expected, payload) -> None:
@@ -52,9 +52,10 @@ def test_documented_vectors(profile, expected, payload) -> None:
 
 @pytest.mark.parametrize("profile", [LEGACY, EXTENDED])
 @pytest.mark.parametrize("flags", itertools.product((False, True), repeat=5))
-def test_all_feature_flags_round_trip(profile, flags) -> None:
-    profile = replace(profile, features=FireplaceFeatures(*flags))
-    assert decode_learning_id(encode_learning_id(profile)) == profile
+def test_feature_choices_never_change_learning_id(profile, flags) -> None:
+    configured = replace(profile, features=FireplaceFeatures(*flags))
+    assert encode_learning_id(configured) == encode_learning_id(profile)
+    assert decode_learning_id(encode_learning_id(configured)) == profile
 
 
 @pytest.mark.parametrize("profile", [LEGACY, EXTENDED])
@@ -84,16 +85,15 @@ def test_legacy_nibble_boundaries() -> None:
         assert decode_learning_id(encode_learning_id(profile)) == profile
 
 
-def test_features_require_booleans() -> None:
-    with pytest.raises(ValueError, match="boolean"):
-        encode_learning_id(replace(LEGACY, features=FireplaceFeatures(fan=1)))
+def test_export_does_not_inspect_local_feature_configuration() -> None:
+    assert encode_learning_id(replace(LEGACY, features=None)) == encode_learning_id(LEGACY)
 
 
 @pytest.mark.parametrize("profile", [LEGACY, EXTENDED])
 def test_transmit_frames_preserved(profile) -> None:
     """Copied IDs must reproduce every supported manual command combination."""
     profile = replace(profile, features=FireplaceFeatures(True, True, True, True, True))
-    restored = decode_learning_id(encode_learning_id(profile))
+    restored = replace(decode_learning_id(encode_learning_id(profile)), features=profile.features)
     for flame, fan, light in itertools.product(range(1, 7), range(7), range(8)):
         state = FireplaceState(True, flame=flame, fan=fan, light=light, front=True, aux=True, cpi=True)
         assert encode_packet(state, restored).frame == encode_packet(state, profile).frame
@@ -128,10 +128,10 @@ def test_every_character_is_checksum_protected(profile) -> None:
         None,
         123,
         "",
-        "PF2-2-L-CI2FMA2XDBVBZFK7",
+        "PF2-1-L-CI2FMA2XDBVBZFK7",
         "PF2-1-X-CI2FMA2XDBVBZFK7",
         "PF2-1-L-CI2FMA2XDBVBZFK",
-        "PF2-1-L-CI2FMA2XDBVBZFK7=",
+        "PF2-1-L-CI2FMVYYTNVRS7Q=",
         "PF2-1-L-ci2fma2xdbvbzfk7",
         "PF2-1-L-!I2FMA2XDBVBZFK7",
         "PF2-1-L-\u00e9I2FMA2XDBVBZFK7",
@@ -142,15 +142,21 @@ def test_invalid_format_rejected(value) -> None:
         decode_learning_id(value)
 
 
-def test_reserved_feature_bits_rejected() -> None:
-    with pytest.raises(ValueError, match="feature flags"):
-        decode_learning_id(_checked_id("PF2-1-L-", bytes.fromhex("123456235718")))
+@pytest.mark.parametrize("old_id", ["PF2-1-L-CI2FMA2XDBVBZFK7", "PF2-1-E-CI2FMA4AILEBTPLKVK4Q"])
+def test_experimental_feature_bearing_ids_require_regeneration(old_id) -> None:
+    with pytest.raises(ValueError, match="length"):
+        decode_learning_id(old_id)
 
 
 def test_noncanonical_w4_and_base32_padding_bits_rejected() -> None:
     with pytest.raises(ValueError, match="Noncanonical"):
-        decode_learning_id(_checked_id("PF2-1-E-", bytes.fromhex("123456038142c819")))
+        decode_learning_id(_checked_id("PF2-1-E-", bytes.fromhex("1234568142c819")))
     value = encode_learning_id(EXTENDED)
-    # The last Base32 symbol has four unused zero bits; changing them is not canonical.
+    # The last Base32 symbol has two unused zero bits; changing them is not canonical.
     with pytest.raises(ValueError, match="Noncanonical"):
-        decode_learning_id(value[:-1] + "R")
+        decode_learning_id(value[:-1] + "5")
+
+
+def test_unknown_exchange_version_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unsupported"):
+        decode_learning_id(encode_learning_id(LEGACY).replace("PF2-1-", "PF2-9-"))

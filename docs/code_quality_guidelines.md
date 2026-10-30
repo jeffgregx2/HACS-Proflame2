@@ -40,6 +40,11 @@ senior engineer can navigate, evaluate, debug, and safely change.
    installations unless the project intentionally changes the major version and
    documents the required upgrade path.
 
+   Unreleased experimental data formats keep their initial version during
+   development. Increment the format version only when changing a format that
+   has been released; do not add compatibility layers for discarded development
+   schemas unless explicitly required.
+
 7. Use codified lifecycle automation.
    Repository lifecycle operations should use existing GitHub Actions or other
    checked-in automation before manual edits. Version stamping, release

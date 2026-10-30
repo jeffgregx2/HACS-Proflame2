@@ -46,6 +46,23 @@ def test_documentation_url_supports_env_override(monkeypatch) -> None:
     )
 
 
+def test_learning_id_links_match_real_documents_and_explicit_anchor(monkeypatch) -> None:
+    """Learning ID help must not silently fall back to the setup-options index."""
+    from urllib.parse import urlsplit
+
+    monkeypatch.setenv(docs_urls.DOCUMENTATION_REF_ENV, "dev")
+    section = urlsplit(docs_urls.learning_ids_url())
+    assert section.path.endswith("/blob/dev/docs/add_fireplace_profile.md")
+    assert section.fragment == "Using_learning_ids"
+    setup = Path(docs_urls.ADD_FIREPLACE_PROFILE_DOC).read_text()
+    assert f'<a id="{section.fragment}"></a>' in setup
+    assert f"]({Path(docs_urls.RTL433_LEARNING_IDS_DOC).name})" in setup
+    guide = Path(docs_urls.RTL433_LEARNING_IDS_DOC)
+    assert guide.is_file()
+    assert docs_urls.rtl433_learning_ids_url().endswith(f"/blob/dev/{guide.as_posix()}")
+    assert "add_fireplace_profile.md#Using_learning_ids" in guide.read_text()
+
+
 def test_manifest_documentation_matches_default_add_profile_url(monkeypatch) -> None:
     """The Home Assistant manifest help link should use the same default docs ref."""
 

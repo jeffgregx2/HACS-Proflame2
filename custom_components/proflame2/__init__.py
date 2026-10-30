@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from homeassistant.const import Platform
     from homeassistant.core import HomeAssistant
 
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -34,6 +35,7 @@ from .const import (
     DEFAULT_DEBUG_LOGGING,
     DOMAIN,
 )
+from .controller_assignment import controller_assignments
 from .identity import (
     fireplace_device_identifier,
     legacy_fireplace_device_identifier,
@@ -195,6 +197,18 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Proflame 2 from a config entry."""
+
+    # Keep the first enabled saved assignment operational; never start a second
+    # backend that would compete for RX policy or control on the same radio.
+    assignments = [
+        other for other in controller_assignments(hass, entry.data, entry.options) if other.disabled_by is None
+    ]
+    if assignments and assignments[0].entry_id != entry.entry_id:
+        raise ConfigEntryError(
+            f"Controller already assigned to fireplace '{assignments[0].title}'. "
+            "Each controller supports one fireplace. Remove the duplicate fireplace "
+            "entry or recreate it using a different controller. No profiles have been deleted."
+        )
 
     from .runtime import (
         async_refresh_runtime_device_link,
