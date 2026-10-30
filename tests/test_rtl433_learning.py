@@ -101,7 +101,7 @@ async def test_installed_helper_id_imports_into_ha_and_preserves_manual_encoding
     if not python:
         pytest.skip("Run validate_package.py --ha-interoperability for installed-helper validation")
     process = subprocess.run(
-        [python, "-I", "-m", "proflame2_learning_id.cli", "--features", "fan,light", "--input-mode", "file"],
+        [python, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", "file"],
         input="\n".join(map(json.dumps, records(profile))),
         capture_output=True,
         text=True,

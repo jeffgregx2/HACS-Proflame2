@@ -248,16 +248,15 @@ pilot setting is unknown. This is not an inferred on/off value. Once the
 extended pilot mapping is validated, the decoder and helper can be updated to
 use `0/1`. Earlier extended JSON records that omit this field remain accepted.
 
-Declare the features your fireplace supports using `--features`: `fan`, `light`,
-`front`, `aux`, and `cpi`, separated by commas, or `none`. `front` means the
-front-burner control; `cpi` means continuous-pilot control. A control being off
-does not establish that the feature is absent. File and pipe use require this
-option; an interactive terminal may ask for it.
+The helper collects remote information only. It does not ask which fireplace
+features to enable, and feature choices are not encoded in the Learning ID.
+Select those in HA during import. See [Using rtl_433 for learning](Using_rtl_433_for_learning.md)
+for the complete standalone workflow.
 
 For live collection:
 
 ```bash
-rtl_433 -R 207 -f 315M -F json | proflame2-learning-id --features fan,light -v
+rtl_433 -R 207 -f 315M -F json | proflame2-learning-id -v
 ```
 
 Use your fireplace remote to change several settings, such as Light Up or Down
@@ -282,9 +281,9 @@ no ID is printed and the command exits unsuccessfully.
 For saved newline-delimited JSON:
 
 ```bash
-proflame2-learning-id capture.json --features fan,light
-proflame2-learning-id --features fan,light < capture.json
-cat capture.json | proflame2-learning-id --input-mode file --features fan,light
+proflame2-learning-id capture.json
+proflame2-learning-id < capture.json
+cat capture.json | proflame2-learning-id --input-mode file
 ```
 
 Named files and regular-file input redirection default to file mode. Pipes

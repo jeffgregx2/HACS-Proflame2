@@ -65,7 +65,8 @@ from .const import (
     available_learning_backend_labels,
     available_learning_backend_types,
 )
-from .docs_urls import lilygo_controller_url, rtl433_manual_learning_url
+from .controller_assignment import controller_assignments
+from .docs_urls import learning_ids_url, lilygo_controller_url, rtl433_learning_ids_url, rtl433_manual_learning_url
 from .learning import (
     DEFAULT_LEARN_TIMEOUT_SECONDS,
     DEFAULT_RECEIVE_TIMEOUT_SECONDS,
@@ -299,6 +300,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _extended_diagnostic_task: asyncio.Task[str | None] | None = None
     _manual_pending_data: dict[str, Any] | None = None
     _manual_pending_options: dict[str, Any] | None = None
+    _manual_learning_id_import: bool = False
     _manual_rtl433_input: dict[str, Any] | None = None
     _manual_rtl433_samples: list[Rtl433Sample]
     _manual_rtl433_prompt_index: int = 0
@@ -350,6 +352,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Retain programmatic callers that submit the original manual schema.
         if user_input is not None and CONF_LEARNING_ID not in user_input and CONF_REMOTE_ID in user_input:
             return await self.async_step_manual_legacy(user_input)
+        self._manual_learning_id_import = True
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
@@ -366,11 +369,16 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _manual_profile_schema(), user_input or self._manual_suggested_values()
             ),
             errors=errors,
+            description_placeholders={
+                "rtl433_learning_url": rtl433_learning_ids_url(),
+                "learning_ids_url": learning_ids_url(),
+            },
         )
 
     async def async_step_manual_legacy(self, user_input: dict[str, Any] | None = None):
         """Retain manual entry of remote ID and legacy C/D constants."""
 
+        self._manual_learning_id_import = False
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -406,10 +414,41 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._manual_pending_data = normalized.data
                 self._manual_pending_options = normalized.options
                 return await self.async_step_manual_esphome()
-        return await self._async_create_profile_entry(
-            title=normalized.data[CONF_NAME],
-            data=normalized.data,
-            options=normalized.options,
+        self._manual_pending_data = normalized.data
+        self._manual_pending_options = normalized.options
+        return await self._async_finish_manual_setup()
+
+    async def _async_finish_manual_setup(self):
+        """Imported remote data needs local feature selection before entry creation."""
+
+        data, options = self._manual_pending_data, self._manual_pending_options
+        assert data is not None and options is not None
+        if self._manual_learning_id_import:
+            if controller_assignments(self.hass, data, options):
+                return self.async_abort(reason="controller_in_use")
+            return await self.async_step_manual_features()
+        return await self._async_create_profile_entry(title=data[CONF_NAME], data=data, options=options)
+
+    async def async_step_manual_features(self, user_input: dict[str, Any] | None = None):
+        """Choose fireplace features locally, independently of the Learning ID."""
+
+        data, options = self._manual_pending_data, self._manual_pending_options
+        if data is None or options is None:
+            return await self.async_step_manual()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                updated = normalize_entry_options({**options, **user_input})
+            except InvalidRefreshPeriodError:
+                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
+            else:
+                return await self._async_create_profile_entry(title=data[CONF_NAME], data=data, options=updated)
+        return self.async_show_form(
+            step_id="manual_features",
+            data_schema=self.add_suggested_values_to_schema(
+                FEATURE_SELECTION_SCHEMA, {**options, **(user_input or {})}
+            ),
+            errors=errors,
         )
 
     async def async_step_manual_rtl433(self, user_input: dict[str, Any] | None = None):
@@ -464,6 +503,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if self._manual_rtl433_input is None:
             return await self.async_step_manual_rtl433()
+        if controller_assignments(self.hass, self._manual_rtl433_input, {}):
+            return self.async_abort(reason="controller_in_use")
 
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -525,11 +566,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._manual_pending_data[CONF_ESPHOME_ENTRY_ID] = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
             esphome_entry_error = self._validate_manual_esphome_link(self._manual_pending_data)
             if esphome_entry_error is None:
-                return await self._async_create_profile_entry(
-                    title=self._manual_pending_data[CONF_NAME],
-                    data=self._manual_pending_data,
-                    options=self._manual_pending_options,
-                )
+                return await self._async_finish_manual_setup()
             errors[CONF_ESPHOME_ENTRY_ID] = esphome_entry_error
 
         return self.async_show_form(
@@ -593,6 +630,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if self._learn_input is None:
             return await self.async_step_learn()
+        if controller_assignments(self.hass, self._learn_input, {}):
+            return self.async_abort(reason="controller_in_use")
         self._learn_result = None
         await self._async_dispose_learning_session()
         learn_session = await self._async_start_learning_session_or_fail()
@@ -778,6 +817,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if self._learn_input is None:
             return await self.async_step_learn()
+        if controller_assignments(self.hass, self._learn_input, {}):
+            return self.async_abort(reason="controller_in_use")
 
         self._learn_result = None
         await self._async_dispose_learning_session()
@@ -806,6 +847,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             linked_esphome_entry_id=data.get(CONF_ESPHOME_ENTRY_ID),
         ):
             return self.async_abort(reason="already_configured")
+        if controller_assignments(self.hass, data, options):
+            return self.async_abort(reason="controller_in_use")
         return self.async_create_entry(
             title=title,
             data=data,

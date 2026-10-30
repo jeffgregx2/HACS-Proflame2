@@ -7,19 +7,19 @@
         "menu_options": {
           "learn": "Learn from remote (Recommended)",
           "manual_rtl433": "Learn from rtl_433 output",
-          "manual": "Enter Learning ID",
+          "manual": "Enter a Learning ID",
           "manual_legacy": "Enter legacy values"
         },
         "menu_option_descriptions": {
           "learn": "Use your selected LilyGO or YardStick controller to learn from the original remote.",
           "manual_rtl433": "Use a separate SDR with rtl_433 to learn, then control the fireplace with LilyGO or YardStick.",
-          "manual": "Copy a Learning ID from an existing Proflame2 fireplace's diagnostics.",
+          "manual": "Use a Learning ID generated with rtl_433 or copied from an existing Proflame2 fireplace in Home Assistant.",
           "manual_legacy": "Enter a legacy remote ID and learned C/D values instead."
         }
       },
       "manual": {
-        "title": "Manual fireplace profile",
-        "description": "Paste the Learning ID from the Diagnostic section of an existing Proflame2 fireplace device. This works for both legacy and extended remotes and restores the supported features stored in that ID.\n\nFor a Remote ID and C/D values instead, choose Enter legacy values from the Add fireplace profile menu.",
+        "title": "Enter a Learning ID",
+        "description": "Paste a Learning ID [generated using rtl_433]({rtl433_learning_url}) or [copied from an existing Proflame2 fireplace in Home Assistant]({learning_ids_url}). This supports both legacy and extended remotes.\n\nSave the ID for future use: it describes the specific native remote used to generate it. See [Using Learning IDs]({learning_ids_url}) for details.\n\nFor a Remote ID and C/D values instead, choose Enter legacy values from the Add fireplace profile menu.",
         "data": {
           "name": "Fireplace name",
           "fireplace_short_name": "Display short name",
@@ -49,6 +49,24 @@
           "aux": "Aux supported",
           "cpi": "CPI supported",
           "refresh_period_minutes": "Refresh period in minutes"
+        },
+        "data_description": {
+          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF."
+        }
+      },
+      "manual_features": {
+        "title": "Select supported features",
+        "description": "The Learning ID identifies your native remote. Choose the features to enable for this fireplace; these choices are not stored in the ID.",
+        "data": {
+          "fan": "Fan supported",
+          "light": "Light supported",
+          "front": "Front burner supported",
+          "aux": "Aux supported",
+          "cpi": "CPI supported",
+          "debug_logging": "Enable debug logging",
+          "active_listening": "Enable active listening",
+          "refresh_period_minutes": "Refresh period in minutes",
+          "fireplace_short_name": "Display short name"
         },
         "data_description": {
           "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF."
@@ -129,13 +147,13 @@
         "menu_options": {
           "retry_learn": "Retry learning",
           "manual_rtl433": "Learn from rtl_433 output",
-          "manual": "Enter Learning ID",
+          "manual": "Enter a Learning ID",
           "manual_legacy": "Enter legacy values"
         },
         "menu_option_descriptions": {
           "retry_learn": "Start guided learning again with the same backend.",
           "manual_rtl433": "Run rtl_433 yourself, follow prompted remote button presses, and paste decoded rows.",
-          "manual": "Import an existing Learning ID instead.",
+          "manual": "Use a Learning ID generated with rtl_433 or copied from an existing Proflame2 fireplace in Home Assistant.",
           "manual_legacy": "Enter a known legacy remote ID and C/D values."
         }
       }
@@ -159,7 +177,8 @@
       "invalid_refresh_period": "Enter a non-negative whole number of minutes (0 disables refresh)."
     },
     "abort": {
-      "already_configured": "A fireplace with this remote ID is already configured for this controller."
+      "already_configured": "A fireplace with this remote ID is already configured for this controller.",
+      "controller_in_use": "This controller is already assigned to a fireplace. Each controller supports one fireplace. Select a different controller, or remove its existing fireplace entry before setting it up again."
     }
   },
   "options": {

@@ -97,7 +97,7 @@ def test_parse_remote_id_accepts_24_bit_hex() -> None:
 
 @pytest.mark.parametrize("extended", [False, True])
 @pytest.mark.parametrize("flags", itertools.product((False, True), repeat=5))
-def test_learning_id_normalization_preserves_profile_and_features(extended, flags) -> None:
+def test_learning_id_normalization_preserves_remote_but_uses_local_features(extended, flags) -> None:
     features = FireplaceFeatures(*flags)
     profile = RemoteProfile(
         0x123456,
@@ -123,7 +123,9 @@ def test_learning_id_normalization_preserves_profile_and_features(extended, flag
     assert result.data[CONF_ESPHOME_ENTRY_ID] == "test-controller"
     assert result.data[CONF_REMOTE_ID] == 0x123456
     assert result.data[CONF_PROTOCOL_VARIANT] == profile.protocol_variant
-    assert {key: result.options[key] for key in asdict(features)} == asdict(features)
+    assert {key: result.options[key] for key in asdict(features)} == {
+        key: not value for key, value in asdict(features).items()
+    }
     assert result.options[CONF_ACTIVE_LISTENING] is True
     assert result.options[CONF_FIREPLACE_SHORT_NAME] == "TEST"
     assert CONF_LEARNING_ID not in result.data
@@ -151,7 +153,7 @@ def test_learning_id_normalization_rejects_unsupported_controller() -> None:
             {
                 CONF_NAME: "Test Fireplace",
                 CONF_BACKEND_TYPE: "unsupported",
-                CONF_LEARNING_ID: "PF2-1-L-CI2FMA2XDBVBZFK7",
+                CONF_LEARNING_ID: "PF2-1-L-CI2FMVYYTNVRS7Q",
             }
         )
 

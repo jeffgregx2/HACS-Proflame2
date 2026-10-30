@@ -139,6 +139,11 @@ async def test_learning_id_diagnostic_generated_on_each_profile_load(hass, monke
     assert len(generated) == 2
     assert hass.states.get(entity_id).state == generated[0] == generated[1]
 
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_FAN: False, CONF_LIGHT: False})
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == generated[0]
+
     hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_REMOTE_ID: 0x654321})
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()

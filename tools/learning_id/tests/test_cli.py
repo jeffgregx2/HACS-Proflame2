@@ -47,7 +47,7 @@ def commands(count=7, extended=False):
 def run(records, *args, mode="file"):
     text = "\n".join(json.dumps(record) for record in records) + "\n"
     return subprocess.run(
-        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--features", "fan,light", "--input-mode", mode, *args],
+        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", mode, *args],
         input=text,
         capture_output=True,
         text=True,
@@ -183,7 +183,7 @@ def test_extended_pilot_cannot_claim_an_unestablished_mapping(pilot):
 def test_named_file_and_regular_stdin_defaults(tmp_path):
     path = tmp_path / "capture.json"
     path.write_text("\n".join(map(json.dumps, commands(3))))
-    command = [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--features", "none"]
+    command = [PYTHON, "-I", "-m", "proflame2_learning_id.cli"]
     result = subprocess.run([*command, str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "Preliminary" in result.stderr
@@ -195,7 +195,7 @@ def test_named_file_and_regular_stdin_defaults(tmp_path):
 
 def test_pipe_defaults_to_live():
     result = subprocess.run(
-        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--features", "none"],
+        [PYTHON, "-I", "-m", "proflame2_learning_id.cli"],
         input="\n".join(map(json.dumps, commands(3))),
         capture_output=True,
         text=True,
@@ -209,7 +209,7 @@ def test_pipe_defaults_to_live():
 )
 def test_bad_json_and_input_bounds_do_not_echo_input(payload):
     result = subprocess.run(
-        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", "file", "--features", "none"],
+        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", "file"],
         input=payload,
         capture_output=True,
         text=True,
@@ -222,7 +222,7 @@ def test_bad_json_and_input_bounds_do_not_echo_input(payload):
 
 def test_live_timeout_on_partial_line():
     process = subprocess.Popen(
-        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--features", "none", "--timeout", "0.05"],
+        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--timeout", "0.05"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -244,14 +244,15 @@ def test_live_timeout_on_partial_line():
         process.stderr.close()
 
 
-def test_console_entrypoint_and_explicit_features():
+def test_console_entrypoint_never_requests_local_features():
     binary = Path(PYTHON).with_name("proflame2-learning-id")
     result = subprocess.run([str(binary), "--help"], capture_output=True, text=True)
     assert result.returncode == 0
     assert "--input-mode" in result.stdout
+    assert "--features" not in result.stdout
     result = subprocess.run([str(binary)], input="", capture_output=True, text=True)
     assert result.returncode != 0
-    assert "--features" in result.stderr
+    assert "--features" not in result.stderr
     assert not result.stdout
 
 
@@ -265,7 +266,7 @@ def test_console_entrypoint_and_explicit_features():
 )
 def test_input_volume_and_record_limits(text, error):
     result = subprocess.run(
-        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", "file", "--features", "none"],
+        [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", "file"],
         input=text,
         capture_output=True,
         text=True,

@@ -71,17 +71,6 @@ def records(stream: BinaryIO, *, live: bool, timeout: float) -> Iterator[bytes]:
             return
 
 
-def parse_features(value: str) -> FireplaceFeatures:
-    """Require an explicit capability selection; off commands cannot reveal it."""
-    names = {name.strip() for name in value.split(",")}
-    allowed = {"fan", "light", "front", "aux", "cpi"}
-    if names == {"none"}:
-        names = set()
-    if names - allowed:
-        raise ValueError("Features must be fan, light, front, aux, cpi, or none.")
-    return FireplaceFeatures(**{name: name in names for name in allowed})
-
-
 def main(argv: list[str] | None = None) -> int:
     """Collect evidence without transmitting or changing Home Assistant state."""
     parser = argparse.ArgumentParser(description="Create a Proflame2 Learning ID from rtl_433 JSON commands.")
@@ -89,27 +78,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--input-mode", choices=("file", "live"), help="Pipes default to live; saved files default to file."
     )
-    parser.add_argument(
-        "--features", help="Supported features: fan,light,front,aux,cpi; use none for no optional features."
-    )
     parser.add_argument("--timeout", type=float, default=120, help="Live collection limit in seconds (default: 120).")
     parser.add_argument("--verbose", "-v", action="store_true", help="Explain progress and missing evidence.")
     args = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or not 0 < args.timeout <= 3600:
         parser.error("--timeout must be greater than zero and at most 3600 seconds.")
-    feature_text = args.features
-    if feature_text is None and sys.stdin.isatty():
-        print(
-            "Which features does your fireplace support? Enter fan, light, front, aux, cpi, or none:", file=sys.stderr
-        )
-        feature_text = sys.stdin.readline().strip()
-    if feature_text is None:
-        parser.error("Provide --features when supplying JSON through a file or pipe.")
-    try:
-        features = parse_features(feature_text)
-    except ValueError as exc:
-        parser.error(str(exc))
-    evidence = Evidence(features)
+    # Derivation's RemoteProfile model carries local feature defaults, but the
+    # Learning ID codec exports remote data only. HA asks for features at import.
+    evidence = Evidence(FireplaceFeatures())
     named = args.file not in (None, "-")
     try:
         with open(args.file, "rb") if named else nullcontext(sys.stdin.buffer) as stream:

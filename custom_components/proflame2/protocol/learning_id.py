@@ -11,11 +11,9 @@ from .models import (
     PROTOCOL_VARIANT_EXTENDED_10_WORD,
     ECCProfile,
     ExtendedFrameTemplate,
-    FireplaceFeatures,
     RemoteProfile,
 )
 
-_FEATURES = ("fan", "light", "front", "aux", "cpi")
 _LEGACY_PREFIX = "PF2-1-L-"
 _EXTENDED_PREFIX = "PF2-1-E-"
 
@@ -27,16 +25,10 @@ def _bounded_int(value: int, maximum: int = 255) -> int:
 
 
 def encode_learning_id(profile: RemoteProfile) -> str:
-    """Encode identity, capabilities and fixed transmit fields, with a CRC32."""
+    """Encode remote identity and fixed transmit fields, never HA feature choices."""
 
     serial = _bounded_int(profile.serial_id, 0xFFFFFF).to_bytes(3, "big")
-    flags = 0
-    for bit, name in enumerate(_FEATURES):
-        value = getattr(profile.features, name)
-        if type(value) is not bool:
-            raise ValueError("Learning ID feature flags must be boolean.")
-        flags |= int(value) << bit
-    payload = serial + bytes([flags])
+    payload = serial
     if profile.is_extended:
         prefix = _EXTENDED_PREFIX
         template = profile.extended_template
@@ -73,7 +65,7 @@ def decode_learning_id(value: str) -> RemoteProfile:
     if prefix not in (_LEGACY_PREFIX, _EXTENDED_PREFIX):
         raise ValueError("Unsupported Learning ID format or version.")
     encoded = value[8:]
-    expected_length = 20 if prefix == _EXTENDED_PREFIX else 16
+    expected_length = 18 if prefix == _EXTENDED_PREFIX else 15
     if len(encoded) != expected_length:
         raise ValueError("Invalid Learning ID length.")
     try:
@@ -83,21 +75,15 @@ def decode_learning_id(value: str) -> RemoteProfile:
     payload, checksum = raw[:-4], raw[-4:]
     if checksum != zlib.crc32(prefix.encode("ascii") + payload).to_bytes(4, "big"):
         raise ValueError("Learning ID checksum mismatch.")
-    if payload[3] & ~0x1F:
-        raise ValueError("Unsupported Learning ID feature flags.")
-    features = FireplaceFeatures(**{name: bool(payload[3] & (1 << bit)) for bit, name in enumerate(_FEATURES)})
     serial = int.from_bytes(payload[:3], "big")
     if prefix == _LEGACY_PREFIX:
-        profile = RemoteProfile(
-            serial, ECCProfile(payload[4] >> 4, payload[4] & 15, payload[5] >> 4, payload[5] & 15), features
-        )
+        profile = RemoteProfile(serial, ECCProfile(payload[3] >> 4, payload[3] & 15, payload[4] >> 4, payload[4] & 15))
     else:
         profile = RemoteProfile(
             serial,
             ECCProfile(0, 0, 0, 0),
-            features,
             protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
-            extended_template=ExtendedFrameTemplate(*payload[4:8]),
+            extended_template=ExtendedFrameTemplate(*payload[3:7]),
         )
     if encode_learning_id(profile) != value:
         raise ValueError("Noncanonical Learning ID encoding.")
