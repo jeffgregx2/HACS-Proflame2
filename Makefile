@@ -5,6 +5,9 @@
 .NOTPARALLEL: _esphome-validate
 
 TEST_BOOTSTRAP_PYTHON ?= python3
+OUTPUT_DIR ?=
+ARCHIVE ?=
+PACKAGE_ARGS ?=
 PYTEST_ARGS ?=
 PYTHON ?= ./.venv/bin/python
 BLACK ?= ./.venv/bin/black
@@ -25,6 +28,14 @@ ESPHOME_STAGE_CLI ?= $(ESPHOME_WORK_ROOT)/esphome
 
 test:
 	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/run_tests.sh $(PYTEST_ARGS)
+
+.PHONY: learning-id-package learning-id-package-test
+learning-id-package:
+	@test -n "$(OUTPUT_DIR)" || { printf 'Specify OUTPUT_DIR outside the checkout, for example /tmp/proflame2-learning-id.\n' >&2; exit 1; }
+	PYTHONDONTWRITEBYTECODE=1 $(TEST_BOOTSTRAP_PYTHON) -B tools/learning_id/build_archive.py --output-dir "$(OUTPUT_DIR)" $(PACKAGE_ARGS)
+
+learning-id-package-test:
+	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/learning_id/test_archive.sh $(if $(ARCHIVE),--archive "$(ARCHIVE)",)
 
 firmware-unit-test:
 	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/run_tests.sh $(PYTEST_ARGS) tests/test_esphome_cpp_unit.py tests/test_radio_register_trace.py

@@ -256,6 +256,16 @@ The bootstrap defaults to the current machine's `python3`; select another native
 interpreter with `TEST_BOOTSTRAP_PYTHON=/path/to/python3`. Pass pytest options with
 `PYTEST_ARGS`, for example `make test PYTEST_ARGS="-k learning_id"`.
 
+Build and test the inspectable Learning ID download:
+
+```sh
+make learning-id-package OUTPUT_DIR=/tmp/proflame2-learning-id
+make learning-id-package-test ARCHIVE=/tmp/proflame2-learning-id/proflame2-learning-id.pyz
+```
+
+See [Learning ID packaging](docs/learning_id_packaging.md) for development and
+release automation details.
+
 ## More Information
 
 - [LilyGO CC1101 controller guide](docs/lilygo_cc1101_controller.md)

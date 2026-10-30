@@ -15,7 +15,7 @@ YardStick controls the fireplace; the SDR and helper are not needed for normal u
 - A separate RTL-SDR-compatible receiver and a suitable antenna, connected to a
   computer. A LilyGO or YardStick is not a substitute for the SDR in this flow.
 - An rtl_433 build that understands your remote's frame format.
-- Python 3.10 or newer and the companion `proflame2-learning-id` helper.
+- Python 3.10 or newer on Linux or macOS and the companion Learning ID archive.
 - A supported controller dedicated to this fireplace for normal HA operation.
 
 Home Assistant does not install or run rtl_433 or the helper. You run them in a
@@ -65,7 +65,90 @@ executable. With an extended remote, its JSON output should identify
 field, containing 20 hexadecimal characters. A row containing only legacy
 command/error fields is not sufficient evidence for an extended profile.
 
-## Run the Companion Helper Without Keeping an Environment
+## Download and Inspect the Helper
+
+Download `proflame2-learning-id.pyz` and `proflame2-learning-id.pyz.sha256`
+from the matching GitHub release's **Assets**, when available, or use the
+development package supplied by the maintainer. The archive contains readable
+Python source, not a compiled executable, bundled interpreter, or installer.
+You must install/configure your SDR and compatible rtl_433 yourself.
+
+You can review everything **before executing the helper**, including before
+running `--help`. In a terminal in the download directory:
+
+```sh
+unzip -l proflame2-learning-id.pyz
+unzip -p proflame2-learning-id.pyz __main__.py
+unzip proflame2-learning-id.pyz -d proflame2-learning-id-source
+```
+
+If `unzip` is unavailable, Python's standard ZIP tool can list/extract it
+without running the helper:
+
+```sh
+python3 -m zipfile -l proflame2-learning-id.pyz
+python3 -m zipfile -e proflame2-learning-id.pyz proflame2-learning-id-source
+```
+
+These commands list, read, and extract the archive without running its Python
+code. Read `__main__.py`, `README.md`, and the source files in
+`proflame2_learning_id/` and `proflame2_protocol/`. `LICENSE` contains the
+license. `proflame2_learning_id/BUILD_INFO.json` records the product version,
+source commit, whether the build included local changes, and a content digest.
+There are no tests, captures, credentials, or host-specific configuration in
+the package. A development package may intentionally include uncommitted code.
+
+Check the download against its companion checksum. On Linux:
+
+```sh
+sha256sum -c proflame2-learning-id.pyz.sha256
+```
+
+On macOS:
+
+```sh
+shasum -a 256 -c proflame2-learning-id.pyz.sha256
+```
+
+A checksum detects corruption or a mismatched download, not whether the code
+is safe. It is not a digital signature or a substitute for reviewing/trusting
+the source and its download location.
+
+When ready, set the archive path and view its help:
+
+```sh
+HELPER_ARCHIVE="$PWD/proflame2-learning-id.pyz"
+python3 "$HELPER_ARCHIVE" --help
+```
+
+`--help` lists the supported arguments without the detailed inspection text.
+If you wish to examine the contents of the archive, display those instructions
+separately with:
+
+```sh
+python3 "$HELPER_ARCHIVE" --inspect-pyz-archive
+```
+
+That flag prints the instructions and exits without starting rtl_433 or learning.
+It does execute helper code to print the text; the ZIP commands above allow
+inspection without executing any helper code.
+`--version` shows the product version and source revision. No pip, virtual
+environment, administrator access, or network dependency download is needed
+to run the helper. It installs nothing, saves no configuration or log files,
+and does not write Python bytecode caches, including when run after extraction.
+It does start the user-installed rtl_433 for managed live reception.
+
+To run the reviewed extracted source instead:
+
+```sh
+python3 proflame2-learning-id-source/__main__.py --rf-band 315 --timeout 600
+```
+
+When finished, delete the downloaded archive/checksum and any extracted review
+directory. Save your Learning ID separately if desired. This flow is supported
+on Linux/macOS; Windows live SDR/terminal operation is not supported.
+
+### Developer Source Runner
 
 Open a terminal in the helper-enabled HACS-Proflame2 source checkout supplied by
 the maintainer. It must contain both `tools/learning_id` and the package metadata
@@ -90,30 +173,9 @@ Keep captures and saved IDs in a private, persistent directory outside `/tmp`.
 The runner preserves your current directory and passes through all helper
 arguments. To choose a Python interpreter, set `LEARNING_ID_PYTHON`.
 
-### Optional Persistent Installation
-
-If you explicitly want an installed command instead, create a virtual environment
-and run `python -m pip install .` there. On Windows, use PowerShell from the
-source directory:
-
-```powershell
-py -3 -m venv .venv-learning-id
-.\.venv-learning-id\Scripts\python.exe -m pip install .
-.\.venv-learning-id\Scripts\proflame2-learning-id.exe --help
-```
-
-For saved-file processing, Windows users can replace `bash "$HELPER_RUNNER"`
-with the full helper executable path shown above. The managed `--rf-band` launch
-option belongs to the Linux/macOS runner, not the standalone helper command.
-Use a terminal that preserves each rtl_433 JSON line when
-piping or saving output. If installation or USB-driver setup is unfamiliar,
-ask for assistance and include the error text, operating system, and software
-version. Do not change USB drivers for unrelated devices.
-
-The managed live examples below use a Linux/macOS terminal. On Windows, use the
-saved-JSON workflow instead; the helper's live pipe reader is not a Windows
-implementation. Record JSON with Command Prompt (`cmd.exe`), rather than older
-Windows PowerShell's default file redirection, to avoid changing the text encoding.
+This source runner remains available to developers, but end users do not need
+a checkout or temporary environment when using the `.pyz`. For local packaging
+and CI/release details, see [Learning ID packaging](learning_id_packaging.md).
 
 ## Select the Radio Band
 
@@ -142,13 +204,13 @@ helper will give you time to prepare before it asks for the first button press.
 For a 315 MHz remote, run:
 
 ```sh
-bash "$HELPER_RUNNER" --rf-band 315 --timeout 600
+python3 "$HELPER_ARCHIVE" --rf-band 315 --timeout 600
 ```
 
 For a 433.92 MHz remote:
 
 ```sh
-bash "$HELPER_RUNNER" --rf-band 433 --timeout 600
+python3 "$HELPER_ARCHIVE" --rf-band 433 --timeout 600
 ```
 
 This managed mode starts rtl_433, supplies its JSON to the helper, and stops
@@ -262,7 +324,7 @@ Perform the same button sequence, then press Ctrl-C to stop recording. For a
 `2>&1`, because startup/debug text is not JSON. Then run:
 
 ```sh
-bash "$HELPER_RUNNER" remote-capture.json -v
+python3 "$HELPER_ARCHIVE" remote-capture.json -v
 ```
 
 File mode validates the entire file and may generate an ID labeled

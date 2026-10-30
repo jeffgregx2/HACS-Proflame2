@@ -16,6 +16,11 @@ on:
 jobs:
   validate-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      source_commit: ${{ steps.source.outputs.commit }}
     steps:
       - name: Resolve release inputs
         id: release
@@ -43,3 +48,45 @@ jobs:
           RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
         shell: bash
         run: python3 scripts/validate_release_source.py --tag "$RELEASE_TAG" --prerelease "$RELEASE_PRERELEASE"
+
+      - name: Record validated source commit
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  learning-id-assets:
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: validate-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out the validated release commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate-release.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Prepare package directory
+        run: |
+          directory=$(mktemp -d "$RUNNER_TEMP/proflame2-learning-id.XXXXXX")
+          echo "OUTPUT_DIR=$directory" >> "$GITHUB_ENV"
+      - name: Build inspectable source archive and checksum
+        run: make learning-id-package OUTPUT_DIR="$OUTPUT_DIR" PACKAGE_ARGS=--require-clean
+      - name: Test release archive before upload
+        run: make learning-id-package-test ARCHIVE="$OUTPUT_DIR/proflame2-learning-id.pyz"
+      - name: Add helper assets without replacing other release downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.tag_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "$OUTPUT_DIR/proflame2-learning-id.pyz" \
+            "$OUTPUT_DIR/proflame2-learning-id.pyz.sha256" \
+            --repo "$GITHUB_REPOSITORY"
+      - name: Clean package outputs
+        if: always()
+        run: if [[ -n "${OUTPUT_DIR:-}" ]]; then rm -rf -- "$OUTPUT_DIR"; fi

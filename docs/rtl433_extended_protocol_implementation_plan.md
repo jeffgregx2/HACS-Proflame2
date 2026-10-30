@@ -199,6 +199,17 @@ final integration review T11. Live hardware is not required for T1-T9.
   tests passed**, plus Ruff, Black, and whitespace checks. Tests cover all three
   control paths, legacy/extended protocols, zero/high initial settings, automatic
   repeats, question validation/cancellation, and independent-check accounting.
+- Distribution now has a source-only `.pyz` builder shared by local Make targets
+  and GitHub workflows. Help and end-user docs explain how to inspect/extract
+  the source without executing it. Release publication adds only the archive
+  and checksum after validation of the exact release commit; existing HA/ESPHome
+  downloads remain untouched. Development artifacts and Linux/macOS Python
+  3.10/3.14 jobs are configured, but have not run on GitHub yet. Local Python
+  3.14 checks passed: **28 archive tests**, **102 installed-helper tests**,
+  **six HA interoperability tests**, and **1,821 repository tests (34 skipped,
+  one deselected)**, plus Ruff, Black, and whitespace checks. Archive tests
+  include all four recorded-remotes' decoder fixtures without fabricating
+  missing legacy repeats. Local scratch environments were removed afterward.
 
 | Responsibility | Owner | Dependency boundary |
 | --- | --- | --- |

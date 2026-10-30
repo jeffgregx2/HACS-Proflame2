@@ -18,6 +18,7 @@ import threading
 from collections import deque
 
 from .cli import main as collect
+from .help_text import add_inspection_option
 from .receiver_probe import ReceiverCompatibilityError, check
 
 
@@ -103,10 +104,13 @@ def stop(receiver: subprocess.Popen) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description=__doc__, epilog="Other arguments are passed to the helper, for example --timeout 600 or --unguided."
+        description=__doc__,
+        epilog="Other arguments are passed to the helper, for example --timeout 600 or --unguided.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--rf-band", choices=("315", "433"), required=True, help="Native remote's radio band.")
     parser.add_argument("--rtl433", default="rtl_433", help="rtl_433 executable name or path.")
+    add_inspection_option(parser)
     args, helper_args = parser.parse_known_args(argv)
     frequency = "315M" if args.rf_band == "315" else "433.92M"
 

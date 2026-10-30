@@ -54,6 +54,30 @@ def run(records, *args, mode="file"):
     )
 
 
+@pytest.mark.parametrize("module", ["cli", "radio"])
+def test_inspection_option_exits_without_input_or_receiver(module):
+    result = subprocess.run(
+        [PYTHON, "-I", "-m", f"proflame2_learning_id.{module}", "--inspect-pyz-archive"],
+        input="",
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("If you wish to examine the contents of this archive before running it:")
+    assert "unzip -l" in result.stdout
+    assert not result.stderr
+    help_result = subprocess.run(
+        [PYTHON, "-I", "-m", f"proflame2_learning_id.{module}", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert help_result.returncode == 0
+    assert "--inspect-pyz-archive" in help_result.stdout
+    assert "unzip -l" not in help_result.stdout
+
+
 @pytest.mark.parametrize("extended", [False, True])
 @pytest.mark.parametrize(("count", "label"), [(3, "Preliminary"), (4, "Confirmation incomplete"), (5, "Confirmed")])
 def test_file_levels_and_single_stdout_id(count, label, extended):

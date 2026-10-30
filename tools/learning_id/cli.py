@@ -21,6 +21,7 @@ from proflame2_protocol.rtl433 import normalize_rtl433_record
 
 from .evidence import Evidence
 from .guided import collect as collect_guided
+from .help_text import add_inspection_option
 
 MAX_LINE = 16384
 MAX_INPUT = 16 * 1024 * 1024
@@ -68,9 +69,12 @@ def records(stream: BinaryIO, *, live: bool, timeout: float) -> Iterator[bytes]:
             return
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Collect evidence without transmitting or changing Home Assistant state."""
-    parser = argparse.ArgumentParser(description="Create a Proflame2 Learning ID from rtl_433 JSON commands.")
+def build_parser() -> argparse.ArgumentParser:
+    """Share input options between installed and source-archive entry points."""
+    parser = argparse.ArgumentParser(
+        description="Create a Proflame2 Learning ID from rtl_433 JSON commands.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("file", nargs="?", help="Saved JSON file; omit or use - for standard input.")
     parser.add_argument(
         "--input-mode", choices=("file", "live"), help="Pipes default to live; saved files default to file."
@@ -83,9 +87,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Explain progress and missing evidence.")
     parser.add_argument("--unguided", action="store_true", help="Collect live JSON without terminal/button prompts.")
-    args = parser.parse_args(argv)
-    if not math.isfinite(args.timeout) or not 0 < args.timeout <= 3600:
+    add_inspection_option(parser)
+    return parser
+
+
+def validate_timeout(parser: argparse.ArgumentParser, timeout: float) -> None:
+    """Reject invalid deadlines before any live receiver can be started."""
+    if not math.isfinite(timeout) or not 0 < timeout <= 3600:
         parser.error("--timeout must be greater than zero and at most 3600 seconds.")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Collect evidence without transmitting or changing Home Assistant state."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    validate_timeout(parser, args.timeout)
     # Derivation's RemoteProfile model carries local feature defaults, but the
     # Learning ID codec exports remote data only. HA asks for features at import.
     evidence = Evidence(FireplaceFeatures())
