@@ -182,8 +182,15 @@ def session(timeout="2", command=None):
         # Release the controlling terminal before reaping on macOS, and include
         # the synthetic receiver without touching another test's process group.
         os.close(master)
-        with suppress(ProcessLookupError):
+        try:
             os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            # Darwin can reject a group signal during terminal hangup/exit.
+            # Reaping below must still prove that the child actually stopped.
+            with suppress(ProcessLookupError, PermissionError):
+                process.kill()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -204,6 +211,18 @@ def test_session_reports_a_live_child_traceback():
         transcript = capture.diagnostics()
         assert "guided.py" in transcript
         assert "pty_child.py" in transcript
+
+
+def test_session_cleanup_reaps_child_if_group_signal_is_denied(monkeypatch):
+    def denied_group_signal(*args):
+        raise PermissionError("terminal group is already exiting")
+
+    monkeypatch.setattr(os, "killpg", denied_group_signal)
+    with session() as capture:
+        capture.read_until("Press Return when it is OFF and you are ready")
+    assert capture.process.poll() is not None
+    assert capture.process.stdin.closed
+    assert capture.process.stdout.closed
 
 
 def test_session_cleanup_preserves_the_original_failure_and_closes_terminal(monkeypatch, capsys):
