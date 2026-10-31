@@ -60,6 +60,7 @@ class ControllerArbiter:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     readiness_unknown: bool = False
     uncertain_request_id: str | None = None
+    recovery_deadline: float = 0.0
     learning_owner: object | None = None
 
 

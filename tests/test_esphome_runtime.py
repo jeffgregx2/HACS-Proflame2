@@ -551,16 +551,76 @@ async def test_request_identifiers_are_unique_across_backend_sessions() -> None:
     assert first._next_request_id() != first._next_request_id()
 
 
-async def test_backend_recovery_adapter(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("status", "available", "expected"),
+    [
+        ("ready", True, True),
+        ("rx_active", True, True),
+        ("tx", True, False),
+        ("fault", True, False),
+        ("booting", True, False),
+        ("unknown", True, False),
+        (None, True, False),
+        ("ready", False, False),
+    ],
+)
+async def test_recovery_without_completion_requires_explicit_readiness(hass, status, available, expected):
+    data = _fake_esphome_runtime_data()
+    linked_entry = _add_linked_esphome_entry(hass, data)
+    transport = HomeAssistantESPHomeTransport(
+        hass,
+        linked_entry_id=linked_entry.entry_id,
+        controller_id=f"esphome:{linked_entry.entry_id}",
+        debug_logging_enabled=False,
+    )
+    await transport.connect()
+    data.object_states["proflame2_endpoint_status"].state = status
+    data.available = available
+    assert await transport.recover_send_readiness(None) is expected
+
+
+@pytest.mark.parametrize("request_id", [None, "shared-controller-request"])
+async def test_backend_recovery_adapter(monkeypatch, request_id) -> None:
     from unittest.mock import AsyncMock
 
     transport = MockESPHomeTransport()
     backend = ESPHomeAPIBackend(transport=transport)
     await backend.connect()
+    backend.latest_request_id = "previous-completed-request"
     recover = AsyncMock(return_value=True)
     monkeypatch.setattr(transport, "recover_send_readiness", recover, raising=False)
-    assert await backend.recover_send_readiness("shared-controller-request")
-    recover.assert_awaited_once_with("shared-controller-request")
+    assert await backend.recover_send_readiness(request_id)
+    recover.assert_awaited_once_with(request_id)
+
+
+@pytest.mark.parametrize("uncertain_tx", [False, True])
+async def test_controller_reboot_allows_new_control(hass, uncertain_tx) -> None:
+    from custom_components.proflame2.services import _control_arbiter, async_controller_connection_lost
+
+    data = _fake_esphome_runtime_data()
+    linked_entry = _add_linked_esphome_entry(hass, data)
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    entry = _add_entry(hass, options={CONF_ESPHOME_ENTRY_ID: linked_entry.entry_id})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.services.async_call(DOMAIN, "set_state", {CONF_POWER: True, CONF_FLAME: 2}, blocking=True)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    previous_request = runtime.backend.latest_request_id
+    assert previous_request
+
+    # Reboot loses firmware completion history, not the HA adapter's history.
+    async_controller_connection_lost(hass, runtime)
+    data.object_states["proflame2_last_request_id"].state = ""
+    data.object_states["proflame2_last_tx_result"].state = "none"
+    data.object_states["proflame2_endpoint_status"].state = "ready"
+    assert not await runtime.backend.recover_send_readiness(previous_request)
+    if uncertain_tx:
+        arbiter = _control_arbiter(hass, runtime)
+        arbiter.uncertain_request_id = previous_request
+        arbiter.recovery_deadline = asyncio.get_running_loop().time() - 1
+    await hass.services.async_call(DOMAIN, "set_state", {CONF_POWER: True, CONF_FLAME: 3}, blocking=True)
+    assert runtime.backend.latest_request_id != previous_request
+    assert data.object_states["proflame2_last_request_id"].state == runtime.backend.latest_request_id
+    assert data.object_states["proflame2_last_tx_result"].state == "ok"
 
 
 async def test_backend_timeout_remains_distinguishable_for_quarantine(monkeypatch, remote_profile) -> None:

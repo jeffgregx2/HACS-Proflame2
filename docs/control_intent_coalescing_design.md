@@ -190,8 +190,15 @@ For a matching in-flight failure, timeout, or detected controller disconnect:
    status. No compensating RF packet is sent.
 4. Persist only accepted state; do not persist/replay discarded commands.
 5. Quarantine an operation whose physical completion is unknown until the adapter
-   establishes readiness or reconnects. Do not immediately send another command
-   into a timed-out operation that may still be running.
+   establishes readiness. For two seconds after the first loss/timeout, require
+   matching completion telemetry if a transmission was uncertain. After that
+   grace period, a new explicit command may proceed when the adapter confirms
+   that the controller is connected and ready, without the old request ID.
+   Repeated disconnect notifications do not extend the window. An idle disconnect
+   requires readiness only, not the last completed request's telemetry. Expiry
+   alone never permits TX to an offline or busy controller and never replays
+   discarded work. Periodic refresh cannot clear an uncertain-TX recovery fence;
+   ordinary idle reconnects can resume the normal refresh interval.
 
 A controller-wide disconnect clears waiting intents for all affected entries.
 A definitive per-request validation/TX failure clears that entry's sequence,
@@ -331,8 +338,10 @@ or include identifying paths, network details or raw remote IDs in public eviden
 - ESPHome endpoint availability is observed through HA's public entity registry
   and state-change events. This does not replace the existing ESPHome transport
   adapter or resolve the separately tracked private-runtime-API technical debt.
-- Timeout recovery requires matching terminal telemetry for the uncertain request
-  on the physical radio. Another fireplace entry cannot bypass that quarantine.
+- Timeout recovery initially requires matching terminal telemetry for the
+  uncertain request on the physical radio. After the two-second grace window, a
+  new explicit intent requires connected/ready status instead; the old request
+  is not treated as successful. Another entry cannot bypass the shared window.
   YardStick requires reload/reconnection when readiness cannot be established.
 - This feature uses the existing firmware contract without a new action or
   firmware changes. Repeat cancellation remains a controller decision when the

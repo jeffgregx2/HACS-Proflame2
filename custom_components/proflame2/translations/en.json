@@ -17,7 +17,7 @@
       },
       "manual": {
         "title": "Enter a Learning ID",
-        "description": "Paste the Learning ID for your native remote. This supports both legacy and extended remotes.\n\nYou can copy an ID from an existing Proflame2 fireplace in Home Assistant or generate one using the companion Learning ID helper. See [Using Learning IDs]({learning_ids_url}) for instructions.\n\nSave the ID for future use: it describes the specific native remote used to generate it.\n\nFor a Remote ID and C/D values instead, choose Enter legacy values from the Add fireplace profile menu.",
+        "description": "Paste the Learning ID for your native remote. This supports both legacy and extended remotes.\n\nYou can copy an ID from an existing Proflame2 fireplace in Home Assistant or generate one using the companion Learning ID helper. See [Using Learning IDs]({learning_ids_url}) for instructions.\n\nSave the ID for future use: it describes the specific native remote used to generate it.\n\nFor legacy remotes with known Remote ID & C/D Values, choose Enter legacy values from the Proflame 2 Fireplace - Add entry option.",
         "data": {
           "name": "Fireplace name",
           "fireplace_short_name": "Display short name",

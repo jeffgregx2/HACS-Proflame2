@@ -74,6 +74,7 @@ from .runtime import (
 
 _LOGGER = logging.getLogger(__name__)
 BACKEND_SEND_TIMEOUT_SECONDS = 30.0
+CONTROLLER_RECOVERY_GRACE_SECONDS = 2.0
 _RETAINED_OFF_CONTROL_KEYS = frozenset({CONF_FAN, CONF_LIGHT, CONF_FRONT, CONF_AUX, CONF_CPI})
 
 
@@ -417,6 +418,8 @@ def _control_arbiter(hass: HomeAssistant, entry: Proflame2RuntimeEntry) -> Contr
 def async_controller_connection_lost(hass: HomeAssistant, entry: Proflame2RuntimeEntry) -> None:
     """Fence controller work without assuming a frontend disconnect is device loss."""
     arbiter = _control_arbiter(hass, entry)
+    if not arbiter.readiness_unknown:
+        arbiter.recovery_deadline = asyncio.get_running_loop().time() + CONTROLLER_RECOVERY_GRACE_SECONDS
     arbiter.readiness_unknown = True
     for candidate in async_get_runtime_entries(hass).values():
         if _control_arbiter(hass, candidate) is not arbiter:
@@ -571,13 +574,22 @@ async def _async_control_dispatcher(hass: HomeAssistant, entry: Proflame2Runtime
                     if arbiter.learning_owner is not None:
                         raise HomeAssistantError("Controller is learning a remote; try again after learning finishes.")
                     if arbiter.readiness_unknown:
+                        if intent.source == SOURCE_REFRESH and arbiter.uncertain_request_id is not None:
+                            raise RefreshSkipped("Controller recovery requires a new explicit command.")
                         recover = getattr(entry.backend, "recover_send_readiness", None)
-                        if recover is None or not await recover(arbiter.uncertain_request_id):
+                        recovery_expired = asyncio.get_running_loop().time() >= arbiter.recovery_deadline
+                        request_id = None if recovery_expired else arbiter.uncertain_request_id
+                        if recover is None or not await recover(request_id):
                             raise HomeAssistantError(
-                                "Controller readiness is unknown; reconnect or reload before retrying."
+                                "Controller recovery is pending; wait briefly, then retry once it is connected and ready."
+                            )
+                        if recovery_expired and arbiter.uncertain_request_id is not None:
+                            _log_control_event(
+                                entry, "controller recovery window elapsed; accepting new intent after readiness check"
                             )
                         arbiter.readiness_unknown = False
                         arbiter.uncertain_request_id = None
+                        arbiter.recovery_deadline = 0.0
                     await _async_execute_requested_state(
                         hass,
                         entry,
@@ -614,6 +626,10 @@ async def _async_control_dispatcher(hass: HomeAssistant, entry: Proflame2Runtime
                     if not isinstance(exc, HomeAssistantError):
                         _LOGGER.exception("Proflame2 debounce task failed")
                     if "timed out" in str(exc).lower():
+                        if not arbiter.readiness_unknown:
+                            arbiter.recovery_deadline = (
+                                asyncio.get_running_loop().time() + CONTROLLER_RECOVERY_GRACE_SECONDS
+                            )
                         arbiter.readiness_unknown = True
                         arbiter.uncertain_request_id = getattr(entry.backend, "latest_request_id", None)
                     _log_control_event(

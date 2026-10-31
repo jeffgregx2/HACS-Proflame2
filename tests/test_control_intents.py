@@ -303,12 +303,95 @@ async def test_timeout_reverts_and_requires_explicit_readiness(hass, monkeypatch
     await services.async_stage_control_change(hass, runtime, {"fan": 4})
     await wait_for(lambda: runtime.control_task is None)
     assert len(states) == 1
-    assert "readiness" in runtime.last_error
+    assert "recovery" in runtime.last_error
     runtime.backend.connected = True
     release.set()
     await services.async_stage_control_change(hass, runtime, {"fan": 4})
     await wait_for(lambda: runtime.control_task is None)
     assert len(states) == 2
+
+
+async def test_uncertain_completion_expires_without_replaying_failed_state(hass, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _, runtime = await ready(hass)
+    baseline = runtime_current_state(runtime)
+    monkeypatch.setattr(runtime.backend, "latest_request_id", "unconfirmed-request", raising=False)
+    services.async_controller_connection_lost(hass, runtime)
+    arbiter = services._control_arbiter(hass, runtime)
+    arbiter.uncertain_request_id = "unconfirmed-request"
+    runtime.backend.connected = True
+    recover = AsyncMock(side_effect=lambda request_id: request_id is None)
+    monkeypatch.setattr(runtime.backend, "recover_send_readiness", recover)
+
+    await services.async_stage_control_change(hass, runtime, {"light": 6})
+    await wait_for(lambda: runtime.control_task is None)
+    recover.assert_awaited_once_with("unconfirmed-request")
+    assert runtime_current_state(runtime) == baseline
+    assert runtime.desired_state is None
+    assert not runtime.backend.sent_packets
+
+    arbiter.recovery_deadline = asyncio.get_running_loop().time() - 1
+    await asyncio.sleep(0)
+    assert not runtime.backend.sent_packets
+    await services.async_stage_control_change(hass, runtime, {"fan": 4})
+    await wait_for(lambda: runtime.control_task is None)
+    assert recover.await_args.args == (None,)
+    assert len(runtime.backend.sent_packets) == 1
+    assert runtime_current_state(runtime) == replace(baseline, fan=4)
+    assert not arbiter.readiness_unknown
+    assert arbiter.uncertain_request_id is None
+
+
+async def test_recovery_deadline_does_not_extend_on_repeated_disconnect(hass):
+    _, runtime = await ready(hass)
+    before = asyncio.get_running_loop().time()
+    services.async_controller_connection_lost(hass, runtime)
+    after = asyncio.get_running_loop().time()
+    arbiter = services._control_arbiter(hass, runtime)
+    deadline = arbiter.recovery_deadline
+    assert before + 2.0 <= deadline <= after + 2.0
+    services.async_controller_connection_lost(hass, runtime)
+    assert arbiter.recovery_deadline == deadline
+
+
+async def test_expired_recovery_still_requires_ready_controller(hass, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _, runtime = await ready(hass)
+    baseline = runtime_current_state(runtime)
+    services.async_controller_connection_lost(hass, runtime)
+    arbiter = services._control_arbiter(hass, runtime)
+    arbiter.uncertain_request_id = "unconfirmed-request"
+    arbiter.recovery_deadline = asyncio.get_running_loop().time() - 1
+    recover = AsyncMock(return_value=False)
+    monkeypatch.setattr(runtime.backend, "recover_send_readiness", recover)
+    await services.async_stage_control_change(hass, runtime, {"light": 6})
+    await wait_for(lambda: runtime.control_task is None)
+    recover.assert_awaited_once_with(None)
+    assert arbiter.readiness_unknown
+    assert runtime_current_state(runtime) == baseline
+    assert not runtime.backend.sent_packets
+
+
+async def test_periodic_refresh_cannot_release_uncertain_controller(hass, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _, runtime = await ready(hass)
+    services.async_controller_connection_lost(hass, runtime)
+    arbiter = services._control_arbiter(hass, runtime)
+    arbiter.uncertain_request_id = "unconfirmed-request"
+    arbiter.recovery_deadline = asyncio.get_running_loop().time() - 1
+    recover = AsyncMock(return_value=True)
+    monkeypatch.setattr(runtime.backend, "recover_send_readiness", recover)
+    monkeypatch.setattr(services, "current_refresh_state", lambda entry: runtime_current_state(entry))
+    services._submit_control_intent(
+        hass, runtime, runtime_current_state(runtime), source=services.SOURCE_REFRESH, delay=0
+    )
+    await wait_for(lambda: runtime.control_task is None)
+    recover.assert_not_awaited()
+    assert arbiter.readiness_unknown
+    assert not runtime.backend.sent_packets
 
 
 async def test_cancel_pending_then_immediately_stage_again(hass):

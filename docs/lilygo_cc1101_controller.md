@@ -128,14 +128,68 @@ states 433.92 MHz, add this setting to the top-level `substitutions:` block in
 the device YAML before building the firmware:
 
 ```yaml
-proflame2_rf_band: "433"
+substitutions:
+  proflame2_rf_band: "433"
 ```
 
-Use `"315"` for 315 MHz remotes. A LilyGO can use only one radio band at a
+If `substitutions:` already exists, add or update the setting inside that block;
+do not create a second block. Rebuild and install the firmware for the change
+to take effect. To return to the default band, use `"315"` or remove the setting,
+then rebuild and install again.
+
+A LilyGO can use only one radio band at a
 time, so fireplaces on different bands need separate LilyGO controllers.
 
 To manually update your YAML file instead, see
 [manual LilyGO YAML setup](lilygo_cc1101_manual_yaml.md).
+
+## Reliable Transmission
+
+The default settings are intended for normal use; most users should not need to
+adjust them. Starting with v0.7.0-beta4, LilyGO uses these defaults:
+
+| Setting | Default | Where to change it |
+| --- | --- | --- |
+| `proflame2_diagnostic_repeat_count_override` | `10` | ESPHome device YAML, under `substitutions:`; rebuild and install afterward |
+| Delayed Retransmission | OFF | The ESPHome device's configuration controls in Home Assistant |
+
+### Why Commands Are Repeated
+
+One press on a native remote sends several copies of the same command in rapid
+succession. Our captured native remote sends five copies in one burst; later
+duplicate bursts were observed about 15-16 seconds apart. That timing should not
+be assumed for every remote model. Copies within a burst and a later repeat of
+the whole burst are two different things.
+
+Earlier stable LilyGO firmware also sent five copies, but did not send a later
+repeat burst. Extensive repeated testing found that the fireplace occasionally
+ignored a command even when an SDR running rtl_433 decoded it correctly. A
+successful transmission or decode does not confirm that the fireplace received
+and acted on the command.
+
+### Ten Copies Per Command
+
+Increasing the number of copies from five to ten appeared to meaningfully
+improve fireplace reception in testing. This is now the default, so no YAML
+change is needed unless you previously configured a different override.
+
+The tradeoff is roughly twice the transmission time: about 0.8 seconds for a
+legacy remote profile and 1.15 seconds for an extended profile. LilyGO cannot
+listen to the native remote during that burst, and the radio cannot start
+another transmission until the current one finishes. See
+[Using the original remote](#using-the-original-remote) for overlapping changes.
+
+### Optional Delayed Retransmission
+
+When enabled, **Delayed Retransmission** sends the whole command burst again
+about two seconds after the first burst finishes, unless newer activity cancels
+it. This is separate from the ten copies sent within each burst; the two-second
+interval is LilyGO's retry timing, not the native remote timing measured above.
+
+The successful ten-copy tests did not require this extra burst, so the default
+is OFF. It remains available for troubleshooting intermittent reception. The
+switch returns to OFF when the controller reboots. Neither setting guarantees
+reception; controller placement, range, and interference still matter.
 
 ## Using The Original Remote
 

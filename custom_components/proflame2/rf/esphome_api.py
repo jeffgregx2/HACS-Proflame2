@@ -698,9 +698,9 @@ class ESPHomeAPIBackend(RFBackend):
         await self.connect()
         recover = getattr(self.transport, "recover_send_readiness", None)
         if callable(recover):
-            return await asyncio.wait_for(
-                recover(request_id or self.latest_request_id), timeout=self._connect_timeout_seconds
-            )
+            # None requests current readiness only, for idle reconnects or an
+            # expired recovery window. Never substitute a historical request.
+            return await asyncio.wait_for(recover(request_id), timeout=self._connect_timeout_seconds)
         status = await self.transport.get_status()
         return status.status in (ESPHomeEndpointStatus.READY, ESPHomeEndpointStatus.RX_ACTIVE)
 

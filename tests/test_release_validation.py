@@ -30,7 +30,7 @@ def test_current_source_passes_release_validation_after_stamping(tmp_path: Path,
 
     release_validation = _load_release_validation_module()
     manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
-    version = manifest["version"]
+    version = "0.7.0-beta1"
     for relative_path in (
         "custom_components/proflame2/manifest.json",
         "custom_components/proflame2/version.py",
@@ -42,6 +42,18 @@ def test_current_source_passes_release_validation_after_stamping(tmp_path: Path,
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO_ROOT / relative_path, destination)
     monkeypatch.chdir(tmp_path)
+    # The checkout may identify itself as debug; stamp a real release in the copy.
+    manifest["version"] = version
+    (tmp_path / "custom_components/proflame2/manifest.json").write_text(json.dumps(manifest))
+    metadata = tmp_path / "custom_components/proflame2/version.py"
+    metadata.write_text(
+        re.sub(
+            r'^DEFAULT_INTEGRATION_VERSION = "[^"]+"$',
+            f'DEFAULT_INTEGRATION_VERSION = "{version}"',
+            metadata.read_text(),
+            flags=re.MULTILINE,
+        )
+    )
     firmware = tmp_path / "esphome/packages/proflame2_tembed_base.yaml"
     firmware.write_text(
         re.sub(
@@ -65,7 +77,7 @@ def test_release_tag_parser_accepts_documented_tag_formats(tag: str, expected_ve
     assert release_validation.parse_release_tag(tag) == expected_version
 
 
-@pytest.mark.parametrize("tag", ("0.6.0", "v0.6", "v0.6.0-rc1", "v0.6.0-alpha", "v0.6.0-beta"))
+@pytest.mark.parametrize("tag", ("0.6.0", "v0.6", "v0.6.0-rc1", "v0.6.0-alpha", "v0.6.0-beta", "v0.7.0-debug"))
 def test_release_tag_parser_rejects_unsupported_tags(tag: str) -> None:
     """Only the documented release tag formats are accepted."""
 

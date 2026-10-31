@@ -16,6 +16,18 @@ host.
 | Home Assistant state updates from original remote | No |
 | Additional controller software required | No ESPHome firmware |
 
+## Radio Band
+
+The current Proflame2 YardStick integration operates in the 315 MHz band. It
+does not expose a 433 MHz band setting; LilyGO's `proflame2_rf_band` YAML setting
+does not apply to YardStick.
+
+The [YardStick One hardware](https://greatscottgadgets.com/yardstickone/) supports
+433.92 MHz, but using that band through this integration still requires software
+configuration support and validation. Do not treat hardware capability as
+tested integration support. Use LilyGO for the integration's current 433 MHz
+support.
+
 ## Pros And Cons
 
 Pros:

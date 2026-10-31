@@ -114,21 +114,25 @@ For more detail on the setup choices, see
 
 ## Remote Compatibility
 
-The following Proflame2 remote models have been identified in project testing.
-They have been tested and appear to work unless an ongoing investigation is
-noted below:
+The following Proflame2 remote models have been identified in project testing
+and appear to work:
 
-| Model / part number | Seen as FCC ID | `rf_band` | Notes |
-| --- | --- | --- | --- |
-| `0.584.040` | `T99058402300` | `"315"` | |
-| `0.584.043` | TBD | `"315"` | |
-| `0.584.053` | TBD | `"433"` | 433.92 MHz CE variant |
-| `0.584.080` | `T99058402300` | `"315"` | |
-| `0.584.090` | `T99058404300` | `"315"` | Mendota; control reliability under investigation ([issue #26](https://github.com/jeffgregx2/HACS-Proflame2/issues/26)) |
+| Model / part number | Type | Seen as<br>FCC ID | `rf_band` | Notes |
+| --- | --- | --- | --- | --- |
+| `0.584.040` | legacy | `T99058402300` | `"315"` | |
+| `0.584.043` | legacy | TBD | `"315"` | Wall-mounted remote |
+| `0.584.053` | TBD | TBD | `"433"` | CE variant; Australia |
+| `0.584.080` | extended | `T99058402300` | `"315"` | Enviro Q1 |
+| `0.584.090` | extended | `T99058404300` | `"315"` | Mendota |
 
-Use the listed `rf_band` value for the full substitution parameter
-`proflame2_rf_band` under `substitutions:` in your
-LilyGO device YAML. One LilyGO controller can use only one band at a time.
+**Type:** legacy uses the original 7-word protocol; extended uses the newer
+10-word protocol. These are the types identified in project testing; TBD means
+the protocol type has not yet been confirmed. Both types are supported.
+
+The default `rf_band` is `"315"`; no configuration change is needed for those
+remotes. For LilyGO band changes, see [Radio band setup](docs/lilygo_cc1101_controller.md#radio-band).
+Band selection is currently available for LilyGO only; the YardStick integration
+operates in the 315 MHz band.
 
 FCC IDs shown are examples reported on these models, not guaranteed identifiers
 for every remote of that model. Use them only as a lookup aid when the model
@@ -217,24 +221,27 @@ To change the Active Listening settings, open Settings -> Devices & services -> 
 
 ## Optional Inactivity Refresh
 
-Some fireplace versions shut off if they do not receive the current state within
-sixty minutes. A reporter with a Mendota FV48 and SIT Proflame 0.584.090 remote
-reports a ten-minute native refresh interval; this does not apply to every
-Mendota fireplace. Compatibility with that timeout still requires hardware
-validation.
+Some fireplace versions require the original remote to transmit the current
+settings periodically to stay on. A user with a Mendota FV48 and SIT Proflame
+`0.584.090` remote was told by Mendota that the remote sends the settings every
+**10 minutes**. If the fireplace hears nothing for **60 minutes**, it turns
+itself off. This behavior has been reported for that fireplace, but does not
+apply to every Mendota fireplace or every newer remote.
 
 Set **Refresh period in minutes** during setup or under **Edit supported
-features** for an existing fireplace. The default, **0**, disables refresh.
-When enabled, HA resends its current state only while the fireplace is **ON**,
-after the configured interval without successful TX or valid matching RX.
-Received commands with unchanged state also restart the interval. A native OFF
-command prevents further refreshes; no keep-alive packet is sent while HA shows
-OFF. With Active Listening disabled, native commands cannot postpone refresh.
+features** for an existing fireplace to let Home Assistant send these reminders.
+The default, **0**, turns this feature off. For the fireplace described above,
+choose **10**, not 60. Leave it at 0 if your fireplace does not need reminders.
 
-Refresh uses the normal command path and yields to user changes. HA manages the
-timer: restart or controller reconnect starts a fresh interval, and LilyGO does
-not continue periodic refreshes without HA. A successful TX result does not
-confirm that the fireplace received it.
+Home Assistant sends reminders only while it shows the fireplace as **ON**.
+No reminders are sent while Home Assistant shows **OFF**.
+
+**For affected remotes, remove the original remote's batteries when using this
+feature.** The reported remote periodically sends its own displayed settings even
+when it shows OFF. If HA turns the fireplace on, the remote can later turn it
+off again. Leaving the remote OFF is therefore not sufficient. The integration
+and that remote should not both control the fireplace while this feature is in
+use. Disabling Active Listening does not stop the remote from transmitting.
 
 ## Multiple Fireplaces
 
