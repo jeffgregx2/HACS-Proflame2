@@ -15,7 +15,15 @@ count, and capability gating.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+
+try:
+    from enum import StrEnum
+except ImportError:  # The standalone Learning ID helper supports Python 3.10.
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        __str__ = str.__str__
+        __format__ = str.__format__
 
 
 class ProtocolModulation(StrEnum):

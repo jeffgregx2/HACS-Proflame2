@@ -30,9 +30,11 @@ def main() -> None:
                     str(archive.parent),
                 ],
                 check=True,
+                timeout=60,
             )
         runtime = work / "runtime"
-        venv.create(runtime, with_pip=False)
+        print("Creating dependency-free helper runtime...", flush=True)
+        venv.create(runtime, with_pip=False, symlinks=True)
         python = runtime / "bin/python"
         config = work / "pytest.ini"
         config.write_text("[pytest]\n", encoding="utf-8")
@@ -54,12 +56,15 @@ def main() -> None:
                 "addopts=",
                 "-p",
                 "no:cacheprovider",
-                "-q",
+                "-vv",
+                "-o",
+                "faulthandler_timeout=60",
                 str(ROOT / "tools/learning_id/tests/test_archive.py"),
             ],
             check=True,
             cwd=directory,
             env=env,
+            timeout=300,
         )
     print("Source-archive tests passed with no installed helper, pip, Home Assistant, or rtl_433.")
 

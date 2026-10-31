@@ -35,6 +35,11 @@ def test_helper_release_assets_follow_validation_without_clobbering():
 def test_development_packages_test_both_operating_systems_and_python_bounds():
     workflow = yaml.safe_load((ROOT / ".github/workflows/learning-id-package.yml").read_text())
     job = workflow["jobs"]["source-archive"]
+    assert job["timeout-minutes"] == 12
+    archive_test = next(
+        step for step in job["steps"] if step.get("name") == "Test the actual archive without RF hardware"
+    )
+    assert archive_test["timeout-minutes"] == 10
     assert job["strategy"]["matrix"] == {"os": ["ubuntu-latest", "macos-latest"], "python": ["3.10", "3.14"]}
     assert workflow["permissions"] == {"contents": "read"}
     commands = "\n".join(step.get("run", "") for step in job["steps"])

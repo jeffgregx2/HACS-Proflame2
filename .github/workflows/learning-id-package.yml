@@ -12,6 +12,7 @@ permissions:
 jobs:
   source-archive:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +34,7 @@ jobs:
       - name: Build inspectable source archive and checksum
         run: make learning-id-package OUTPUT_DIR="$OUTPUT_DIR" PACKAGE_ARGS=--require-clean
       - name: Test the actual archive without RF hardware
+        timeout-minutes: 10
         run: make learning-id-package-test ARCHIVE="$OUTPUT_DIR/proflame2-learning-id.pyz"
       - name: Retain development downloads
         uses: actions/upload-artifact@v4

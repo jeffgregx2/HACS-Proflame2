@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from custom_components.proflame2.protocol.profiles import (
     DEFAULT_PROTOCOL_PROFILE,
     GENERIC_PROFLAME2_315,
@@ -37,3 +39,12 @@ def test_generic_protocol_profile_supported_features_are_code_defined() -> None:
 
 def test_lookup_returns_registered_profile() -> None:
     assert get_protocol_profile("generic_proflame2_315") is GENERIC_PROFLAME2_315
+
+
+def test_protocol_enum_values_preserve_string_semantics() -> None:
+    for value in (ProtocolModulation.ASK_OOK, *ProtocolFeature):
+        assert isinstance(value, str)
+        assert str(value) == value.value
+        assert f"{value}" == value.value
+        assert format(value, ">10") == format(value.value, ">10")
+        assert json.loads(json.dumps(value)) == value.value
