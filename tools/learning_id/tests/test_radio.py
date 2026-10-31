@@ -239,7 +239,7 @@ def test_interactive_replacement_path_is_checked_before_learning(radio, monkeypa
             assert time.monotonic() < deadline
             time.sleep(0.01)
         capture.keyboard("q")
-        capture.process.wait(timeout=5)
+        capture.wait()
         assert capture.process.returncode == 130
         assert not capture.process.stdout.read()
         assert (root / "stopped").is_file()

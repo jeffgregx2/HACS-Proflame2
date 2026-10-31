@@ -85,8 +85,31 @@ class Session:
         return self.transcript
 
     def wait(self, timeout=5):
+        deadline = time.monotonic() + timeout
         try:
-            return self.process.wait(timeout=timeout)
+            # A terminal child can remain unreapable on macOS until its final
+            # output is read. Keep servicing the PTY instead of just waitpid.
+            while True:
+                status = self.process.poll()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if status is not None:
+                        return status
+                    raise subprocess.TimeoutExpired(self.process.args, timeout)
+                delay = min(remaining, 0.05) if status is None else 0
+                if not select.select([self.master], [], [], delay)[0]:
+                    if status is not None:
+                        return status
+                    continue
+                try:
+                    chunk = os.read(self.master, 4096)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    return self.process.wait(timeout=max(0, deadline - time.monotonic()))
+                text = chunk.decode(errors="replace")
+                self.buffer += text
+                self.transcript += text
         except subprocess.TimeoutExpired:
             print("Helper did not exit before timeout. Child diagnostics:\n" + self.diagnostics(), file=sys.stderr)
             raise
@@ -240,7 +263,7 @@ def test_guided_confirms_each_action_and_finishes_off(extended, choice, repeats,
             )
         else:
             pytest.fail("Guided sequence did not finish")
-        capture.process.wait(timeout=5)
+        capture.wait()
         assert capture.process.returncode == 0, capture.transcript
         assert not state["Power"]
         assert "\r\n\r\nSelect" in capture.transcript
@@ -263,7 +286,7 @@ def test_preparation_has_no_action_timeout_and_can_be_cancelled():
         time.sleep(0.15)
         assert capture.process.poll() is None
         capture.keyboard("q")
-        capture.process.wait(timeout=5)
+        capture.wait()
         assert capture.process.returncode == 130
         assert not capture.process.stdout.read()
 
@@ -279,7 +302,7 @@ def test_control_questions_reprompt_invalid_answers_and_allow_cancellation():
         capture.keyboard("no")
         capture.read_until("Can you adjust the light using your remote\\?")
         capture.keyboard("q")
-        capture.process.wait(timeout=5)
+        capture.wait()
         assert capture.process.returncode == 130
         assert "Press Power ON" not in capture.transcript
         assert not capture.process.stdout.read()
@@ -342,7 +365,7 @@ def test_guided_failure_never_emits_an_id(fault):
         elif fault == "malformed":
             capture.process.stdin.write("{broken\n")
             capture.process.stdin.flush()
-        capture.process.wait(timeout=5)
+        capture.wait()
         assert capture.process.returncode == 1
         assert not capture.process.stdout.read()
 

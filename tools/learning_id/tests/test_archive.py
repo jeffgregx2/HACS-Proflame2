@@ -169,7 +169,7 @@ def test_guided_archive_confirms_buttons_and_finishes_off(extended):
         else:
             pytest.fail("Guided archive did not finish")
         capture.read_until("Your Learning ID is ready")
-        capture.process.wait(timeout=5)
+        capture.wait()
         assert capture.process.returncode == 0
         assert capture.process.stdout.read().startswith("PF2-1-E-" if extended else "PF2-1-L-")
 
@@ -228,6 +228,30 @@ def test_archive_cancellation_stops_its_receiver(radio, monkeypatch, stop_signal
         assert capture.process.returncode == 130
         assert not capture.process.stdout.read()
         assert (root / "stopped").exists()
+
+
+def test_wait_drains_terminal_output_before_reaping(tmp_path):
+    child = tmp_path / "terminal_output.py"
+    child.write_text(
+        "import sys\n"
+        "sys.stderr.write('x' * 131072)\n"
+        "sys.stderr.write('\\nterminal output complete\\n')\n"
+        "sys.stderr.flush()\n"
+    )
+    with session(command=[PYTHON, str(child)]) as capture:
+        assert capture.wait() == 0
+        assert "terminal output complete" in capture.transcript
+
+
+def test_wait_retains_deadline_and_child_diagnostics(capsys):
+    with session(command=[PYTHON, ARCHIVE, "--input-mode", "live"]) as capture:
+        capture.read_until("Press Return when it is OFF and you are ready")
+        with pytest.raises(subprocess.TimeoutExpired) as failure:
+            capture.wait(timeout=0.05)
+        assert failure.value.timeout == 0.05
+        assert capture.process.poll() is None
+        assert "Child diagnostics:" in capsys.readouterr().err
+        assert "guided.py" in capture.transcript
 
 
 def test_named_file_and_late_conflicts(tmp_path):
