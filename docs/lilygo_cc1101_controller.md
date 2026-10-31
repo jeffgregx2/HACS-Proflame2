@@ -263,10 +263,10 @@ After the ESPHome device is available in Home Assistant:
 12. Select the fireplace features your installation supports.
 13. Validate Power, Flame, Fan, and any other enabled controls.
 
-If normal guided learning cannot decode your remote but rtl_433 can, use
-[rtl_433-assisted manual learning](rtl433_manual_learning.md). The LilyGO still
-controls the fireplace and active listening after setup; the SDR and rtl_433 are
-only used to collect learning values.
+If normal guided learning cannot learn your remote, use the
+[rtl_433 Learning ID helper](Using_rtl_433_for_learning.md). The LilyGO still
+controls the fireplace and Active Listening after setup; the SDR and helper
+are only needed to generate the Learning ID.
 
 ## Active Listening
 

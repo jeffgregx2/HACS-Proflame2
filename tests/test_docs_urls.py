@@ -32,8 +32,20 @@ def test_documentation_url_uses_default_ref() -> None:
         f"/blob/{docs_urls.DEFAULT_DOCUMENTATION_REF}/docs/lilygo_cc1101_controller.md"
     )
     assert docs_urls.rtl433_manual_learning_url().endswith(
-        f"/blob/{docs_urls.DEFAULT_DOCUMENTATION_REF}/docs/rtl433_manual_learning.md"
+        f"/blob/{docs_urls.DEFAULT_DOCUMENTATION_REF}/docs/Using_rtl_433_for_learning.md"
     )
+    assert docs_urls.rtl433_manual_learning_url() == docs_urls.rtl433_learning_ids_url()
+
+
+def test_active_controller_guides_skip_the_retired_json_paste_page() -> None:
+    for name in ("lilygo_cc1101_controller.md", "yardstick_controller.md"):
+        text = (Path("docs") / name).read_text()
+        assert "](Using_rtl_433_for_learning.md)" in text
+        assert "rtl433_manual_learning.md" not in text
+    old_page = Path("docs/rtl433_manual_learning.md").read_text()
+    assert "](Using_rtl_433_for_learning.md)" in old_page
+    guide = Path(docs_urls.RTL433_LEARNING_IDS_DOC).read_text()
+    assert "## Older JSON-Paste Instructions" in guide
 
 
 def test_documentation_url_supports_env_override(monkeypatch) -> None:

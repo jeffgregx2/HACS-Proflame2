@@ -11,9 +11,9 @@ DEFAULT_DOCUMENTATION_REF = "v0.7.0-beta4"
 ADD_FIREPLACE_PROFILE_DOC = "docs/add_fireplace_profile.md"
 ADD_FIREPLACE_PROFILE_OPTIONS_ANCHOR = "add-fireplace-profile-options"
 LILYGO_CONTROLLER_DOC = "docs/lilygo_cc1101_controller.md"
-RTL433_MANUAL_LEARNING_DOC = "docs/rtl433_manual_learning.md"
 USING_LEARNING_IDS_ANCHOR = "Using_learning_ids"
 RTL433_LEARNING_IDS_DOC = "docs/Using_rtl_433_for_learning.md"
+RTL433_MANUAL_LEARNING_DOC = RTL433_LEARNING_IDS_DOC
 
 
 def documentation_ref() -> str:
@@ -48,7 +48,7 @@ def lilygo_controller_url() -> str:
 
 
 def rtl433_manual_learning_url() -> str:
-    """Return the rtl_433-assisted manual learning documentation URL."""
+    """Keep older callers pointing directly to the current Learning ID guide."""
 
     return documentation_url(RTL433_MANUAL_LEARNING_DOC)
 

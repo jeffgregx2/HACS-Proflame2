@@ -1,378 +1,197 @@
 # Using rtl_433 for Learning
 
-Use this when normal **Learn from remote** setup fails or a maintainer asks for
-additional remote captures. An SDR receiver listens to your native remote;
-rtl_433 decodes its transmissions, and the separate `proflame2-learning-id`
-helper generates a Learning ID to import into Home Assistant.
+Use this guide if **Learn from remote** in Home Assistant cannot learn your
+remote, or you have been asked to try this method for troubleshooting.
 
-This process does not transmit fireplace commands from your computer. Pressing
-the native remote can still operate the fireplace. After setup, your LilyGO or
-YardStick controls the fireplace; the SDR and helper are not needed for normal use.
+The Learning ID helper listens while you press buttons on your original
+remote. It gives you a **Learning ID** to paste into Home Assistant. The helper
+tells you what to press and confirms each button press it receives.
+
+Your computer does not transmit fireplace commands, but pressing the original
+remote can operate the fireplace. Follow its normal operating instructions.
+After learning, your LilyGO or YardStick remains the controller; you do not
+need to leave the helper or SDR running.
 
 ## What You Need
 
-- The original native remote.
-- A separate RTL-SDR-compatible receiver and a suitable antenna, connected to a
-  computer. A LilyGO or YardStick is not a substitute for the SDR in this flow.
-- An rtl_433 build that understands your remote's frame format.
-- Python 3.10 or newer on Linux or macOS and the companion Learning ID archive.
-- A supported controller dedicated to this fireplace for normal HA operation.
+- Your original fireplace remote.
+- An RTL-SDR-compatible USB receiver and antenna, described below.
+- A Linux or Mac computer with Python 3.10 or newer. Windows is not supported
+  by this helper.
+- The [Proflame2 version of rtl_433](https://github.com/jeffgregx2/rtl_433),
+  installed on the computer connected to the receiver.
+- **`proflame2-learning-id.pyz`**, downloaded from the matching
+  [Proflame2 release](https://github.com/jeffgregx2/HACS-Proflame2/releases).
 
-Home Assistant does not install or run rtl_433 or the helper. You run them in a
-terminal on the computer connected to the SDR. This can be a different computer
-from Home Assistant.
+The computer can be different from the one running Home Assistant.
+Home Assistant does not install or run the helper for you.
 
-## Choose the Correct rtl_433 Build
+## Choosing an SDR Receiver
 
-**Older rtl_433 builds decode only legacy Proflame2 frames.** Installing the
-latest package from an operating-system package manager does not, by itself,
-establish support for extended remotes. The helper cannot recover extended
-fields that an older decoder never outputs.
+An **SDR (Software Defined Radio)** is a radio receiver that plugs into your
+computer, usually by USB. An antenna lets it listen to your fireplace remote.
+Choose an **RTL-SDR-compatible** receiver that can receive **315 MHz and
+433.92 MHz**. A USB Wi-Fi adapter, Bluetooth adapter, LilyGO, or CC1101 module
+is not a substitute for this receiver.
 
-The extended-capable development decoder is maintained in the project's
-[rtl_433 fork](https://github.com/jeffgregx2/rtl_433), on the
-`proflame2-extended` branch. The tested source revision for these instructions
-is `13cae578111d92434a6c09212aae0afa0141a191`. This revision generated the
-capture-backed JSON fixtures used by the helper's offline interoperability tests;
-it is not a claim of completed live-radio acceptance. The companion helper is in the
-HACS-Proflame2 `rtl433-enhancements` development branch. Use the helper that
-generates remote-only IDs in the [documented format](learning_id_encoding.md).
-Rebuild older experimental helper installations if they still ask for features.
-These are development sources, not a minimum numbered upstream rtl_433 release
-or a published PyPI package.
+One receiver used successfully during Proflame2 development is the
+**Nooelec RTL-SDR, FM+DAB, DVB-T USB Stick Set with RTL2832U & R820T**,
+model **TV28Tv2**. Nooelec also calls this receiver the **NESDR Mini**
+(previously TV28T v2).
 
-**Development availability:** the helper is not yet included in the normal
-`dev` checkout or the existing stable integration release. If you do not have
-the matching source checkout or an installation package supplied by the
-maintainer, request help before proceeding. Do not substitute an arbitrary
-rtl_433 release or assume `pip install proflame2-learning-id` is available.
+- [Amazon product listing](https://www.amazon.com/dp/B008S7AVTC). Search for the
+  product name above or Amazon product code **`B008S7AVTC`** to find this exact
+  listing, rather than a different Nooelec model.
+- [Manufacturer's NESDR Mini page](https://www.nooelec.com/store/nesdr-mini.html).
 
-Follow the [upstream rtl_433 build instructions](https://github.com/merbanan/rtl_433/blob/master/docs/BUILDING.md)
-for your operating system, using the extended-capable source revision above.
-For a legacy remote, a compatible legacy decoder can still supply the command
-and error fields the helper needs.
+This receiver includes an antenna and covers both 315 MHz and 433.92 MHz.
 
-Check the executable you will actually run:
+If buying a receiver without an antenna kit, also buy an antenna suitable for
+your remote's band and the receiver's connector. Follow the manufacturer's
+installation instructions, and use a USB adapter if your computer needs one.
 
-```sh
-rtl_433 -V
-rtl_433 -d help
-```
+Try normal **Learn from remote** first. You do not need to buy an SDR if your
+remote can already be learned successfully through your controller.
 
-If multiple rtl_433 versions are installed, use the full path to the intended
-executable. With an extended remote, its JSON output should identify
-`"protocol_variant": "extended_10_word"` and include the complete `raw_words`
-field, containing 20 hexadecimal characters. A row containing only legacy
-command/error fields is not sufficient evidence for an extended profile.
+<a id="choose-the-correct-rtl_433-build"></a>
 
-## Download and Inspect the Helper
+## Install rtl_433
 
-Download `proflame2-learning-id.pyz` and `proflame2-learning-id.pyz.sha256`
-from the matching GitHub release's **Assets**, when available, or use the
-development package supplied by the maintainer. The archive contains readable
-Python source, not a compiled executable, bundled interpreter, or installer.
-You must install/configure your SDR and compatible rtl_433 yourself.
+rtl_433 is the separate program that reads radio messages from the USB
+receiver. Despite its name, it works with both 315 MHz and 433 MHz remotes.
 
-You can review everything **before executing the helper**, including before
-running `--help`. In a terminal in the download directory:
+Use the [Proflame2 version of rtl_433](https://github.com/jeffgregx2/rtl_433).
+It supports both older and newer Proflame2 remotes. Other versions may not
+understand newer remotes. The helper checks compatibility automatically when
+it starts; you do not need to compare version codes.
 
-```sh
-unzip -l proflame2-learning-id.pyz
-unzip -p proflame2-learning-id.pyz __main__.py
-unzip proflame2-learning-id.pyz -d proflame2-learning-id-source
-```
+Installing this version currently requires building it from source. See
+[rtl_433 installation steps](learning_id_advanced_usage.md#installing-the-proflame2-version-of-rtl_433).
+This is the most technical part of the setup. If you are not comfortable with
+it, ask for help before buying hardware. The helper download does not include
+rtl_433 or the receiver's drivers.
 
-If `unzip` is unavailable, Python's standard ZIP tool can list/extract it
-without running the helper:
+<a id="download-and-inspect-the-helper"></a>
 
-```sh
-python3 -m zipfile -l proflame2-learning-id.pyz
-python3 -m zipfile -e proflame2-learning-id.pyz proflame2-learning-id-source
-```
+## Download the Helper
 
-These commands list, read, and extract the archive without running its Python
-code. Read `__main__.py`, `README.md`, and the source files in
-`proflame2_learning_id/` and `proflame2_protocol/`. `LICENSE` contains the
-license. `proflame2_learning_id/BUILD_INFO.json` records the product version,
-source commit, whether the build included local changes, and a content digest.
-There are no tests, captures, credentials, or host-specific configuration in
-the package. A development package may intentionally include uncommitted code.
+1. Open the [Proflame2 releases](https://github.com/jeffgregx2/HACS-Proflame2/releases)
+   and select the release matching your integration. The helper is available
+   starting with **v0.7.0-beta4**.
+2. Under **Assets**, download **`proflame2-learning-id.pyz`**. Do not choose
+   the **Source code** ZIP instead.
+3. You can also download **`proflame2-learning-id.pyz.sha256`** to
+   [check the download](learning_id_advanced_usage.md#checking-the-download).
 
-Check the download against its companion checksum. On Linux:
+The helper runs directly from that one `.pyz` file. You do not need to install
+it or extract it. It does not install packages or save settings on your computer.
+
+If you wish to examine the Python source before running it, see
+[Inspecting the helper](learning_id_advanced_usage.md#inspecting-the-helper).
+These instructions are optional; they are not part of the learning process.
+
+## Generate Your Learning ID
+
+Plug in the SDR and attach its antenna. Keep the original remote near the
+antenna. Close any other program using the SDR.
+
+Open a terminal in the folder where you downloaded
+`proflame2-learning-id.pyz`. Check the frequency label on your original remote,
+then run the matching command.
+
+**For a 315 MHz remote:**
 
 ```sh
-sha256sum -c proflame2-learning-id.pyz.sha256
+python3 proflame2-learning-id.pyz --rf-band 315 --timeout 600
 ```
 
-On macOS:
+**For a 433.92 MHz remote:**
 
 ```sh
-shasum -a 256 -c proflame2-learning-id.pyz.sha256
+python3 proflame2-learning-id.pyz --rf-band 433 --timeout 600
 ```
 
-A checksum detects corruption or a mismatched download, not whether the code
-is safe. It is not a digital signature or a substitute for reviewing/trusting
-the source and its download location.
+If you do not know the remote's frequency, check its label or ask for help.
+Do not select it based only on your country or the fireplace brand.
 
-When ready, set the archive path and view its help:
+Follow the instructions printed in the terminal:
 
-```sh
-HELPER_ARCHIVE="$PWD/proflame2-learning-id.pyz"
-python3 "$HELPER_ARCHIVE" --help
-```
+1. Turn the fireplace **OFF** and disable thermostat mode on the remote.
+   Press **Return on the computer keyboard** when ready.
+2. Answer whether your remote can adjust both Light and Fan. Press Return for
+   Yes, or type `n` and press Return for No. The helper adapts if one of these
+   controls is unavailable.
+3. Press the requested button on the **original remote**, then wait for the
+   helper to confirm receipt and show the next instruction. Do not press
+   Return after each remote button press. Do not use Home Assistant controls
+   during learning.
+4. Follow the final **Power OFF** instruction. When finished, the helper prints
+   **Your Learning ID is ready**, followed by the ID, and exits.
 
-`--help` lists the supported arguments without the detailed inspection text.
-If you wish to examine the contents of the archive, display those instructions
-separately with:
+Take your time following the prompts. After each button press, confirmation
+should normally appear within a second or two.
+Some remotes switch back to Flame automatically; select the control named in
+the instruction before pressing Up or Down. If you press the wrong button,
+read the helper's next instruction rather than guessing how to correct it.
 
-```sh
-python3 "$HELPER_ARCHIVE" --inspect-pyz-archive
-```
+The message **A plausible Learning ID has been created** means learning is
+still in progress. Continue until **Your Learning ID is ready** appears.
+To cancel, type `q` and press Return, or press Ctrl-C.
 
-That flag prints the instructions and exits without starting rtl_433 or learning.
-It does execute helper code to print the text; the ZIP commands above allow
-inspection without executing any helper code.
-`--version` shows the product version and source revision. No pip, virtual
-environment, administrator access, or network dependency download is needed
-to run the helper. It installs nothing, saves no configuration or log files,
-and does not write Python bytecode caches, including when run after extraction.
-It does start the user-installed rtl_433 for managed live reception.
+If the helper says rtl_433 is missing or incompatible, it will ask where the
+compatible program is installed. Enter its full path without surrounding
+quotes. If you do not know the path, type `q` to cancel and finish the
+[rtl_433 installation](#install-rtl_433) before trying again.
 
-To run the reviewed extracted source instead:
+## Save and Import Your ID
 
-```sh
-python3 proflame2-learning-id-source/__main__.py --rf-band 315 --timeout 600
-```
+Copy the complete Learning ID. It starts with `PF2-`. Save it with your
+fireplace records and label it with the remote it belongs to. You can reuse it
+after reinstalling the integration or replacing the controller. A different
+remote needs its own ID, even if it is the same model.
 
-When finished, delete the downloaded archive/checksum and any extracted review
-directory. Save your Learning ID separately if desired. This flow is supported
-on Linux/macOS; Windows live SDR/terminal operation is not supported.
+In Home Assistant:
 
-### Developer Source Runner
+1. Open **Settings > Devices & services > Proflame 2 Fireplace**.
+2. Choose **Add entry**, then **Enter a Learning ID**.
+3. Paste the complete ID and select the controller dedicated to this fireplace.
+4. Choose the fireplace features to enable, then finish setup.
 
-Open a terminal in the helper-enabled HACS-Proflame2 source checkout supplied by
-the maintainer. It must contain both `tools/learning_id` and the package metadata
-in `pyproject.toml`; these instructions do not apply to an ordinary older checkout.
+See [Using Learning IDs](add_fireplace_profile.md#Using_learning_ids) for more
+setup details. Set the controller to the same radio band as the remote, then
+test its controls and, if enabled, Active Listening.
 
-On Linux or macOS, use the temporary runner from that checkout:
-
-```sh
-HELPER_RUNNER="$PWD/tools/learning_id/run.sh"
-bash "$HELPER_RUNNER" --help
-```
-
-Each invocation creates a native Python environment and stages the helper's
-packaging sources under `/tmp`. It installs and runs the helper, then removes
-the environment and staged files on completion, failure, Ctrl-C, or termination.
-It does not create a persistent environment or build metadata in your checkout.
-Python's venv/pip support and access to install build dependencies are required.
-Setup messages go to stderr; stdout remains reserved for the Learning ID.
-Forced termination with SIGKILL or a machine failure cannot run cleanup.
-
-Keep captures and saved IDs in a private, persistent directory outside `/tmp`.
-The runner preserves your current directory and passes through all helper
-arguments. To choose a Python interpreter, set `LEARNING_ID_PYTHON`.
-
-This source runner remains available to developers, but end users do not need
-a checkout or temporary environment when using the `.pyz`. For local packaging
-and CI/release details, see [Learning ID packaging](learning_id_packaging.md).
-
-## Select the Radio Band
-
-Use the band printed on your native remote:
-
-| Remote band | rtl_433 option | LilyGO YAML substitution |
-| --- | --- | --- |
-| 315 MHz | `-f 315M` | `proflame2_rf_band: "315"` |
-| 433.92 MHz | `-f 433.92M` | `proflame2_rf_band: "433"` |
-
-Extended frames do not imply a particular frequency. Configure the controller's
-band separately; a Learning ID does not contain the band.
-
-The ID contains only learned remote information. Guided capture asks which
-remote controls are available solely to choose a button sequence; this does not
-configure fireplace features or change the ID's encoding. Choose fan, light,
-front-burner, auxiliary, and CPI options later in Home Assistant's **Select
-supported features** step.
-
-## Generate a Learning ID
-
-Start with the fireplace OFF and the remote's thermostat mode disabled. Use only
-one remote during collection and do not use HA controls during the test. The
-helper will give you time to prepare before it asks for the first button press.
-
-For a 315 MHz remote, run:
-
-```sh
-python3 "$HELPER_ARCHIVE" --rf-band 315 --timeout 600
-```
-
-For a 433.92 MHz remote:
-
-```sh
-python3 "$HELPER_ARCHIVE" --rf-band 433 --timeout 600
-```
-
-This managed mode starts rtl_433, supplies its JSON to the helper, and stops
-that receiver when learning finishes, fails, or is cancelled. Use
-`--rtl433 /path/to/rtl_433` to choose a particular executable. It stops only
-the receiver it started, not other SDR programs or processes.
-
-Before opening the SDR, the runner performs offline decoder checks with known
-legacy and extended test frames, including the extended terminal-bit case. It
-checks decoded JSON, not just the reported version. If the selected program is
-missing or incompatible, it asks for the full path to a compatible rtl_433;
-type `q` to cancel. The selected path is not saved. Use `--rtl433` on later runs
-to avoid choosing it again. With `--unguided`, an incompatible executable fails
-without an interactive path prompt.
-
-Managed reception requires an extended-capable build even for a legacy remote.
-Compatible older legacy JSON can still be processed with the saved-file flow.
-Shell aliases/functions are not used to start the receiver: if your working
-`rtl_433` command is an alias, supply its actual executable path. `type -a rtl_433`
-in another terminal can help locate available commands and aliases.
-
-One receiver version line appears before preparation. Other startup messages
-are captured separately so they do not interrupt the instructions. On failure,
-the runner prints a bounded diagnostic tail; it does not create a persistent
-log file. Offline compatibility does not establish SDR access or live reception.
-
-You can still supply JSON through an external pipeline, but then the shell owns
-the rtl_433 process. After the helper prints the ID, that receiver can keep
-running until another transmission or Ctrl-C; the helper has already finished.
-Managed mode avoids this apparent hang and releases the SDR automatically.
-
-Place the remote near the SDR antenna. Live collection is guided by default:
-
-1. Turn the fireplace OFF, disable thermostat mode, and press Return in the
-   terminal when ready. There is no preparation countdown.
-2. Answer whether your remote adjusts both Light and Fan: Return means Yes;
-   `n` means No. Only after No, answer whether Light is available. The helper
-   then uses Light and Flame, or Power and Flame if Light is unavailable.
-3. Follow the **Power ON** prompt. Then follow each individual button prompt,
-   such as **Select Light; press DOWN once; the remote should show 2 bars**. Reselect the named control
-   each time because some native remotes automatically return to Flame.
-4. Wait for **Received: Light 2** and the next instruction. Do not press Return
-   after remote button presses: receipt is confirmed from the decoded RF data.
-   The helper chooses the next setting and repeats combinations automatically.
-5. When confirmation passes, follow the final Power OFF prompt. The helper
-   confirms that received command and prints your Learning ID.
-
-The first plausible-ID announcement is not completion. A wrong control or level
-does not advance the requested action; read the corrected instruction. If the
-remote has moved past the requested value, the helper tells you which direction
-to press next. Type `q` and Return, or press Ctrl-C, to cancel without an ID.
-
-Light/Fan and Light/Flame sequences group changes by control, sweeping levels
-1 through 3 and back to 1 before switching modes. The helper stops the sequence
-as soon as the evidence checks pass, avoiding unnecessary presses. The Power/Flame
-fallback never requests flame zero and pauses for your confirmation before
-another power-on cycle; follow the fireplace's normal shutdown/startup guidance.
-With `--timeout 600`, each requested action has ten minutes for receipt. Terminal
-preparation and shutdown pauses have no countdown. These are received remote
-commands, not acknowledgements from the fireplace.
-
-Live guidance needs an interactive Linux/macOS terminal separate from the JSON
-pipe. For automation, add `--unguided`; that mode retains a total collection
-timeout and requires fully confirmed evidence before output. Saved-file input
-does not prompt for button presses.
-
-### Button Sequence for Saved Files or Unguided Collection
-
-If your fireplace supports fan and light, this is an example sequence:
-
-1. Turn power on, select flame 6, light 0, and fan 0. Wait for startup to finish.
-2. Set Light 1, then Light 2, then Light 3, then Light 4, then Light 5, then Light 6.
-3. Set Fan 1, then Fan 2, then Fan 3, then Fan 4, then Fan 5, then Fan 6.
-4. Turn power off and back on if the helper still requests variation in the
-   power/other command byte. Do not rapidly cycle power; follow your fireplace's
-   operating instructions and allow its normal shutdown/startup time.
-
-**Pause after each individual setting change**, not just after each numbered
-step. Each initial derivation command must be received at least twice. Let the remote send
-its automatic repeat, watching `-v` progress to confirm it counted. Repeat timing
-varies between remotes; do not assume two seconds is sufficient. If necessary,
-return to a prior setting and then select the target setting again.
-
-If fan or light is unavailable, use several different nonzero flame levels or
-another supported control. Avoid flame zero during collection: depending on the
-mode and remote, it can shut the fireplace off. On native remotes that revert to
-the flame control after inactivity, reselect Light or Fan before adjusting it.
-
-Full confirmation needs at least three different commands received twice with
-the required variation, followed by validation against two other combinations.
-Those two checks need only one observation each and cannot reuse commands used
-in derivation. Previously received combinations outside the derivation set can
-also supply these independent checks. Repeated identical commands or temperature
-updates do not count as new commands.
-
-Live collection prints a Learning ID only after full confirmation. Unguided
-collection with `--timeout 600` stops unsuccessfully after ten minutes if the
-required evidence has not arrived. A confirmed ID means the capture checks passed, not
-that control of a physical fireplace has been tested.
-
-## Use a Saved JSON Capture Instead
-
-To retain a capture for later analysis, run rtl_433 separately:
-
-```sh
-rtl_433 -R 207 -f 315M -F json > remote-capture.json
-```
-
-Perform the same button sequence, then press Ctrl-C to stop recording. For a
-433.92 MHz remote, substitute `-f 433.92M`. Keep stderr separate: do not add
-`2>&1`, because startup/debug text is not JSON. Then run:
-
-```sh
-python3 "$HELPER_ARCHIVE" remote-capture.json -v
-```
-
-File mode validates the entire file and may generate an ID labeled
-**Preliminary** or **Confirmation incomplete** when there is less evidence than
-full confirmation needs. Collect more commands/repeats before treating those
-results as fully confirmed. Conflicting relevant records prevent an ID from
-being generated. Explicitly use `--input-mode file` if piping a saved file
-through another command; pipes otherwise default to live collection.
-
-The confirmation level is reported alongside the ID, not encoded into it.
-Home Assistant checks the ID's format and checksum but cannot establish how
-many observations were collected. A successful import is not a substitute for
-the helper's full confirmation or a test with your fireplace.
-
-## Save and Import the ID
-
-Save the complete ID and label it with the native remote used to generate it.
-It continues to describe that specific remote even if you remove its HA entry,
-reinstall the integration, or replace the controller. It is not interchangeable
-with IDs for other remotes of the same model. A replacement remote requires its
-own ID. Feature choices are not included in the ID; select them during HA setup.
-
-In Home Assistant, open Proflame2, choose **Add entry**, then **Enter a Learning
-ID**. Paste the ID, choose the controller dedicated to this fireplace, and select
-which features to enable on the next setup screen. See
-[Using Learning IDs](add_fireplace_profile.md#Using_learning_ids) for import
-details. Test the available controls and native-remote listening afterward.
-
-Treat the ID and capture files as sensitive: they identify your specific remote
-and contain information needed to reproduce its commands. Keep them private
-unless sharing them deliberately for support.
+Keep your Learning ID private: it contains the information needed to reproduce
+your remote's commands. When finished, you can delete the downloaded helper
+and checksum. Keep the saved ID; you do not need to repeat learning just because
+you deleted the helper.
 
 ## Troubleshooting
 
-- **No decoded output:** check SDR access, the selected frequency, antenna, and
-  that another program is not already using the SDR. For extended remotes,
-  verify that the correct extended-capable executable is running.
-- **The helper asks for more commands:** vary actual settings; temperature-only
-  updates and repeated copies of one command do not provide enough variation.
-- **The helper asks for repeats:** wait for retransmission or return to a prior
-  setting and select the target again. Do not simply press Up at the maximum.
-- **Conflicting or invalid records:** use one remote, keep thermostat off, and
-  retain the original JSON for investigation. Do not edit bytes to force an ID.
-- **HA rejects the ID:** copy the entire value, including the `PF2` prefix, and
-  check that the integration supports the format. Do not paste the JSON itself.
-- **HA accepts the ID but the fireplace does not respond:** check controller
-  band and placement. Local TX success is not a fireplace acknowledgement.
+- **Python cannot be found:** install Python 3.10 or newer, then reopen the
+  terminal and try again.
+- **The helper file cannot be found:** open the terminal in the download folder,
+  or drag the `.pyz` file into the terminal to obtain its full path.
+- **No button press is received:** check the radio band, antenna, and USB
+  connection. Close other programs using the SDR and move the remote nearer
+  the antenna.
+- **The requested setting does not match:** check which control is selected on
+  the remote, then follow the helper's next instruction.
+- **Home Assistant rejects the ID:** copy the entire value, including its
+  `PF2-` prefix, and update the integration if needed.
+- **Learning succeeds but the fireplace does not respond:** check the
+  controller's radio band and placement. Learning an ID does not prove that
+  the fireplace received a later command.
 
-When requesting help, include software versions, remote model, frequency band,
-and the exact error. Review logs and recordings for personal information before
-sharing them. Share Learning IDs and raw captures only deliberately.
+If you need help, report the exact error, your remote model and frequency,
+and your software versions. Review logs for personal information before
+sharing them. Only share your Learning ID or recordings deliberately.
+
+Saved recordings, source inspection, and developer options are covered in
+[Advanced Learning ID usage](learning_id_advanced_usage.md).
+
+## Older JSON-Paste Instructions
+
+Older instructions asked you to paste rtl_433 JSON output into Home Assistant.
+That method has been replaced by the Learning ID helper described above.
+Home Assistant now accepts the resulting Learning ID, not the JSON output.
