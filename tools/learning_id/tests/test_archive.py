@@ -211,7 +211,8 @@ def test_archive_failure_stops_its_receiver_without_an_id(radio, mode):
     assert (root / "stopped").exists()
 
 
-def test_archive_cancellation_stops_its_receiver(radio, monkeypatch):
+@pytest.mark.parametrize("stop_signal", [signal.SIGINT, signal.SIGTERM])
+def test_archive_cancellation_stops_its_receiver(radio, monkeypatch, stop_signal):
     root, executable, env = radio
     monkeypatch.setenv("RADIO_TEST_ROOT", env["RADIO_TEST_ROOT"])
     monkeypatch.setenv("RADIO_TEST_MODE", "silent")
@@ -222,8 +223,8 @@ def test_archive_cancellation_stops_its_receiver(radio, monkeypatch):
         while not (root / "ready").exists():
             assert time.monotonic() < deadline
             time.sleep(0.01)
-        capture.process.send_signal(signal.SIGTERM)
-        capture.process.wait(timeout=5)
+        capture.process.send_signal(stop_signal)
+        capture.wait()
         assert capture.process.returncode == 130
         assert not capture.process.stdout.read()
         assert (root / "stopped").exists()

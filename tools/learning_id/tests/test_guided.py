@@ -5,17 +5,18 @@ Frames are synthetic test signals. No SDR, native remote, or fireplace is used.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import pty
 import re
 import select
+import signal
 import subprocess
-import termios
+import sys
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from itertools import groupby
+from pathlib import Path
 
 import pytest
 
@@ -62,6 +63,34 @@ class Session:
         self.buffer = ""
         self.transcript = ""
 
+    def diagnostics(self):
+        """Request a child traceback without waiting indefinitely for its output."""
+        if self.process.poll() is None:
+            with suppress(ProcessLookupError):
+                self.process.send_signal(signal.SIGUSR1)
+        deadline = time.monotonic() + 0.5
+        size = 0
+        while size < 65536:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([self.master], [], [], remaining)[0]:
+                break
+            try:
+                chunk = os.read(self.master, min(4096, 65536 - size))
+            except OSError:
+                break
+            if not chunk:
+                break
+            size += len(chunk)
+            self.transcript += chunk.decode(errors="replace")
+        return self.transcript
+
+    def wait(self, timeout=5):
+        try:
+            return self.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print("Helper did not exit before timeout. Child diagnostics:\n" + self.diagnostics(), file=sys.stderr)
+            raise
+
     def read_until(self, pattern, timeout=5):
         pattern = re.compile(pattern) if isinstance(pattern, str) else pattern
         deadline = time.monotonic() + timeout
@@ -104,30 +133,77 @@ class Session:
 @contextmanager
 def session(timeout="2", command=None):
     master, slave = pty.openpty()
-
-    def controlling_terminal():
-        os.setsid()
-        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-
-    process = subprocess.Popen(
-        command or [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", "live", "--timeout", timeout],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=slave,
-        text=True,
-        pass_fds=(slave,),
-        preexec_fn=controlling_terminal,
-    )
-    os.close(slave)
+    command = command or [PYTHON, "-I", "-m", "proflame2_learning_id.cli", "--input-mode", "live", "--timeout", timeout]
     try:
-        yield Session(process, master)
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        process.stdin.close()
-        process.stdout.close()
+        process = subprocess.Popen(
+            [command[0], "-I", "-u", str(Path(__file__).with_name("pty_child.py")), str(slave), *command[1:]],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=slave,
+            text=True,
+            pass_fds=(slave,),
+            start_new_session=True,
+        )
+    except BaseException:
         os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    capture = Session(process, master)
+    try:
+        yield capture
+    finally:
+        failed = sys.exc_info()[0] is not None
+        if failed and process.poll() is None:
+            print("Guided test failed. Child diagnostics:\n" + capture.diagnostics(), file=sys.stderr)
+        # Release the controlling terminal before reaping on macOS, and include
+        # the synthetic receiver without touching another test's process group.
+        os.close(master)
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            message = "Guided test cleanup could not reap its child within 5 seconds."
+            if failed:
+                print(message, file=sys.stderr)
+            else:
+                pytest.fail(message)
+        finally:
+            for stream in (process.stdin, process.stdout):
+                with suppress(OSError):
+                    stream.close()
+
+
+def test_session_reports_a_live_child_traceback():
+    with session() as capture:
+        capture.read_until("Press Return when it is OFF and you are ready")
+        transcript = capture.diagnostics()
+        assert "guided.py" in transcript
+        assert "pty_child.py" in transcript
+
+
+def test_session_cleanup_preserves_the_original_failure_and_closes_terminal(monkeypatch, capsys):
+    real_wait = None
+    try:
+        with pytest.raises(RuntimeError, match="original guided failure"):
+            with session() as capture:
+                capture.read_until("Press Return when it is OFF and you are ready")
+                real_wait = capture.process.wait
+
+                def timeout_wait(timeout):
+                    raise subprocess.TimeoutExpired("test child", timeout)
+
+                monkeypatch.setattr(capture.process, "wait", timeout_wait)
+                raise RuntimeError("original guided failure")
+        assert "cleanup could not reap its child" in capsys.readouterr().err
+        with pytest.raises(OSError):
+            os.fstat(capture.master)
+        assert capture.process.stdin.closed
+        assert capture.process.stdout.closed
+    finally:
+        if real_wait is not None:
+            real_wait(timeout=5)
 
 
 @pytest.mark.parametrize("extended", [False, True])
