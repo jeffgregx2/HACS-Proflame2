@@ -1323,7 +1323,7 @@ async def test_multiple_esphome_entries_keep_distinct_controller_links(hass) -> 
     assert runtime_entry_two.controller_device_identifier is None
 
 
-async def test_yardstick_runtime_creates_its_own_controller_link(hass, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_yardstick_runtime_does_not_expose_controller_device(hass, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_connect(self):
         return None
 
@@ -1332,10 +1332,47 @@ async def test_yardstick_runtime_creates_its_own_controller_link(hass, monkeypat
 
     runtime_entry = await async_setup_runtime_entry(hass, entry)
 
-    assert runtime_entry.controller_device_id is not None
-    assert runtime_entry.controller_device_identifier == (DOMAIN, "controller:yardstick:0")
+    assert runtime_entry.controller_device_id is None
+    assert runtime_entry.controller_device_identifier is None
     registry = dr.async_get(hass)
     fireplace_device = registry.async_get(runtime_entry.device_id)
     assert fireplace_device is not None
-    assert fireplace_device.via_device_id == runtime_entry.controller_device_id
-    assert len(dr.async_entries_for_config_entry(registry, entry.entry_id)) == 2
+    assert fireplace_device.via_device_id is None
+    assert len(dr.async_entries_for_config_entry(registry, entry.entry_id)) == 1
+
+
+@pytest.mark.parametrize("backend", [BACKEND_ESPHOME, BACKEND_YARDSTICK])
+@pytest.mark.parametrize("w4,w6,w7,w8", [(0x80, 21, 200, 0), (0x84, 79, 0x16, 3)])
+async def test_loaded_extended_profiles_use_fixed_manual_temperatures(hass, backend, w4, w6, w7, w8):
+    from custom_components.proflame2.const import (
+        CONF_EXTENDED_W4_BASE,
+        CONF_EXTENDED_W6,
+        CONF_EXTENDED_W7,
+        CONF_EXTENDED_W8,
+        CONF_PROTOCOL_VARIANT,
+    )
+    from custom_components.proflame2.protocol.encoder import encode_state
+    from custom_components.proflame2.protocol.models import FireplaceState
+    from custom_components.proflame2.runtime import async_unload_runtime_entry
+
+    _install_mock_esphome_transport(hass, MockESPHomeTransport())
+    entry = _add_entry(hass, backend_type=backend, remote_id=0x123456)
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            CONF_PROTOCOL_VARIANT: "extended_10_word",
+            CONF_EXTENDED_W4_BASE: w4,
+            CONF_EXTENDED_W6: w6,
+            CONF_EXTENDED_W7: w7,
+            CONF_EXTENDED_W8: w8,
+        },
+    )
+    runtime = await async_setup_runtime_entry(hass, entry)
+    template = runtime.remote_profile.extended_template
+    assert (template.w4_base, template.w6, template.w7, template.w8) == (0x80, 20, 200, 0)
+    assert runtime.learning_id == "PF2-1-E-CI2FNAAUZAAISF7GOU"
+    frame = encode_state(FireplaceState(True, flame=3), runtime.remote_profile)
+    assert frame.wire_words[5:8] == (20, 200, 0)
+    assert not frame.cmd1 & 4
+    await async_unload_runtime_entry(hass, entry)

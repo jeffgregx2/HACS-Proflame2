@@ -85,9 +85,11 @@ change during learning. They do not establish identity or provide additional
 control-command diversity. Thermostat/SMART traffic pauses guided learning;
 returning to manual mode resumes the pending instruction automatically.
 
-New profiles use a canonical Celsius manual TX template: W4 bit 2 clear,
-W6 `0x14`, W7 `0xC8`, W8 `0x00`. Existing profiles and imported Learning IDs
-retain their stored units and temperature fields unchanged. Original frames,
+Learning, HA profile loading, and Learning ID import/export use a canonical
+Celsius manual TX template: W4 bit 2 clear, W6 `0x14` (20°C), W7 `0xC8`, W8
+`0x00` (20.0°C). Observed or imported temperatures cannot change the generated
+Learning ID for an otherwise equivalent profile. Original imported IDs are
+validated before normalization. Original received frames,
 including their extension words, remain available for initial-state restoration
 and diagnostics. Received checksums are always validated using the original,
 unmodified bytes. See the [Issue #32 learning fix design](issue_32_learning_mode_design.md)

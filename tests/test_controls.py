@@ -132,6 +132,7 @@ async def test_extended_profile_control_emits_ten_word_frame(hass) -> None:
     runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
     assert runtime_entry.last_packet is not None
     assert runtime_entry.last_packet.frame.is_extended
+    assert entry.data[CONF_INITIAL_FRAME]["err1"] == 0x15  # Stored original observation is unchanged.
 
     await hass.services.async_call(
         DOMAIN,
@@ -145,7 +146,7 @@ async def test_extended_profile_control_emits_ten_word_frame(hass) -> None:
     assert runtime_entry.last_packet is not None
     assert runtime_entry.last_packet.frame.is_extended
     frame = backend.sent_packets[-1].frame
-    assert frame.wire_words[:8] == (0x08, 0xE9, 0x05, 0x81, 0x05, 0x15, 0xC8, 0x00)
+    assert frame.wire_words[:8] == (0x08, 0xE9, 0x05, 0x81, 0x05, 0x14, 0xC8, 0x00)
     assert frame.is_extended
     assert backend.sent_packets[-1].transmission_plan.air_payload_bit_length == 260
 

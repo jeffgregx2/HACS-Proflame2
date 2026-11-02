@@ -132,7 +132,7 @@ def test_learning_id_normalization_preserves_remote_but_uses_local_features(exte
     if extended:
         assert [
             result.data[key] for key in (CONF_EXTENDED_W4_BASE, CONF_EXTENDED_W6, CONF_EXTENDED_W7, CONF_EXTENDED_W8)
-        ] == [0x84, 0x50, 0xC8, 2]
+        ] == [0x80, 20, 0xC8, 0]
         assert all(key not in result.data for key in (CONF_C1, CONF_D1, CONF_C2, CONF_D2))
     else:
         assert {key: result.data[key] for key in asdict(profile.ecc)} == asdict(profile.ecc)

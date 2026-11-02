@@ -16,25 +16,43 @@ Selecting among multiple YardStick USB radios is not currently supported.
 | --- | --- |
 | Control the fireplace | Yes |
 | Guided learning from the original remote | Yes |
+| RF bands | 315 MHz and 433 MHz (433.92 MHz) |
+| Remote protocols | Legacy seven-word and extended ten-word, on either band |
 | Active listening after setup | No |
 | Home Assistant state updates from original remote | No |
 | Additional controller software required | No ESPHome firmware |
 
 The integration supports legacy seven-word and extended ten-word remotes in
-the selected 315 or 433 MHz band. Extended support has passed recorded-packet and automated
-tests; confirmation with a physical extended fireplace remains pending.
+the selected 315 or 433 MHz band. Legacy and extended learning/control have
+passed maintainer RF testing as well as automated tests. Confirmation with a
+physical extended fireplace remains pending.
 
 ## Radio Band
 
 Choose **315 MHz** or **433 MHz** during fireplace setup, before guided learning
-starts. The default is 315 MHz. Match the band used by the fireplace and its
-original remote. The 433 MHz setting operates at 433.92 MHz.
+starts. **315 MHz is the default for most users.** Choose 433 MHz only if your
+original remote uses 433 or 433.92 MHz. The 433 MHz setting operates at 433.92 MHz.
 
-Home Assistant automatically creates two devices under the one Proflame2 setup:
-**YardStick One** and your **fireplace**. You do not add the controller separately.
-To change the band later, open Settings → Devices & services → Devices →
-YardStick One, then change **RF band** in its Configuration section. The fireplace
-uses that controller setting. LilyGO's band remains configured in ESPHome YAML.
+To check your remote:
+
+1. Look at the identification label on the back of the remote or inside its
+   battery cover. If it lists **315 MHz**, keep the default. If it lists
+   **433 MHz** or **433.92 MHz**, select 433 MHz.
+2. If the label does not show a frequency, note the **model/part number** and
+   check the radio-frequency specification in the remote or fireplace manual,
+   or confirm it with the manufacturer. Match the manual to your remote's
+   version; do not infer the frequency from digits within an FCC ID.
+
+For example, [SIT's transmitter instructions](https://proflame.sitgroup.it/media/94/t-file/Proflame_2_Transmitter_Use_and_Installation_Instructions.pdf)
+list the radio frequency under Technical Data. Use the documentation for your
+own remote version to confirm its frequency.
+
+Home Assistant creates your fireplace device automatically. To change the band
+later, open Settings → Devices & services → Devices → your fireplace, then
+change **RF band** in its Configuration section. There is no separate YardStick
+device to manage. The band configures the underlying controller; the control is
+shown on the fireplace because each controller serves exactly one fireplace.
+LilyGO's band remains configured in ESPHome YAML.
 
 A band change waits for an active transmission to finish, clears pending
 commands, and applies the radio settings without sending a fireplace command.
@@ -42,11 +60,11 @@ Finish learning before changing bands. If configuration fails, the previous
 selection stays saved and fireplace controls pause. Select the desired band
 again to retry. Repeating the saved band also retries a failed configuration.
 
-Existing YardStick installations keep 315 MHz and gain the controller device
-automatically. Removing the Proflame2 setup removes both devices together.
+Existing YardStick installations keep 315 MHz unless another band was selected.
 
-Both bands have automated software coverage. Physical 433 MHz operation and
-extended-fireplace acceptance still require hardware validation.
+Both bands have automated software coverage. Maintainer testing also confirmed
+extended transmissions decoded by rtl_433 at 433.92 MHz and at 315 MHz after
+changing the band in HA. Actual extended-fireplace acceptance remains unverified.
 
 ## Pros And Cons
 
@@ -95,7 +113,7 @@ sure the YardStick USB device is passed through to the Home Assistant runtime.
 
 If you see intermittent failures:
 
-- Confirm the YardStick device is still visible to Home Assistant.
+- Confirm the YardStick USB radio is still available to the Home Assistant host.
 - Check VM/container USB passthrough rules.
 - Try a different USB port or powered USB hub.
 - Try a USB extension cable to move the YardStick closer to the fireplace.
@@ -148,6 +166,19 @@ controls the fireplace after setup; the SDR and helper are only needed to
 generate the Learning ID.
 
 ## Validation
+
+For an independent receiver check, tune rtl_433 to the selected band:
+
+```bash
+rtl_433 -f 315M -R 207
+rtl_433 -f 433.92M -R 207
+```
+
+Use one command for the selected band. The 433 MHz option means 433.92 MHz;
+`433M` tunes to a different frequency. Successful decoding with valid integrity
+confirms reception of the command, but does not prove the fireplace accepted it.
+Each HA command sends five repeated frames; rtl_433 may report these as one
+logical command.
 
 After setup, validate:
 

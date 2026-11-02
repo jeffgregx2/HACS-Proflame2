@@ -1,4 +1,4 @@
-"""Learning ID wire-format and transmit-profile preservation tests."""
+"""Learning ID validation and deterministic manual-profile exchange tests."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import pytest
 
 from custom_components.proflame2.protocol.encoder import encode_packet
 from custom_components.proflame2.protocol.learning_id import decode_learning_id, encode_learning_id
+from custom_components.proflame2.protocol.manual_profile import canonical_manual_profile
 from custom_components.proflame2.protocol.models import (
     PROTOCOL_VARIANT_EXTENDED_10_WORD,
     ECCProfile,
@@ -25,7 +26,7 @@ EXTENDED = RemoteProfile(
     0x123456,
     ECCProfile(0, 0, 0, 0),
     protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
-    extended_template=ExtendedFrameTemplate(0x80, 0x42, 0xC8, 0x19),
+    extended_template=ExtendedFrameTemplate(0x80, 20, 0xC8, 0),
 )
 
 
@@ -39,7 +40,7 @@ def _checked_id(prefix: str, payload: bytes) -> str:
     ("profile", "expected", "payload"),
     [
         (LEGACY, "PF2-1-L-CI2FMVYYTNVRS7Q", "1234565718"),
-        (EXTENDED, "PF2-1-E-CI2FNACCZAMYKTI4W4", "1234568042c819"),
+        (EXTENDED, "PF2-1-E-CI2FNAAUZAAISF7GOU", "1234568014c800"),
     ],
 )
 def test_documented_vectors(profile, expected, payload) -> None:
@@ -106,7 +107,8 @@ def test_extended_normalizes_dynamic_w4_and_ignores_unused_ecc() -> None:
         EXTENDED, ecc=ECCProfile(5, 7, 1, 8), extended_template=ExtendedFrameTemplate(0xF3, 0x42, 0xC8, 0x19)
     )
     restored = decode_learning_id(encode_learning_id(profile))
-    assert restored.extended_template == ExtendedFrameTemplate(0x80, 0x42, 0xC8, 0x19)
+    assert restored.extended_template == ExtendedFrameTemplate(0x80, 20, 0xC8, 0)
+    profile = canonical_manual_profile(profile)
     state = FireplaceState(True, flame=6, light=4)
     assert encode_packet(state, restored).frame == encode_packet(state, profile).frame
 
@@ -154,9 +156,35 @@ def test_noncanonical_w4_and_base32_padding_bits_rejected() -> None:
     value = encode_learning_id(EXTENDED)
     # The last Base32 symbol has two unused zero bits; changing them is not canonical.
     with pytest.raises(ValueError, match="Noncanonical"):
-        decode_learning_id(value[:-1] + "5")
+        decode_learning_id(
+            value[:-1] + "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"["ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".index(value[-1]) | 1]
+        )
 
 
 def test_unknown_exchange_version_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unsupported"):
         decode_learning_id(encode_learning_id(LEGACY).replace("PF2-1-", "PF2-9-"))
+
+
+@pytest.mark.parametrize(
+    "w4,w6,w7,w8", [(0x80, 21, 200, 0), (0x80, 26, 245, 0), (0x84, 79, 0x16, 3), (0x84, 80, 255, 2)]
+)
+def test_temperature_variants_import_and_export_as_one_manual_id(w4, w6, w7, w8):
+    original = replace(EXTENDED, extended_template=ExtendedFrameTemplate(w4, w6, w7, w8))
+    literal = _checked_id("PF2-1-E-", bytes.fromhex("123456") + bytes((w4, w6, w7, w8)))
+    assert decode_learning_id(literal) == EXTENDED
+    assert encode_learning_id(original) == encode_learning_id(EXTENDED)
+    assert encode_learning_id(decode_learning_id(literal)) == encode_learning_id(EXTENDED)
+
+
+def test_retained_flags_still_distinguish_extended_ids():
+    changed = replace(EXTENDED, extended_template=ExtendedFrameTemplate(0x88, 21, 200, 0))
+    assert encode_learning_id(changed) != encode_learning_id(EXTENDED)
+    assert decode_learning_id(encode_learning_id(changed)).extended_template.w4_base == 0x88
+
+
+@pytest.mark.parametrize("field", ["w4_base", "w6", "w7", "w8"])
+def test_normalization_does_not_hide_invalid_template_fields(field):
+    invalid = replace(EXTENDED, extended_template=replace(EXTENDED.extended_template, **{field: 1.5}))
+    with pytest.raises(ValueError, match="out of range"):
+        encode_learning_id(invalid)

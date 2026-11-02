@@ -109,32 +109,33 @@ async def test_learning_backend_uses_selected_band(hass, monkeypatch, band, rx, 
 
 
 @pytest.mark.parametrize("band", [None, "315", "433"])
-async def test_existing_and_new_entries_have_two_devices_and_keep_identity(hass, band):
+async def test_entries_expose_only_fireplace_and_keep_identity(hass, band):
     config = entry(hass, band)
     original_data = dict(config.data)
     runtime = await async_setup_runtime_entry(hass, config)
     registry = dr.async_get(hass)
     devices = dr.async_entries_for_config_entry(registry, config.entry_id)
-    assert len(devices) == 2
+    assert len(devices) == 1
     fireplace = registry.async_get(runtime.device_id)
-    assert fireplace.via_device_id == runtime.controller_device_id
-    assert runtime.controller_device_id != runtime.device_id
+    assert fireplace.via_device_id is None
+    assert runtime.controller_device_id is None
+    assert runtime.controller_device_identifier is None
     assert runtime.rf_band == (band or "315")
     frequencies = yardstick_band(band or "315")
     assert runtime.backend._frequency_hz == frequencies.rx_frequency_hz
     assert runtime.backend._tx_frequency_hz == frequencies.tx_frequency_hz
     selector = YardStickBandSelect(config, runtime)
-    assert selector.device_info["identifiers"] == {runtime.controller_device_identifier}
+    assert selector.device_info["identifiers"] == fireplace.identifiers
     assert (DOMAIN, f"fireplace:{config.entry_id}") in fireplace.identifiers
     await async_unload_runtime_entry(hass, config)
     again = await async_setup_runtime_entry(hass, config)
     assert (again.device_id, again.controller_device_id) == (runtime.device_id, runtime.controller_device_id)
-    assert len(dr.async_entries_for_config_entry(registry, config.entry_id)) == 2
+    assert len(dr.async_entries_for_config_entry(registry, config.entry_id)) == 1
     assert dict(config.data) == original_data
     await async_unload_runtime_entry(hass, config)
 
 
-async def test_real_ha_setup_registers_selector_on_controller_and_removes_both_devices(hass):
+async def test_real_ha_setup_registers_selector_on_fireplace_without_controller_device(hass):
     config = entry(hass)
     assert await hass.config_entries.async_setup(config.entry_id)
     await hass.async_block_till_done()
@@ -144,7 +145,8 @@ async def test_real_ha_setup_registers_selector_on_controller_and_removes_both_d
     assert selected is not None
     selector = entities.async_get(selected)
     device = registry.async_get(selector.device_id)
-    assert (DOMAIN, "controller:yardstick:0") in device.identifiers
+    assert (DOMAIN, f"fireplace:{config.entry_id}") in device.identifiers
+    assert len(dr.async_entries_for_config_entry(registry, config.entry_id)) == 1
     assert hass.states.get(selected).state == "315"
     runtime = async_get_runtime_entries(hass)[config.entry_id]
     runtime.backend, radio = backend_with_rows([])
@@ -193,7 +195,7 @@ async def test_manual_setup_stores_band_and_needs_no_separate_controller_setup(h
     assert result["data"][CONF_RF_BAND] == "433"
     await hass.async_block_till_done()
     assert len(hass.config_entries.async_entries(DOMAIN)) == 1
-    assert len(dr.async_entries_for_config_entry(dr.async_get(hass), result["result"].entry_id)) == 2
+    assert len(dr.async_entries_for_config_entry(dr.async_get(hass), result["result"].entry_id)) == 1
 
 
 async def test_feature_options_reload_preserves_controller_band_and_entity_ids(hass):

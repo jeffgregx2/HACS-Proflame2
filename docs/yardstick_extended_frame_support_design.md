@@ -1,8 +1,9 @@
 # YardStick extended frames and controller configuration
 
 Status: implemented locally on `dev`, preserving the committed Issue #32
-learning changes. Automated validation passed; physical RF and fireplace
-acceptance remain pending. No RF transmissions were performed.
+learning changes. Automated validation and maintainer RF learning/transmission
+tests passed. Actual extended-fireplace acceptance remains unverified. The
+maintainer RF results are recorded separately below.
 
 The YardStick controller and RF band configuration described at the end of
 this document is also implemented locally. LilyGO configuration and behavior
@@ -295,8 +296,8 @@ not implemented.
 This section records the separately authorized controller/band implementation.
 Band selection belongs to the physical controller, independently of protocol
 frame length. Each fireplace uses its controller's band rather than storing an
-independent band selection. Introduce an HA controller device and band UI for
-YardStick only. Both YardStick and LilyGO remain limited to one fireplace per
+independent band selection. Present the YardStick band control on the
+fireplace device while retaining controller ownership internally. Both YardStick and LilyGO remain limited to one fireplace per
 controller. Sharing is deferred to a possible later release.
 
 ### Scope and compatibility
@@ -313,7 +314,8 @@ Yard Stick One hardware supports 433.92 MHz as well as the current 315 MHz use
 case; see the [manufacturer's supported frequency ranges](https://greatscottgadgets.com/yardstickone/).
 The integration supports 315 and 433 MHz selection in software. Runtime
 transmission, reception, learning, and reconnect use the same controller band.
-Hardware acceptance remains pending.
+Maintainer testing confirmed transmission on both bands; actual
+extended-fireplace acceptance remains unverified.
 
 Keep the current single default YardStick USB selection in scope; this design
 does not add support for selecting multiple USB radios. Do not add shared
@@ -321,48 +323,46 @@ connections, packet fan-out, multi-profile receive filtering, reference-counted
 backend ownership, or shared LilyGO display selection. Such work requires a
 separate future design and authorization.
 
-### HA devices, setup, and ownership
+### HA presentation, setup, and ownership
 
-Use one existing Proflame2 configuration entry containing two devices: the
-YardStick controller and its fireplace. There is no separate controller
-configuration entry or new integration type. The controller appears under
-Settings → Devices & services → Devices.
-The fireplace remains a separate device linked to its controller through HA's
-device relationships. The relationship is one controller to one fireplace.
+Use one Proflame2 configuration entry exposing only the fireplace device. The
+RF band select entity appears in that device's Configuration section for
+YardStick-backed fireplaces. Do not create a separate YardStick device or
+configuration entry.
 
-| Owner | Configuration |
-| --- | --- |
-| YardStick controller | USB connection reference, selected band, and effective configuration status. |
-| YardStick fireplace | Exclusive controller reference, remote profile/Learning ID, fireplace features, and refresh options. |
-| LilyGO controller | Existing ESPHome YAML band configuration and existing ESPHome device. No new HA band setting or controller configuration entry. |
-| LilyGO fireplace | Existing exclusive ESPHome controller link, remote profile/Learning ID, fireplace features, and refresh options. |
+RF band remains a controller/backend setting internally. Its presentation on
+the fireplace is a UI simplification justified by the enforced 1:1 controller
+assignment, not a change to protocol or profile ownership. If sharing is ever
+introduced, revisit the placement as part of that separate feature.
 
-Do not require users to add a YardStick controller separately before adding a
-fireplace. During Add fireplace, selecting YardStick collects the band,
-defaulting to 315 MHz, and automatically creates both devices under the one
-fireplace configuration entry as part of successful setup. An assigned
-controller cannot be claimed by a second fireplace,
-even with a different remote identity. Reject the attempt before opening the
-radio or starting learning. Preserve the final entry-creation guard against
-simultaneous setup attempts and the startup guard against saved duplicates.
-LilyGO setup follows its existing flow and retains the same ownership checks.
+| Setting | Internal owner | User-facing location |
+| --- | --- | --- |
+| YardStick RF band and configuration status | Controller/backend | Fireplace device, Configuration section |
+| Remote profile/Learning ID, features, and refresh options | Fireplace | Existing fireplace setup and controls |
+| LilyGO RF band | ESPHome controller | Existing ESPHome YAML; unchanged |
 
-Device creation is idempotent. Cancelled setup creates no devices or entries;
-retries and simultaneous attempts must not leave duplicate registrations. The
-YardStick identifier is `controller:yardstick:0`, matching the single supported
-default USB selection. Existing fireplace device/entity identifiers are kept.
-Existing entries without a stored band use 315 MHz without rewriting profiles
-or adding configuration entries. The optional `rf_band` key is saved in the
-original entry data, independently of feature options and Learning IDs.
+During Add fireplace, selecting YardStick opens **Choose YardStick RF band**
+before opening the learning radio. State that 315 MHz is the default for most
+users. Explain how to check the remote's back/battery-cover label for frequency,
+or use its model/part number to check the applicable manual. Select 433 MHz for
+a confirmed 433/433.92 MHz remote; FCC ID digits alone do not establish frequency.
+Learning starts only after submitting the band choice, and successful setup
+saves it in the existing fireplace entry.
 
-Offer YardStick band changes through the RF band select entity on its
-controller device, in the Configuration section. Link its assigned fireplace
-through the device relationship and expose its name on the selector. Distinguish the saved selection
-from a configuration successfully applied to the radio; never report a requested
-value as effective after a failed configuration. Learning IDs remain unchanged
-and do not gain a band field. Removing the integration configuration entry
-removes both devices and their entities together and releases the controller
-assignment; no separate controller-entry deletion/reassignment policy is needed.
+An assigned controller cannot be claimed by a second fireplace even with a
+different remote identity. Reject the attempt before opening the radio or
+starting learning, recheck at final creation, and preserve the startup guard
+against saved duplicates. LilyGO retains its existing flow and ownership checks.
+
+Existing fireplace device/entity identifiers, band select unique ID, and saved
+band data remain unchanged. Missing `rf_band` data still means 315 MHz. The
+setting remains independent of feature options and Learning IDs. No migration
+or compatibility code for the discarded development-only YardStick device
+presentation is required.
+
+Keep the saved selection distinct from radio configuration success. A failed
+change must not present the requested band as applied. Removing the integration
+entry removes its fireplace device/entities and releases controller assignment.
 
 ### YardStick frequencies and reconfiguration
 
@@ -374,8 +374,8 @@ YardStick learning frequency override against the selected band explicitly;
 a diagnostic override must not silently tune learning to another band.
 
 Retain one runtime backend for the assigned fireplace and the existing
-controller serialization and learning lease. The controller
-device owns the band selector; it must not open a second radio connection.
+controller serialization and learning lease. The fireplace's band selector
+configures that controller without opening a second radio connection.
 Do not introduce continuous YardStick listening merely to add band selection.
 
 For a YardStick band change, block new operations, finish active transmission
@@ -387,43 +387,35 @@ suspend RF work until the effective configuration is known; report the failure
 and retain the saved configuration needed for recovery. This uses YardStick's
 existing radio/worker boundary and requires no ESPHome action or handshake.
 
-### Migration and implementation tasks
+### Implementation tasks
 
-1. Create a YardStick controller device under the existing fireplace entry
-   and link the fireplace device to it. Preserve the one-fireplace-per-controller checks for both physical
-   backends, including aliases, disabled assignments, and duplicate startup.
-2. Add the YardStick band setup step and a controller-scoped select entity
-   for band selection and configuration status. Keep LilyGO setup and options unchanged.
-3. Add the controller device idempotently for existing YardStick entries without
-   changing fireplace entity IDs, remote profiles, or USB assignments. Missing
-   band data defaults to existing 315 MHz frequencies; no configuration-entry
-   format migration or additional entry is needed. Leave LilyGO entries intact.
-4. Apply the YardStick controller band consistently to runtime and learning,
-   including direct and worker operation, reconnect, and diagnostics. Validate
-   diagnostic learning overrides against the selected band. Retain the existing
-   single-fireplace backend lifecycle and operation ownership.
-5. Implement coordinated YardStick reconfiguration, failure reporting, and
-   same-entry device cleanup without adding sharing mechanisms.
-6. Update YardStick setup, controller, and migration documentation. Explain the
-   one-fireplace restriction and distinguish YardStick's HA band setting from
-   LilyGO's existing YAML band setting. No ESPHome changes are required.
+1. Expose RF band in the YardStick-backed fireplace's Configuration section;
+   keep controller policy and RF configuration in their current modules.
+2. Remove automatic YardStick controller device creation and its fireplace
+   device link. Preserve LilyGO device relationships and firmware/YAML behavior.
+3. Keep the band setup step before learning, including 315 MHz default guidance
+   and instructions for identifying a 433 MHz remote.
+4. Preserve the saved band, select unique ID, protocol profile, and all existing
+   reconfiguration, serialization, learning, failure, and retry behavior.
+5. Update HA device/entity tests and user/developer documentation. Do not add
+   development-only device migration or controller sharing.
 
-### Required follow-up tests
+### Required controller/band tests
 
 | Area | Acceptance criteria |
 | --- | --- |
-| Automatic setup | A YardStick fireplace creates both devices under one configuration entry. Cancellation, retry, and concurrent setup do not create duplicates or orphan resources. No prerequisite manual controller setup is required. |
-| Device presentation | YardStick has a controller device under the existing integration; its fireplace links to it. Band settings appear only at YardStick controller scope. LilyGO keeps its existing device relationships and setup flow. |
+| Automatic setup | A YardStick setup creates one fireplace device with RF band configuration. Cancellation, retry, and concurrent setup do not create duplicates or orphan resources. No prerequisite manual controller setup is required. |
+| Device presentation | Only the fireplace device is exposed for YardStick. Its Configuration section contains RF band, which internally configures the controller. LilyGO keeps its existing device relationships and setup flow. |
 | Exclusive assignment | For both physical backends, a second fireplace is rejected during manual setup, Learning ID import, guided learning/retry, final creation, and duplicate startup. Different remote identities and controller aliases cannot bypass the restriction. Disabled saved fireplaces retain their setup reservation. Existing duplicate entries cannot open competing backends. |
 | Band propagation | Both bands reach YardStick RX, TX, learning, direct/worker paths, reconnect, and diagnostics consistently. Existing 315 MHz frequencies and waveform behavior remain unchanged. Cross-band diagnostic learning overrides are rejected clearly. |
 | Reconfiguration and failure | YardStick active TX, reception, queued commands, and learning coordinate through existing ownership. Failed configuration never reports the requested band as effective; RF work remains suspended and recoverable. |
-| Migration and lifecycle | Existing YardStick profiles, entity IDs, assignments, and 315 MHz defaults survive repeated setup and restart. Removing the one configuration entry removes both devices and releases ownership. LilyGO entries and YAML settings remain untouched. |
+| Migration and lifecycle | Existing YardStick profiles, entity IDs, assignments, and 315 MHz defaults survive repeated setup and restart. Removing the one configuration entry removes the fireplace and releases ownership. LilyGO entries and YAML settings remain untouched. |
 | Protocol compatibility | YardStick legacy and extended learning/control work on either configured band with unchanged Learning IDs and evidence rules. Band selection does not weaken integrity checks or learning identity validation. |
 | LilyGO regression | Existing 315/433 YAML configuration, firmware/API contracts, startup, learning, strict filtering, single-fireplace ownership, and display synchronization retain their current behavior. No new band selector appears for LilyGO. |
 
 Use fake YardStick radios and worker simulations for automated coverage, along
-with existing LilyGO regression tests. Physical 315/433 MHz validation remains
-a separate hardware acceptance task; this design does not authorize RF
+with existing LilyGO regression tests. Physical 315/433 MHz validation is
+reported separately below; this design does not authorize agent RF
 transmission, firmware flashing, or deployment.
 
 
@@ -431,9 +423,9 @@ transmission, firmware flashing, or deployment.
 
 `rf/band.py` owns the YardStick-only band/frequency policy. Setup collects the
 band before opening the learning radio; successful setup stores the selection
-in the existing fireplace entry. `select.py` attaches the RF band selector to
-the YardStick device, while `yardstick_controller.py` coordinates changes with
-the existing operation arbiter and learning lease. No controller configuration
+in the existing fireplace entry. `select.py` presents RF band on the fireplace
+device while keeping it a controller setting; `yardstick_controller.py`
+coordinates changes with the existing operation arbiter and learning lease. No controller configuration
 flow, separate entry migration, or sharing machinery was added.
 
 Band changes wait for an active send, discard pending controls, and end old-band
@@ -445,8 +437,8 @@ configuration calls retain ownership until completion even if their caller is
 cancelled. Successful changes restart the refresh interval without immediately
 sending a packet. A same-band selection is a no-op unless recovering a failure.
 
-Existing YardStick entries acquire their controller device and selector during
-normal setup; missing band data means 315 MHz. Feature/profile options do not
+YardStick entries expose the RF band selector on the fireplace during normal
+setup; missing band data means 315 MHz. Feature/profile options do not
 rewrite the stored band. No ESPHome firmware, package, YAML helper, or native API
 contract changed.
 
@@ -458,3 +450,39 @@ cancellation, and old-band receive cleanup. The final full repository suite
 passed 1,955 tests, with 34 skipped and one deselected. Changed Python files
 passed Ruff and Black checks. These are software results; no physical radio
 was opened and no over-the-air transmission or firmware deployment was performed.
+
+### Latest software validation
+
+The subsequent fireplace-only UI and fixed manual-temperature profile changes
+passed 1,968 repository tests, with 34 skipped and one deselected. The installed
+Learning ID helper passed 115 tests and six HA interoperability checks; the
+Make source-archive checks passed all 33 tests. Changed Python files passed
+Ruff and Black. The fixed 20°C manual template is shared by learning, HA profile
+loading, and Learning ID import/export; original received frames remain intact.
+
+## Maintainer RF validation
+
+Maintainer testing on 2026-11-02 established the following separately from the
+automated tests:
+
+- YardStick successfully learned an extended profile transmitted by a separate
+  LilyGO configured using a Learning ID.
+- rtl_433 decoded extended YardStick commands at 433.92 MHz with the expected
+  power, light, and flame state and valid integrity.
+- Changing the YardStick band through HA from 433 to 315 MHz worked. A subsequent
+  fan change decoded at 315 MHz with fan 6, the retained light 6 and power ON,
+  and valid extended integrity.
+- Legacy learning and control regression testing also passed. This does not
+  claim every learning/protocol combination was physically tested on both bands.
+
+YardStick's existing five-repeat transmit policy remains unchanged. One first
+command after legacy learning was not immediately observed, but the observation
+could not distinguish loss from delay. Occasional missed commands were also
+reported with the original remote. This is consistent with an RF-system
+reliability limitation, but does not isolate the receiver or establish a TX
+software defect. No repeat-count or timing changes were made on that evidence.
+
+These checks complete the testing available with the maintainer's equipment.
+Actual extended-fireplace command acceptance remains unverified. Private capture
+logs, remote identifiers, and Learning IDs remain outside repository history;
+the reported on-air checks supplement the existing automated protocol fixtures.

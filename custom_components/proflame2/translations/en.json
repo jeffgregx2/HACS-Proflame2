@@ -127,7 +127,7 @@
       },
       "yardstick_band": {
         "title": "Choose YardStick RF band",
-        "description": "Choose the band used by your fireplace and its original remote. The YardStick controller and fireplace devices will be created automatically. You can change the band later on the YardStick device. One controller supports one fireplace.",
+        "description": "315 MHz is the default for most users. Choose 433 MHz only if your original remote uses 433 or 433.92 MHz.\n\nCheck the remote's identification label on the back or inside the battery cover. If the frequency is not printed, use the model/part number on that label to check the remote or fireplace manual's radio-frequency specification. Do not infer the frequency from digits in an FCC ID.\n\nLearning starts after you submit this choice. You can change it later in the fireplace device's Configuration section. One controller supports one fireplace.",
         "data": {
           "rf_band": "RF band"
         }

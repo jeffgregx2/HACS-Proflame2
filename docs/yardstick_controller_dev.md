@@ -53,12 +53,20 @@ separate from the receive-window default.
 
 ## Controller Configuration
 
-One fireplace configuration entry owns two HA devices: the existing fireplace
-and the automatically created YardStick controller. The controller has the RF
-band select entity; its band is saved as `rf_band` in the same entry's data.
-Missing band data means 315 MHz. Preserve fireplace identifiers and Learning IDs.
-Both physical backends retain exclusive fireplace assignment; LilyGO keeps its
-existing ESPHome device and YAML configuration.
+One fireplace configuration entry exposes only the fireplace device. Its
+Configuration section contains the YardStick RF band select entity; band data
+is saved as `rf_band` in the same entry's data. Missing band data means 315 MHz.
+
+Band policy still belongs to the controller/backend. Presenting the setting on
+the fireplace is a UI simplification justified by the enforced 1:1 assignment.
+It does not become part of the remote profile or Learning ID. Keep this boundary
+if more controller settings are added. Revisit presentation if controller
+sharing is introduced in a future release.
+
+Both physical backends retain exclusive fireplace assignment. LilyGO keeps its
+existing ESPHome device, fireplace relationship, and YAML band configuration.
+No separate YardStick device or configuration entry is created, and no migration
+for the discarded development-only device presentation is included.
 
 `rf/band.py` resolves YardStick frequencies for setup, runtime, and learning.
 Diagnostic learning frequency overrides must stay in the selected band.
@@ -87,9 +95,10 @@ extended frame is not accepted as a seven-word prefix when continuation is prese
 RF repeats are grouped by the full `frame.wire_words`, with distinct physical
 offsets counted once. Extended learning separately uses `(W4 & 0xFB, W5)` for
 control diversity. Units, setpoint, and room temperature can change without
-changing the newly derived identity. Shared derivation produces the canonical
-Celsius manual template; existing profiles and imported Learning IDs retain
-their stored fields. See the [Issue #32 policy](issue_32_learning_mode_design.md).
+changing the derived identity. Shared manual-profile policy fixes Celsius and
+20-degree setpoint/room-temperature values during learning, HA profile loading,
+and Learning ID import/export. Original frames and imported IDs are validated
+before normalization. See the [Issue #32 policy](issue_32_learning_mode_design.md).
 
 Guided learning pauses for thermostat/SMART mode and resumes the pending action
 when manual mode is observed. The convenience learning API also uses shared
@@ -121,7 +130,9 @@ The current backend therefore uses an internal repeat strategy:
 
 The default embedded strategy aligns YardStick with LilyGO at the semantic
 level: one Home Assistant command becomes one RF burst containing the repeated
-frames the fireplace expects. In validation, `rtl_433` sees this as one logical
+frames the fireplace expects. YardStick retains five repeats; LilyGO's normal
+ten-repeat setting does not change this backend policy. In validation,
+`rtl_433` sees this as one logical
 Proflame2 command and the fireplace accepts it when RF placement/power are
 adequate for previously validated installations. That history does not establish
 physical RF acceptance of extended commands. Extended software tests verify a
@@ -148,8 +159,12 @@ The extended implementation passed the full software regression suite, including
 recorded packet replay, direct/worker transport tests, raw FIFO input through HA
 guided learning, and cancellation/controller-release checks. See the
 [completed validation record](yardstick_extended_frame_support_design.md#completed-software-validation).
-Physical RF and extended fireplace acceptance remain pending; they require
-separate hardware evidence and must not be inferred from mocked radio success.
+Maintainer RF testing confirmed extended learning from a separate LilyGO
+transmitter, extended TX decoded by rtl_433 on both bands, and a 433-to-315 MHz
+change through HA followed by a correctly decoded control change. Legacy
+learning/control regression testing also passed. Actual extended-fireplace
+acceptance remains unverified. See the
+[hardware validation record](yardstick_extended_frame_support_design.md#maintainer-rf-validation).
 
 After YardStick backend changes, validate at least:
 

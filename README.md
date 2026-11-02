@@ -44,6 +44,9 @@ Setup guide: [LilyGO CC1101 controller](docs/lilygo_cc1101_controller.md)
 
 ### YardStick One
 
+YardStick supports learning and control with both legacy seven-word and extended
+ten-word remotes on either the 315 MHz or 433 MHz (433.92 MHz) band.
+
 YardStick One allows full control of the fireplace but does not have a display and does not currently support active listening. It connects directly to Home Assistant via USB, so setup is simpler because ESPHome Builder is not required. Since it remains connected to the computer running Home Assistant by USB, it may be harder to position close enough to the Proflame2 fireplace for reliable communication.
 
 Setup guide: [YardStick controller](docs/yardstick_controller.md)
@@ -130,12 +133,14 @@ and appear to work:
 10-word protocol. These are the types identified in project testing; TBD means
 the protocol type has not yet been confirmed. Both types are supported.
 
-The default `rf_band` is `"315"`; no configuration change is needed for those
-remotes. For LilyGO band changes, see [Radio band setup](docs/lilygo_cc1101_controller.md#radio-band).
-For YardStick, choose the band during setup or change RF band on the automatically
-created YardStick controller device. The fireplace and controller share one
-Proflame2 configuration entry. 433 MHz support has automated software coverage;
-physical RF acceptance remains pending.
+315 MHz is the default for most users. Check your remote's label or its
+model-specific documentation before selecting 433 MHz. For LilyGO band changes, see [Radio band setup](docs/lilygo_cc1101_controller.md#radio-band).
+For YardStick, choose the band during setup or change RF band in the fireplace
+device's Configuration section. No separate YardStick device is exposed.
+YardStick learning and transmission have been tested with legacy and extended
+frames. Extended commands were independently decoded by rtl_433 at both 315 and
+433.92 MHz, including after changing the band in HA. Actual extended-fireplace
+acceptance remains unverified.
 
 FCC IDs shown are examples reported on these models, not guaranteed identifiers
 for every remote of that model. Use them only as a lookup aid when the model

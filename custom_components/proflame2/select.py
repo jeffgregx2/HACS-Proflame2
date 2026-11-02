@@ -1,4 +1,4 @@
-"""Controller-scoped YardStick RF band selection."""
+"""YardStick controller settings presented on its exclusively assigned fireplace."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import BACKEND_YARDSTICK
+from .identity import fireplace_device_identifiers
 from .rf.band import YARDSTICK_BANDS
 from .runtime import Proflame2RuntimeEntry, async_get_runtime_entries, async_runtime_signal
 from .yardstick_controller import async_set_yardstick_band
@@ -18,14 +19,18 @@ from .yardstick_controller import async_set_yardstick_band
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    """Add a band selector on YardStick only, never on the fireplace or LilyGO."""
+    """Show RF band in the fireplace Configuration section for YardStick only."""
     runtime = async_get_runtime_entries(hass)[entry.entry_id]
     if runtime.backend_type == BACKEND_YARDSTICK:
         async_add_entities([YardStickBandSelect(entry, runtime)])
 
 
 class YardStickBandSelect(SelectEntity):
-    """The sole band control, owned by the YardStick controller device."""
+    """A controller setting displayed on its fireplace while ownership is 1:1.
+
+    This presentation does not move band policy into the remote profile. Radio
+    configuration remains owned by the YardStick controller/backend.
+    """
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -41,7 +46,7 @@ class YardStickBandSelect(SelectEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return DeviceInfo(identifiers={self._runtime.controller_device_identifier})
+        return DeviceInfo(identifiers=fireplace_device_identifiers(self._runtime.fireplace_id))
 
     @property
     def current_option(self) -> str | None:

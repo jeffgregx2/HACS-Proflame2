@@ -71,27 +71,31 @@ decoded body including checksum is nine bytes.
 | Offset | Size | Contents |
 |---|---|---|
 | 0 | 3 bytes | Remote ID |
-| 3 | 1 byte | Fixed W4 flags (`w4_base & 0x8C`) |
-| 4 | 1 byte | W6 template value |
-| 5 | 1 byte | W7 template value |
-| 6 | 1 byte | W8 template value |
+| 3 | 1 byte | Fixed manual W4 flags (`w4_base & 0x88`) |
+| 4 | 1 byte | W6: `0x14` (20°C) |
+| 5 | 1 byte | W7: `0xC8` |
+| 6 | 1 byte | W8: `0x00` |
 | 7 | 4 bytes | CRC32 checksum |
 
 The payload is seven bytes; the full decoded body including checksum is eleven
 bytes. Live power, thermostat, and light bits are removed from W4. W5 comes from
 the requested command; W9/W10 are recomputed using the remote ID and command and
 template words. Legacy C/D constants are unused for extended profiles. W4 bit 2
-is retained in the mask and selects Fahrenheit (1) or Celsius (0). W6 is a
-whole-degree setpoint in that scale; W8:W7 is room temperature in tenths of the
-same scale, with W8 the high byte. The stored W7/W8 pair is a manual-transmit
-template value, not a current sensor reading. Preserve all template bytes on
-import; these field interpretations do not change the Learning ID format.
+selects Fahrenheit (1) or Celsius (0) in received frames. W6 is a whole-degree
+setpoint; W8:W7 is room temperature in tenths of that scale, with W8 the high byte.
 
-New extended profiles use a canonical Celsius manual template: W4 bit 2 clear,
-W6 `0x14`, W7 `0xC8`, W8 `0x00`. Equivalent control evidence generates the
-same ID despite changes in received units, setpoint, or room temperature. This
-normalization applies during learning only; exporting or importing an existing
-profile preserves its stored template, including Fahrenheit settings.
+Learning, HA profile loading, and Learning ID import/export all use one fixed
+Celsius manual template: W4 bit 2 clear, W6 `0x14` (20°C), W7 `0xC8`, W8 `0x00`
+(20.0°C). Preserve identity flags in W4 bits 3 and 7. Since HA operates in manual
+mode, these temperature fields are not used for thermostat control and must not
+make the ID depend on a remote's observed or imported setpoint or temperature.
+
+A valid older ID containing different temperature values is checked against its
+original checksum, flags, and encoding before normalization. It then imports as
+the fixed manual profile and exports the same ID as equivalent newly learned
+evidence. Its exported ID can therefore change once to the fixed template; it
+will not subsequently vary with temperature. The binary layout/version and legacy
+IDs are unchanged. Received RF frames remain unmodified for integrity validation.
 
 See the [extended protocol temperature mapping](issue_15_extended_protocol_design.md#temperature-fields-and-units)
 for capture evidence and the distinction between received telemetry and the
@@ -116,13 +120,13 @@ These use synthetic remote ID `0x123456`, not a captured device identifier.
 | Type | Payload hex, excluding CRC | Learning ID |
 |---|---|---|
 | Legacy: C1=5, D1=7, C2=1, D2=8 | `1234565718` | `PF2-1-L-CI2FMVYYTNVRS7Q` |
-| Extended: W4=0x80, W6=0x42, W7=0xC8, W8=0x19 | `1234568042c819` | `PF2-1-E-CI2FNACCZAMYKTI4W4` |
+| Extended: W4=0x80, W6=0x14, W7=0xC8, W8=0x00 | `1234568014c800` | `PF2-1-E-CI2FNAAUZAAISF7GOU` |
 
 `protocol/learning_id.py` implements the codec. Its `RemoteProfile` return value
 uses model-default features only as a placeholder; features are not decoded from
 the ID. HA collects actual choices in its setup form. Tests verify invariant IDs
-across all feature combinations and preservation of RF frames once the caller
-supplies the same local feature configuration.
+across all feature combinations, equivalent temperature/unit variants, and
+manual commands once the caller supplies the same local feature configuration.
 
 ## Scope And Privacy
 

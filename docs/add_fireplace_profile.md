@@ -90,10 +90,16 @@ When learning completes, the same controller is used to control the fireplace.
 
 **If you choose YardStick One**
 
-Choose the band used by your original remote, defaulting to 315 MHz. Home
-Assistant creates the YardStick controller and fireplace devices automatically
-under one setup. Later band changes belong on the YardStick device's RF band
-control, not on the fireplace device.
+315 MHz is the default for most users. Check the label on the back of your
+original remote or inside its battery cover. Select 433 MHz if the label or
+model-specific documentation specifies 433/433.92 MHz. If the frequency is not
+printed, use the model/part number to check the remote or fireplace manual;
+digits in an FCC ID do not directly identify the frequency. See the
+[YardStick radio band guide](yardstick_controller.md#radio-band) for details.
+
+Learning starts only after you submit the band choice. Home Assistant creates
+one fireplace device; there is no separate YardStick device. Later band changes
+are available under RF band in the fireplace device's Configuration section.
 
 YardStick uses the same learning procedure for legacy and extended remotes.
 Turn OFF thermostat and SMART mode before starting. If either mode is detected

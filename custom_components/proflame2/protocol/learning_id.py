@@ -6,6 +6,7 @@ import base64
 import binascii
 import zlib
 
+from .manual_profile import canonical_manual_profile
 from .models import (
     EXTENDED_W4_FIXED_MASK,
     PROTOCOL_VARIANT_EXTENDED_10_WORD,
@@ -25,7 +26,12 @@ def _bounded_int(value: int, maximum: int = 255) -> int:
 
 
 def encode_learning_id(profile: RemoteProfile) -> str:
-    """Encode remote identity and fixed transmit fields, never HA feature choices."""
+    """Export a stable manual profile, independent of units and temperatures."""
+    return _encode_profile_fields(canonical_manual_profile(profile))
+
+
+def _encode_profile_fields(profile: RemoteProfile) -> str:
+    """Serialize literal fields, also used to validate imported original IDs."""
 
     serial = _bounded_int(profile.serial_id, 0xFFFFFF).to_bytes(3, "big")
     payload = serial
@@ -85,6 +91,9 @@ def decode_learning_id(value: str) -> RemoteProfile:
             protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
             extended_template=ExtendedFrameTemplate(*payload[3:7]),
         )
-    if encode_learning_id(profile) != value:
+    # Check the original bytes/flags/padding before applying manual policy.
+    # Older valid IDs may carry observed temperatures; accept them as input,
+    # then return the same fixed template as newly learned profiles.
+    if _encode_profile_fields(profile) != value:
         raise ValueError("Noncanonical Learning ID encoding.")
-    return profile
+    return canonical_manual_profile(profile)

@@ -11,21 +11,17 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .ecc import derive_ecc_profile, extended_frame_integrity_matches
-from .models import ECCProfile, ExtendedFrameTemplate, FireplaceFeatures, RemoteProfile
+from .manual_profile import EXTENDED_IDENTITY_FLAGS_MASK, canonical_manual_template
+from .models import ECCProfile, FireplaceFeatures, RemoteProfile
 from .packet import ProflameFrame
 from .variants import PROTOCOL_VARIANT_EXTENDED_10_WORD
-
-DEFAULT_EXTENDED_MANUAL_W7 = 0xC8
-EXTENDED_IDENTITY_FLAGS_MASK = 0x88
-DEFAULT_EXTENDED_MANUAL_W6 = 20
-DEFAULT_EXTENDED_MANUAL_W8 = 0
 
 
 def learning_command_key(frame: ProflameFrame) -> tuple[int, int]:
     """Identify controls without treating extended units/temperature as commands.
 
-    Callers must validate original frames before deduplication. The encoder's
-    stored-profile mask remains unchanged so imported Fahrenheit IDs still work.
+    Callers must validate original frames before deduplication. This comparison
+    never changes the received bytes or replaces their original integrity words.
     """
     return (frame.cmd1 & 0xFB if frame.is_extended else frame.cmd1, frame.cmd2)
 
@@ -129,8 +125,6 @@ def derive_remote_profile(
                 ECCProfile(0, 0, 0, 0),
                 features,
                 protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
-                extended_template=ExtendedFrameTemplate(
-                    w4_base, DEFAULT_EXTENDED_MANUAL_W6, DEFAULT_EXTENDED_MANUAL_W7, DEFAULT_EXTENDED_MANUAL_W8
-                ),
+                extended_template=canonical_manual_template(w4_base),
             )
     return ProfileDerivation(None, tuple(missing)) if missing else ProfileDerivation(profile)

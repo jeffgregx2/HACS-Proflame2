@@ -64,14 +64,19 @@ Do not require approximate Fahrenheit/Celsius conversion matches between
 successive observations: the remote may round setpoints and room temperature
 may change between packets. Original integrity remains mandatory.
 
-Preserve existing stored profiles and imported Learning IDs, including their
-temperature bytes. Do not normalize them during load, import, or transmission.
-The serialized format remains unchanged and no migration or relearning is
-required. Relearning may produce a different Learning ID because new derivation
-uses the canonical template. Keep the existing encoder/serialization W4 mask
-`0x8C`: it must still preserve the units bit in older profiles and imported IDs.
-Use a separately named derivation mask `0x88`; do not change the existing mask
-globally as a shortcut for normalizing newly learned profiles.
+Use the same fixed manual template for learning, HA profile loading, and
+Learning ID import/export. Original imported IDs must pass their checksum and
+canonical encoding checks before their temperature fields are replaced. HA
+always transmits with a 20°C setpoint and 20.0°C room-temperature template,
+independently of the imported or previously stored temperature values. The ID's
+binary layout remains unchanged. An older valid ID may export a different ID
+once when normalized; equivalent profiles then produce the same ID thereafter.
+
+`protocol/manual_profile.py` owns this policy, including the fixed Celsius
+values and identity flag mask `0x88`. The generic encoder retains its literal
+field behavior and mask `0x8C` for protocol fixtures and diagnostic use; HA
+normalizes its runtime profile before calling it. Never rewrite received frames
+to apply this policy before their original integrity has been validated.
 
 ## Guided learning states
 
@@ -142,8 +147,9 @@ repeats when another button is pressed.
 
 ## Implementation boundaries
 
-1. **Shared protocol policy:** In `protocol/derivation.py`, define the canonical
-   manual template, use the derivation flag mask `0x88`, and exclude received
+1. **Shared protocol policy:** Define the canonical manual template in
+   `protocol/manual_profile.py`; use it from derivation, ID import/export, and HA
+   profile loading. Use the identity flag mask `0x88` and exclude received
    units/setpoint/temperature from profile consistency. Count command diversity
    using a shared extended command key `(W4 & 0xFB, W5)`. Keep original-frame
    validation first. Provide narrowly named mode and command classification
@@ -226,9 +232,9 @@ and apply the repository's privacy rules before adding any recorded vectors.
 | Repeats | An identical repeat after 15 seconds, repeated mode packets, and temperature-only changes cannot advance ordinary or restore prompts. A real return to an earlier command after an intervening state change succeeds. |
 | UI and timeout | HA and LilyGO show the same manual-mode instruction, resume automatically, and receive a fresh action timeout. Repeats do not postpone mode timeout; cancellation and errors release the controller. |
 | Helper | Units/setpoint/temperature changes before and after candidate freeze do not conflict or add command diversity. Repeat corroboration, normalized basis membership, full confirmation, and EOF validation retain their requirements. Guided thermostat recovery resumes without losing evidence. |
-| Compatibility | Legacy corpus, existing saved profiles, Learning ID round trips, and unsupported-frame diagnostics remain valid. Existing profile temperature bytes are preserved. |
+| Compatibility | Legacy corpus, existing saved profiles, Learning ID round trips, and unsupported-frame diagnostics remain valid. Stored/imported extended profiles use the same fixed manual template after validation. |
 | Generated command | Newly derived profiles clear the units flag, use W6 `0x14`, W7 `0xC8`, W8 `0x00`, retain bits 3/7, use manual control bits, and generate correct W9/W10 for several control states. |
-| Temperature units | Units or setpoint changes neither restart learning nor discard evidence. Units-only changes cannot advance HA prompts, helper targets, or command diversity. Existing Fahrenheit profiles retain their flag and template unchanged. |
+| Temperature units | Units or setpoint changes neither restart learning nor discard evidence. Units-only changes cannot advance HA prompts, helper targets, or command diversity. Imported Fahrenheit profiles normalize to the same Celsius manual template. |
 | Packaged helper | The installed helper and HA derive the same profile from equivalent synthetic input. File/live/guided paths preserve stdout/stderr contracts, cancellation, and cleanup. |
 
 Run focused protocol, learning, config-flow, and helper tests, followed by the
@@ -243,3 +249,12 @@ one deselected. The isolated installed helper passed 115 tests and six HA
 interoperability checks; its source archive passed all 33 checks through the
 existing Make targets. Changed Python files passed Ruff and Black checks.
 No deployment, RF transmission, or publication was performed.
+
+Follow-up validation for fixed manual temperatures across profile loading and
+Learning ID import/export passed 1,968 repository tests, with 34 skipped and one
+deselected. The installed helper again passed 115 tests and six HA
+interoperability checks; its source archive passed all 33 checks. Regression
+coverage includes a 21°C imported setpoint, Fahrenheit inputs, stable IDs across
+temperature variants, retained identity flags, original ID validation before
+normalization, and HA control using the fixed 20°C template. Original received
+frames remain unchanged. No RF transmission or deployment was performed.

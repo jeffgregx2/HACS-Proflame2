@@ -71,6 +71,7 @@ from custom_components.proflame2.learning import LearnSession
 from custom_components.proflame2.packet_debug import PacketDebugLogPaths
 from custom_components.proflame2.protocol.encoder import encode_state
 from custom_components.proflame2.protocol.learning_id import encode_learning_id
+from custom_components.proflame2.protocol.manual_profile import canonical_manual_profile
 from custom_components.proflame2.protocol.models import (
     ECCProfile,
     ExtendedFrameTemplate,
@@ -550,7 +551,8 @@ async def test_learning_id_import_loads_complete_runtime_profile(hass, monkeypat
         assert all(key not in result["data"] for key in (CONF_C1, CONF_D1, CONF_C2, CONF_D2))
         assert [
             result["data"][key] for key in (CONF_EXTENDED_W4_BASE, CONF_EXTENDED_W6, CONF_EXTENDED_W7, CONF_EXTENDED_W8)
-        ] == [0x84, 0x50, 0xC8, 2]
+        ] == [0x80, 20, 0xC8, 0]
+    profile = canonical_manual_profile(profile)
     await hass.async_block_till_done()
     entry = result["result"]
     runtime = async_get_runtime_entries(hass)[entry.entry_id]

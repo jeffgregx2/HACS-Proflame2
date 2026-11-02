@@ -58,7 +58,7 @@ from .const import (
     STATE_CONFIDENCE_UNKNOWN,
 )
 from .control_intent import ControlIntents
-from .identity import controller_device_identifier, fireplace_device_identifiers
+from .identity import fireplace_device_identifiers
 from .packet_debug import (
     async_disable_packet_debug_logging,
     async_enable_packet_debug_logging,
@@ -66,6 +66,7 @@ from .packet_debug import (
 from .profile import normalize_profiles, sanitize_fireplace_short_name, validate_refresh_period
 from .protocol.encoder import encode_packet
 from .protocol.learning_id import encode_learning_id
+from .protocol.manual_profile import canonical_manual_profile
 from .protocol.models import (
     PROTOCOL_VARIANT_EXTENDED_10_WORD,
     ECCProfile,
@@ -390,18 +391,6 @@ def _resolve_linked_controller_device(
 ) -> tuple[str, tuple[str, str] | None] | None:
     """Resolve the linked ESPHome controller device id and optional identifier."""
 
-    if normalize_controller_id(entry.data.get(CONF_BACKEND_TYPE, "")) == BACKEND_YARDSTICK:
-        # One default USB radio, exclusively assigned. Both devices belong to
-        # this fireplace config entry; no independently removable controller entry.
-        identifier = controller_device_identifier("yardstick:0")
-        device = dr.async_get(hass).async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={identifier},
-            manufacturer="Great Scott Gadgets",
-            name="YardStick One",
-            model="Yard Stick One",
-        )
-        return device.id, identifier
     linked_entry_id = _linked_esphome_entry_id(entry)
     if linked_entry_id is None:
         return None
@@ -540,17 +529,19 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
             w7=int(entry.data[CONF_EXTENDED_W7]),
             w8=int(entry.data[CONF_EXTENDED_W8]),
         )
-    remote_profile = RemoteProfile(
-        serial_id=int(entry.data[CONF_REMOTE_ID]),
-        ecc=ECCProfile(
-            c1=int(entry.data.get(CONF_C1, 0)),
-            d1=int(entry.data.get(CONF_D1, 0)),
-            c2=int(entry.data.get(CONF_C2, 0)),
-            d2=int(entry.data.get(CONF_D2, 0)),
-        ),
-        features=features,
-        protocol_variant=protocol_variant,
-        extended_template=extended_template,
+    remote_profile = canonical_manual_profile(
+        RemoteProfile(
+            serial_id=int(entry.data[CONF_REMOTE_ID]),
+            ecc=ECCProfile(
+                c1=int(entry.data.get(CONF_C1, 0)),
+                d1=int(entry.data.get(CONF_D1, 0)),
+                c2=int(entry.data.get(CONF_C2, 0)),
+                d2=int(entry.data.get(CONF_D2, 0)),
+            ),
+            features=features,
+            protocol_variant=protocol_variant,
+            extended_template=extended_template,
+        )
     )
 
     backend_type = normalize_controller_id(entry.data[CONF_BACKEND_TYPE])
