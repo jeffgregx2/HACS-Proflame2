@@ -17,15 +17,10 @@ Selecting among multiple YardStick USB radios is not currently supported.
 | Control the fireplace | Yes |
 | Guided learning from the original remote | Yes |
 | RF bands | 315 MHz and 433 MHz (433.92 MHz) |
-| Remote protocols | Legacy seven-word and extended ten-word, on either band |
+| Remote protocols | Legacy and extended remotes, on either band |
 | Active listening after setup | No |
 | Home Assistant state updates from original remote | No |
 | Additional controller software required | No ESPHome firmware |
-
-The integration supports legacy seven-word and extended ten-word remotes in
-the selected 315 or 433 MHz band. Legacy and extended learning/control have
-passed maintainer RF testing as well as automated tests. Confirmation with a
-physical extended fireplace remains pending.
 
 ## Radio Band
 
@@ -49,22 +44,13 @@ own remote version to confirm its frequency.
 
 Home Assistant creates your fireplace device automatically. To change the band
 later, open Settings → Devices & services → Devices → your fireplace, then
-change **RF band** in its Configuration section. There is no separate YardStick
-device to manage. The band configures the underlying controller; the control is
-shown on the fireplace because each controller serves exactly one fireplace.
-LilyGO's band remains configured in ESPHome YAML.
+change **RF band** in its Configuration section.
 
-A band change waits for an active transmission to finish, clears pending
-commands, and applies the radio settings without sending a fireplace command.
-Finish learning before changing bands. If configuration fails, the previous
-selection stays saved and fireplace controls pause. Select the desired band
-again to retry. Repeating the saved band also retries a failed configuration.
+Finish learning before changing bands. If a band change fails, fireplace
+controls pause. Select the desired band again to retry, even if it is already
+shown as selected.
 
 Existing YardStick installations keep 315 MHz unless another band was selected.
-
-Both bands have automated software coverage. Maintainer testing also confirmed
-extended transmissions decoded by rtl_433 at 433.92 MHz and at 315 MHz after
-changing the band in HA. Actual extended-fireplace acceptance remains unverified.
 
 ## Pros And Cons
 
@@ -132,7 +118,8 @@ After the YardStick is connected and available to Home Assistant:
 5. Enter a fireplace short name.
 6. Select `YARD Stick One USB Controller` as the `Controller Type`.
 7. Select `Submit`.
-8. Start guided learning.
+8. Choose the RF band used by your remote (315 MHz for most users) and submit
+   the choice to start guided learning.
 9. Hold the original remote within about 3 feet of the YardStick controller.
 10. Follow the prompts and press the requested buttons on the original remote.
 11. Select the fireplace features your installation supports.
@@ -146,13 +133,12 @@ Keep the remote within about 3 feet of the YardStick while learning.
 
 Turn OFF thermostat and SMART mode before starting. If either mode is detected
 on an extended remote, Home Assistant asks you to turn it off and continues
-automatically when a manual-mode packet is received. Follow the displayed
+automatically when the remote returns to manual mode. Follow the displayed
 instruction again after the mode change. If learning does not continue, press
 Power once after turning both modes off.
 
 Changes in room temperature, setpoint, or Fahrenheit/Celsius selection do not
-require restarting extended learning. Those changes and repeated packets do
-not count as additional control actions; continue following the button prompts.
+require restarting learning. Continue following the button prompts.
 
 When learning is complete, Home Assistant stores the values needed to control
 that fireplace.
@@ -165,22 +151,9 @@ If YardStick guided learning cannot learn your remote, use the
 controls the fireplace after setup; the SDR and helper are only needed to
 generate the Learning ID.
 
-## Validation
+## Check Your Setup
 
-For an independent receiver check, tune rtl_433 to the selected band:
-
-```bash
-rtl_433 -f 315M -R 207
-rtl_433 -f 433.92M -R 207
-```
-
-Use one command for the selected band. The 433 MHz option means 433.92 MHz;
-`433M` tunes to a different frequency. Successful decoding with valid integrity
-confirms reception of the command, but does not prove the fireplace accepted it.
-Each HA command sends five repeated frames; rtl_433 may report these as one
-logical command.
-
-After setup, validate:
+After setup, check:
 
 - YardStick commands are accepted by the fireplace.
 - The original remote still controls the fireplace.

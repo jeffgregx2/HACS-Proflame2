@@ -176,3 +176,17 @@ After YardStick backend changes, validate at least:
   unavailable.
 - If changing repeat behavior, compare `rtl_433` output and real fireplace
   acceptance, not just whether rfcat returned success.
+
+## Independent Receiver Check
+
+Use rtl_433 to inspect transmissions on the selected band:
+
+```bash
+rtl_433 -f 315M -R 207
+rtl_433 -f 433.92M -R 207
+```
+
+Run one command for the selected band. The 433 MHz option operates at
+433.92 MHz; `433M` tunes to a different frequency. A decoded packet with valid
+integrity confirms reception, but not fireplace acceptance. YardStick sends
+five repeated frames per command; rtl_433 may report them as one logical command.

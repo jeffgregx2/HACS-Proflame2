@@ -137,10 +137,6 @@ the protocol type has not yet been confirmed. Both types are supported.
 model-specific documentation before selecting 433 MHz. For LilyGO band changes, see [Radio band setup](docs/lilygo_cc1101_controller.md#radio-band).
 For YardStick, choose the band during setup or change RF band in the fireplace
 device's Configuration section. No separate YardStick device is exposed.
-YardStick learning and transmission have been tested with legacy and extended
-frames. Extended commands were independently decoded by rtl_433 at both 315 and
-433.92 MHz, including after changing the band in HA. Actual extended-fireplace
-acceptance remains unverified.
 
 FCC IDs shown are examples reported on these models, not guaranteed identifiers
 for every remote of that model. Use them only as a lookup aid when the model
