@@ -6,6 +6,11 @@ runs ESPHome firmware and is intended to be installed near the fireplace.
 Use this guide when you want a permanent controller that can control the
 fireplace and keep Home Assistant updated when the original remote is used.
 
+Each LilyGO controller supports one fireplace in this integration. Home
+Assistant rejects assigning a second fireplace to the same LilyGO. Use a
+separate LilyGO for each fireplace. Its RF band remains configured through
+ESPHome YAML; there is no Home Assistant band selector for LilyGO.
+
 ## Capabilities
 
 | Capability | Supported |

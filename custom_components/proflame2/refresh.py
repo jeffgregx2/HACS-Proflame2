@@ -78,6 +78,8 @@ def current_refresh_state(entry: Proflame2RuntimeEntry) -> FireplaceState | None
     if (
         entry.shutting_down
         or entry.learning_in_progress
+        or entry.radio_configuration_in_progress
+        or entry.radio_configuration_error is not None
         or entry.backend is None
         or not entry.refresh_schedule.due(monotonic())
     ):

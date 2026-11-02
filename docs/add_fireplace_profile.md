@@ -80,12 +80,26 @@ after setup. Choose `LilyGO T-Embed CC1101` if you are using the LilyGO
 controller firmware. Choose `YardStick One` if you are using a YardStick
 controller.
 
-After you select `Submit`, Home Assistant starts listening with the selected
-controller and walks you through a short sequence of original-remote button
+After controller selection, YardStick asks for the RF band (315 or 433 MHz);
+LilyGO asks for its ESPHome device. Home Assistant then starts listening with
+the selected controller and walks you through a short sequence of original-remote button
 presses. Start with the fireplace turned off so each prompted button press
 matches what Home Assistant expects.
 
 When learning completes, the same controller is used to control the fireplace.
+
+**If you choose YardStick One**
+
+Choose the band used by your original remote, defaulting to 315 MHz. Home
+Assistant creates the YardStick controller and fireplace devices automatically
+under one setup. Later band changes belong on the YardStick device's RF band
+control, not on the fireplace device.
+
+YardStick uses the same learning procedure for legacy and extended remotes.
+Turn OFF thermostat and SMART mode before starting. If either mode is detected
+on an extended remote, learning asks you to turn it off and then continues
+automatically. Room temperature, setpoint, or temperature-unit changes do not
+require restarting learning.
 
 **If you choose LilyGO T-Embed CC1101**
 

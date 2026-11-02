@@ -1323,7 +1323,7 @@ async def test_multiple_esphome_entries_keep_distinct_controller_links(hass) -> 
     assert runtime_entry_two.controller_device_identifier is None
 
 
-async def test_yardstick_runtime_does_not_set_controller_link(hass, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_yardstick_runtime_creates_its_own_controller_link(hass, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_connect(self):
         return None
 
@@ -1332,9 +1332,10 @@ async def test_yardstick_runtime_does_not_set_controller_link(hass, monkeypatch:
 
     runtime_entry = await async_setup_runtime_entry(hass, entry)
 
-    assert runtime_entry.controller_device_id is None
-    assert runtime_entry.controller_device_identifier is None
+    assert runtime_entry.controller_device_id is not None
+    assert runtime_entry.controller_device_identifier == (DOMAIN, "controller:yardstick:0")
     registry = dr.async_get(hass)
     fireplace_device = registry.async_get(runtime_entry.device_id)
     assert fireplace_device is not None
-    assert fireplace_device.via_device_id is None
+    assert fireplace_device.via_device_id == runtime_entry.controller_device_id
+    assert len(dr.async_entries_for_config_entry(registry, entry.entry_id)) == 2

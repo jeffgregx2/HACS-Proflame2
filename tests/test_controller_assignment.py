@@ -170,15 +170,19 @@ async def test_independent_controllers_remain_available(hass):
     assert not controller_assignments(hass, {CONF_BACKEND_TYPE: BACKEND_YARDSTICK}, {})
 
 
-async def test_concurrent_manual_flows_cannot_both_claim_yardstick(hass, monkeypatch):
+@pytest.mark.parametrize("backend", [BACKEND_YARDSTICK, BACKEND_ESPHOME])
+async def test_concurrent_manual_flows_cannot_both_claim_controller(hass, monkeypatch, backend):
     import asyncio
 
     monkeypatch.setattr("custom_components.proflame2.async_setup_entry", AsyncMock(return_value=True))
+    linked = MockConfigEntry(domain="esphome", title="Controller", data={})
+    linked.add_to_hass(hass)
 
     def data(remote):
         return {
             CONF_NAME: "Fireplace",
-            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+            CONF_BACKEND_TYPE: backend,
+            CONF_ESPHOME_ENTRY_ID: linked.entry_id,
             CONF_REMOTE_ID: remote,
             CONF_C1: "5",
             CONF_D1: "7",
@@ -192,6 +196,11 @@ async def test_concurrent_manual_flows_cannot_both_claim_yardstick(hass, monkeyp
             for remote in ("123456", "654321")
         )
     )
+    if backend == BACKEND_YARDSTICK:
+        assert all(result["step_id"] == "yardstick_band" for result in results)
+        results = await asyncio.gather(
+            *(hass.config_entries.flow.async_configure(result["flow_id"], {"rf_band": "315"}) for result in results)
+        )
     assert sum(result["type"] is FlowResultType.CREATE_ENTRY for result in results) == 1
     assert sum(result.get("reason") == "controller_in_use" for result in results) == 1
     assert len(hass.config_entries.async_entries(DOMAIN)) == 1

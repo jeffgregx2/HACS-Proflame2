@@ -28,6 +28,7 @@ PROBE_RX_BANDWIDTH = 325_000
 REASON_UNKNOWN = "unknown"
 
 COMMAND_OPEN = "OPEN"
+COMMAND_CONFIGURE = "CONFIGURE"
 COMMAND_SEND = "SEND"
 COMMAND_RECEIVE = "RECEIVE"
 COMMAND_SET_IDLE = "SET_IDLE"
@@ -673,6 +674,31 @@ def _dispatch_worker_request(
                     status=_worker_status(generation=state.generation, radio=state.radio, last_error=None),
                     timing_ms=(time.monotonic() - started) * 1000,
                     payload={"startup_metadata": state.startup_metadata or {}},
+                ),
+                False,
+            )
+        if command == COMMAND_CONFIGURE:
+            if state.radio is None or state.modulation is None:
+                raise RuntimeError("Worker radio is not open.")
+            rx_settings = _configure_rx_radio(
+                state.radio,
+                frequency_hz=int(payload["frequency_hz"]),
+                data_rate=int(payload["data_rate"]),
+                packet_length_bytes=int(payload["packet_length_bytes"]),
+                probe_mode=bool(payload["probe_mode"]),
+                modulation=state.modulation,
+            )
+            # Configuration acknowledgement is not a receive request. Keep the
+            # existing TX-only policy until an explicit receive operation.
+            state.radio.setModeIDLE()
+            state.last_error = None
+            return (
+                _response(
+                    request_id=request_id,
+                    kind=KIND_OK,
+                    status=_worker_status(generation=state.generation, radio=state.radio, last_error=None),
+                    timing_ms=(time.monotonic() - started) * 1000,
+                    payload={"rx_settings": rx_settings},
                 ),
                 False,
             )

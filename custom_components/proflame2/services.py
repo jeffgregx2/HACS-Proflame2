@@ -500,6 +500,7 @@ def _submit_control_intent(
     clear_active_profile: bool = True,
     completion: asyncio.Future[None] | None = None,
 ) -> ControlIntent:
+    _ensure_runtime_entry_accepts_actions(entry)
     intents = entry.control_intents
     if intents.pending is not None:
         _finish_intent(intents.pending, HomeAssistantError("Request superseded by a newer control change."))
@@ -1187,6 +1188,10 @@ def _ensure_runtime_entry_accepts_actions(runtime_entry: Proflame2RuntimeEntry) 
         )
     if runtime_entry.learning_in_progress:
         raise HomeAssistantError("Controller is learning a remote; try again after learning finishes.")
+    if runtime_entry.radio_configuration_in_progress:
+        raise HomeAssistantError("Controller RF band is changing; try again after configuration finishes.")
+    if runtime_entry.radio_configuration_error:
+        raise HomeAssistantError(runtime_entry.radio_configuration_error)
 
 
 async def async_execute_set_state(

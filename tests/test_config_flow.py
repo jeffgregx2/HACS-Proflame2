@@ -53,6 +53,7 @@ from custom_components.proflame2.const import (
     CONF_PROTOCOL_VARIANT,
     CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
+    CONF_RF_BAND,
     CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
     CONF_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DATA_FAKE_LEARNING_DELAY,
@@ -168,6 +169,8 @@ async def test_refresh_period_initial_setup_routes(hass, route):
     assert invalid["type"] is FlowResultType.FORM
     assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
     result = await submit(values)
+    if result.get("step_id") == "yardstick_band":
+        result = await flow.async_step_yardstick_band({CONF_RF_BAND: "315"})
     if route.startswith("learning_id_"):
         assert result["step_id"] == "manual_features"
         result = await flow.async_step_manual_features({})
@@ -382,6 +385,8 @@ async def test_config_flow_creates_entry_with_normalized_profile_data(hass) -> N
             CONF_FIREPLACE_SHORT_NAME: "---",
         },
     )
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_RF_BAND: "315"})
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Living Room Fireplace"
@@ -671,6 +676,8 @@ async def test_learning_id_feature_selection_validates_options_and_rechecks_owne
             CONF_REFRESH_PERIOD_MINUTES: 10,
         }
     )
+    assert form["step_id"] == "yardstick_band"
+    form = await flow.async_step_yardstick_band({CONF_RF_BAND: "315"})
     assert form["step_id"] == "manual_features"
     invalid = await flow.async_step_manual_features({CONF_REFRESH_PERIOD_MINUTES: 1.5, CONF_LIGHT: False})
     assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
@@ -737,6 +744,7 @@ async def test_yaml_learning_debug_override_enables_initial_guided_learning_debu
         esphome_entry_id: str | None = None,
         timeout: float,
         receive_timeout: float,
+        rf_band: str = "315",
     ) -> LearnSession:
         assert backend_type == BACKEND_YARDSTICK
         assert esphome_entry_id is None
@@ -773,6 +781,8 @@ async def test_yaml_learning_debug_override_enables_initial_guided_learning_debu
             CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
         },
     )
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_RF_BAND: "315"})
 
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     assert captured_debug_flags == [True]
@@ -1007,6 +1017,7 @@ async def test_options_flow_updates_feature_flags(hass) -> None:
                 CONF_CPI: False,
             },
         )
+        create_result = await hass.config_entries.flow.async_configure(create_result["flow_id"], {CONF_RF_BAND: "315"})
         config_entry = create_result["result"]
     else:
         config_entry = entry[0]
@@ -1211,6 +1222,8 @@ async def test_multiple_config_entries_are_allowed(hass, monkeypatch) -> None:
             CONF_CPI: False,
         },
     )
+    first = await hass.config_entries.flow.async_configure(first["flow_id"], {CONF_RF_BAND: "315"})
+
     second = await hass.config_entries.flow.async_init(
         DOMAIN,
         context={"source": SOURCE_USER},
@@ -1533,6 +1546,8 @@ async def test_config_flow_surfaces_clean_yardstick_backend_unavailable_error(ha
             CONF_BACKEND_TYPE: "yardstick",
         },
     )
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_RF_BAND: "315"})
 
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "learn_failed"

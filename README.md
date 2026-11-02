@@ -91,7 +91,8 @@ Once the Proflame2 integration is installed in Home Assistant, it is easy to add
 2. Follow the controller setup guide linked above.
 3. Add the `Proflame2` integration in Home Assistant.
 4. Choose a setup option. Most users should choose `Learn from remote`.
-5. For LilyGO, select the matching ESPHome device when prompted.
+5. For LilyGO, select the matching ESPHome device when prompted. For YardStick,
+   choose the fireplace's RF band (315 or 433 MHz).
 6. Start guided learning.
 7. Hold the original remote within about 3 feet of the controller during
    learning.
@@ -131,8 +132,10 @@ the protocol type has not yet been confirmed. Both types are supported.
 
 The default `rf_band` is `"315"`; no configuration change is needed for those
 remotes. For LilyGO band changes, see [Radio band setup](docs/lilygo_cc1101_controller.md#radio-band).
-Band selection is currently available for LilyGO only; the YardStick integration
-operates in the 315 MHz band.
+For YardStick, choose the band during setup or change RF band on the automatically
+created YardStick controller device. The fireplace and controller share one
+Proflame2 configuration entry. 433 MHz support has automated software coverage;
+physical RF acceptance remains pending.
 
 FCC IDs shown are examples reported on these models, not guaranteed identifiers
 for every remote of that model. Use them only as a lookup aid when the model

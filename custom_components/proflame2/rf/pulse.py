@@ -1,7 +1,8 @@
-"""Bounded OOK pulse/PCM decoding for LilyGO RMT receive.
+"""Bounded OOK pulse/PCM decoding shared by RF receive paths.
 
 The normal LilyGO path quantizes demodulated CC1101 GDO0 edge durations into a
-PCM row. FIFO remains an explicit rollback path.
+PCM row. YardStick FIFO reception reuses bounded word parsing with its own
+complete-buffer boundary policy and without the RMT guard truncation exception.
 """
 
 from __future__ import annotations
@@ -91,9 +92,9 @@ def find_proflame_pcm_candidates(bit_stream: str) -> list[PulseDecodeCandidate]:
 
     candidates: list[PulseDecodeCandidate] = []
     # The ESP32 RMT can end exactly after the first bit of the final `1`
-    # Manchester symbol. `_decode_words` accepts only that one-bit truncation.
+    # Manchester symbol. The bounded parser accepts only that one-bit truncation.
     for bit_offset in range(0, len(bit_stream) - (STANDARD_WORD_BITS - 1) + 1):
-        words = _decode_words(bit_stream, bit_offset, PROFLAME_WORD_COUNT)
+        words = decode_pcm_words(bit_stream, bit_offset, PROFLAME_WORD_COUNT)
         if words is None or not _has_standard_word_layout(words):
             continue
         frame = ProflameFrame(
@@ -127,7 +128,7 @@ def find_proflame_pcm_candidates(bit_stream: str) -> list[PulseDecodeCandidate]:
             )
             continue
 
-        words = _decode_words(bit_stream, bit_offset, EXTENDED_WORD_COUNT)
+        words = decode_pcm_words(bit_stream, bit_offset, EXTENDED_WORD_COUNT)
         if words is None or not _has_extended_word_layout(words) or not extended_frame_integrity_matches(words):
             continue
         extended_end = bit_offset + EXTENDED_WORD_BITS
@@ -166,9 +167,17 @@ def find_proflame_pcm_candidates(bit_stream: str) -> list[PulseDecodeCandidate]:
     return _deduplicate_candidates(candidates)
 
 
-def _decode_words(bit_stream: str, bit_offset: int, word_count: int) -> tuple[int, ...] | None:
+def decode_pcm_words(
+    bit_stream: str, bit_offset: int, word_count: int, *, allow_truncated_end_guard: bool = True
+) -> tuple[int, ...] | None:
+    """Parse bounded words with guards, padding and parity, without normalizing data.
+
+    RMT rows may omit only the final low guard bit at the exact row boundary.
+    FIFO callers must explicitly disable that acquisition-specific exception.
+    Frame boundary classification and protocol integrity belong to the caller.
+    """
     end = bit_offset + (word_count * SYMBOLS_PER_WORD * 2)
-    terminal_end_guard_truncated = end == len(bit_stream) + 1
+    terminal_end_guard_truncated = allow_truncated_end_guard and end == len(bit_stream) + 1
     if end > len(bit_stream) and not terminal_end_guard_truncated:
         return None
     values: list[int] = []

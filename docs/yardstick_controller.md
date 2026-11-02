@@ -6,6 +6,10 @@ the Home Assistant host by USB and does not require ESPHome firmware.
 Use this guide when you want a USB controller attached to the Home Assistant
 host.
 
+One YardStick can be assigned to one fireplace in this integration. Home
+Assistant rejects assigning a second fireplace to the same controller.
+Selecting among multiple YardStick USB radios is not currently supported.
+
 ## Capabilities
 
 | Capability | Supported |
@@ -16,17 +20,33 @@ host.
 | Home Assistant state updates from original remote | No |
 | Additional controller software required | No ESPHome firmware |
 
+The integration supports legacy seven-word and extended ten-word remotes in
+the selected 315 or 433 MHz band. Extended support has passed recorded-packet and automated
+tests; confirmation with a physical extended fireplace remains pending.
+
 ## Radio Band
 
-The current Proflame2 YardStick integration operates in the 315 MHz band. It
-does not expose a 433 MHz band setting; LilyGO's `proflame2_rf_band` YAML setting
-does not apply to YardStick.
+Choose **315 MHz** or **433 MHz** during fireplace setup, before guided learning
+starts. The default is 315 MHz. Match the band used by the fireplace and its
+original remote. The 433 MHz setting operates at 433.92 MHz.
 
-The [YardStick One hardware](https://greatscottgadgets.com/yardstickone/) supports
-433.92 MHz, but using that band through this integration still requires software
-configuration support and validation. Do not treat hardware capability as
-tested integration support. Use LilyGO for the integration's current 433 MHz
-support.
+Home Assistant automatically creates two devices under the one Proflame2 setup:
+**YardStick One** and your **fireplace**. You do not add the controller separately.
+To change the band later, open Settings → Devices & services → Devices →
+YardStick One, then change **RF band** in its Configuration section. The fireplace
+uses that controller setting. LilyGO's band remains configured in ESPHome YAML.
+
+A band change waits for an active transmission to finish, clears pending
+commands, and applies the radio settings without sending a fireplace command.
+Finish learning before changing bands. If configuration fails, the previous
+selection stays saved and fireplace controls pause. Select the desired band
+again to retry. Repeating the saved band also retries a failed configuration.
+
+Existing YardStick installations keep 315 MHz and gain the controller device
+automatically. Removing the Proflame2 setup removes both devices together.
+
+Both bands have automated software coverage. Physical 433 MHz operation and
+extended-fireplace acceptance still require hardware validation.
 
 ## Pros And Cons
 
@@ -105,6 +125,16 @@ After the YardStick is connected and available to Home Assistant:
 Guided learning connects the controller to your fireplace using the original
 remote. Home Assistant will ask you to press buttons on the original remote.
 Keep the remote within about 3 feet of the YardStick while learning.
+
+Turn OFF thermostat and SMART mode before starting. If either mode is detected
+on an extended remote, Home Assistant asks you to turn it off and continues
+automatically when a manual-mode packet is received. Follow the displayed
+instruction again after the mode change. If learning does not continue, press
+Power once after turning both modes off.
+
+Changes in room temperature, setpoint, or Fahrenheit/Celsius selection do not
+require restarting extended learning. Those changes and repeated packets do
+not count as additional control actions; continue following the button prompts.
 
 When learning is complete, Home Assistant stores the values needed to control
 that fireplace.

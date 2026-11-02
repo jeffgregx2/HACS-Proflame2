@@ -43,6 +43,7 @@ from .const import (
     CONF_PROFILES,
     CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
+    CONF_RF_BAND,
     DATA_LEARNING_DEBUG_LOGGING,
     DATA_LEARNING_RECEIVE_TIMEOUT,
     DATA_LEARNING_TIMEOUT,
@@ -93,6 +94,7 @@ from .profile import (
     sanitize_fireplace_short_name,
 )
 from .protocol.packet import ProflamePacket
+from .rf.band import DEFAULT_RF_BAND, YARDSTICK_BANDS, yardstick_band
 from .rf.registry import get_backend_definition, normalize_controller_id
 from .rf.yardstick import YardStickBackendUnavailableError
 from .rtl433_learning import InvalidLearningIdError, normalize_learning_id_profile_input
@@ -248,6 +250,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _manual_pending_data: dict[str, Any] | None = None
     _manual_pending_options: dict[str, Any] | None = None
     _manual_learning_id_import: bool = False
+    _yardstick_setup_mode: str = "manual"
 
     @staticmethod
     @callback
@@ -361,11 +364,54 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         data, options = self._manual_pending_data, self._manual_pending_options
         assert data is not None and options is not None
+        if not self._manual_learning_id_import and self._entry_exists_for_controller_and_remote(
+            controller_id=data[CONF_BACKEND_TYPE],
+            remote_id=data[CONF_REMOTE_ID],
+            linked_esphome_entry_id=data.get(CONF_ESPHOME_ENTRY_ID),
+        ):
+            return self.async_abort(reason="already_configured")
+        if controller_assignments(self.hass, data, options):
+            return self.async_abort(reason="controller_in_use")
+        if data[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK and CONF_RF_BAND not in data:
+            self._yardstick_setup_mode = "manual"
+            return await self.async_step_yardstick_band()
         if self._manual_learning_id_import:
-            if controller_assignments(self.hass, data, options):
-                return self.async_abort(reason="controller_in_use")
             return await self.async_step_manual_features()
         return await self._async_create_profile_entry(title=data[CONF_NAME], data=data, options=options)
+
+    async def async_step_yardstick_band(self, user_input: dict[str, Any] | None = None):
+        """Collect controller band before opening a YardStick for learning or control."""
+        data = self._learn_input if self._yardstick_setup_mode == "learn" else self._manual_pending_data
+        if data is None:
+            return await self.async_step_user()
+        if controller_assignments(self.hass, data, {}):
+            return self.async_abort(reason="controller_in_use")
+        errors = {}
+        if user_input is not None:
+            try:
+                band = user_input[CONF_RF_BAND]
+                yardstick_band(band)
+            except (KeyError, ValueError):
+                errors[CONF_RF_BAND] = "invalid_rf_band"
+            else:
+                data[CONF_RF_BAND] = band
+                if self._yardstick_setup_mode == "learn":
+                    return await self._async_begin_learning_from_current_input()
+                return await self._async_finish_manual_setup()
+        return self.async_show_form(
+            step_id="yardstick_band",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_RF_BAND, default=DEFAULT_RF_BAND): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[{"value": band, "label": f"{band} MHz"} for band in YARDSTICK_BANDS],
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors,
+        )
 
     async def async_step_manual_features(self, user_input: dict[str, Any] | None = None):
         """Choose fireplace features locally, independently of the Learning ID."""
@@ -466,6 +512,9 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_learn()
         if controller_assignments(self.hass, self._learn_input, {}):
             return self.async_abort(reason="controller_in_use")
+        if self._learn_input[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK and CONF_RF_BAND not in self._learn_input:
+            self._yardstick_setup_mode = "learn"
+            return await self.async_step_yardstick_band()
         self._learn_result = None
         await self._async_dispose_learning_session()
         learn_session = await self._async_start_learning_session_or_fail()
@@ -604,6 +653,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_BACKEND_TYPE: self._learn_input[CONF_BACKEND_TYPE],
                 **self._learn_result.data,
             }
+            if self._learn_input[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK:
+                data[CONF_RF_BAND] = self._learn_input.get(CONF_RF_BAND, DEFAULT_RF_BAND)
             if self._backend_requires_esphome_entry(self._learn_input[CONF_BACKEND_TYPE]):
                 data[CONF_ESPHOME_ENTRY_ID] = self._learn_input[CONF_ESPHOME_ENTRY_ID]
             if self._learn_result.final_packet is not None:
@@ -846,8 +897,13 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 ),
                 esphome_entry_id=self._learn_input.get(CONF_ESPHOME_ENTRY_ID),
+                **(
+                    {"rf_band": self._learn_input.get(CONF_RF_BAND, DEFAULT_RF_BAND)}
+                    if self._learn_input[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK
+                    else {}
+                ),
             )
-        except YardStickBackendUnavailableError as exc:
+        except (YardStickBackendUnavailableError, ValueError) as exc:
             self._learn_result = LearnResult(
                 success=False,
                 warnings=[],

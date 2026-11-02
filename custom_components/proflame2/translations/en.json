@@ -124,6 +124,13 @@
           "manual": "Use a Learning ID for your native remote. Supports legacy and extended remotes.",
           "manual_legacy": "Enter a known legacy remote ID and C/D values."
         }
+      },
+      "yardstick_band": {
+        "title": "Choose YardStick RF band",
+        "description": "Choose the band used by your fireplace and its original remote. The YardStick controller and fireplace devices will be created automatically. You can change the band later on the YardStick device. One controller supports one fireplace.",
+        "data": {
+          "rf_band": "RF band"
+        }
       }
     },
     "progress": {
@@ -139,7 +146,8 @@
       "unknown_profile": "Choose an existing saved profile.",
       "required": "This field is required.",
       "invalid_esphome_entry": "Select a valid ESPHome device.",
-      "invalid_refresh_period": "Enter a non-negative whole number of minutes (0 disables refresh)."
+      "invalid_refresh_period": "Enter a non-negative whole number of minutes (0 disables refresh).",
+      "invalid_rf_band": "Choose 315 MHz or 433 MHz."
     },
     "abort": {
       "already_configured": "A fireplace with this remote ID is already configured for this controller.",
@@ -225,6 +233,17 @@
         "description": "Delete saved profile: {profile_name}",
         "data": {
           "confirm": "Confirm delete"
+        }
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "rf_band": {
+        "name": "RF band",
+        "state": {
+          "315": "315 MHz",
+          "433": "433 MHz"
         }
       }
     }

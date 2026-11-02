@@ -56,7 +56,9 @@ CONFIG_SCHEMA = vol.Schema(
                     vol.Optional(CONF_LEARNING_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): cv.boolean,
                     vol.Optional(CONF_YARDSTICK_LEARNING_FREQUENCY_HZ): vol.All(
                         cv.positive_int,
-                        vol.Range(min=314_000_000, max=316_000_000),
+                        vol.Any(
+                            vol.Range(min=314_000_000, max=316_000_000), vol.Range(min=433_000_000, max=435_000_000)
+                        ),
                     ),
                     vol.Optional(CONF_YARDSTICK_LEARNING_SWEEP_ENABLED): cv.boolean,
                 }
@@ -65,7 +67,7 @@ CONFIG_SCHEMA = vol.Schema(
     },
     extra=vol.ALLOW_EXTRA,
 )
-PLATFORMS: list[Platform] = ["sensor", "switch", "number", "button"]
+PLATFORMS: list[Platform] = ["sensor", "switch", "number", "button", "select"]
 _LOGGER = logging.getLogger(__name__)
 _DISPLAY_SYNC_RETRY_DELAYS_SECONDS: tuple[float, ...] = (5.0, 15.0, 30.0)
 

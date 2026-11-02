@@ -14,6 +14,7 @@ DOMAIN = "proflame2"
 MANUFACTURER = "Proflame2"
 
 CONF_BACKEND_TYPE = "backend_type"
+CONF_RF_BAND = "rf_band"
 CONF_C1 = "c1"
 CONF_C2 = "c2"
 CONF_D1 = "d1"

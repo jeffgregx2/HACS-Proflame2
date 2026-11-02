@@ -33,4 +33,4 @@ def decode_structural_legacy_words(bits: str, offset: int) -> tuple[int, ...] | 
     Reuse the existing word decoder, not a second implementation. This does not
     establish legacy integrity, extended-frame format, or suitability for TX.
     """
-    return _pulse._decode_words(bits, offset, 7)
+    return _pulse.decode_pcm_words(bits, offset, 7)

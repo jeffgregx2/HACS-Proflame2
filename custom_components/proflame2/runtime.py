@@ -44,6 +44,7 @@ from .const import (
     CONF_PROTOCOL_VARIANT,
     CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
+    CONF_RF_BAND,
     DATA_ACTIVE_LISTENING,
     DATA_ESPHOME_TRANSPORT_FACTORY,
     DATA_RUNTIME_ENTRIES,
@@ -57,7 +58,7 @@ from .const import (
     STATE_CONFIDENCE_UNKNOWN,
 )
 from .control_intent import ControlIntents
-from .identity import fireplace_device_identifiers
+from .identity import controller_device_identifier, fireplace_device_identifiers
 from .packet_debug import (
     async_disable_packet_debug_logging,
     async_enable_packet_debug_logging,
@@ -75,6 +76,7 @@ from .protocol.models import (
 )
 from .protocol.packet import ProflameFrame, ProflamePacket
 from .refresh import RefreshSchedule
+from .rf.band import DEFAULT_RF_BAND, yardstick_band
 from .rf.base import RFBackend, SendResult
 from .rf.esphome.transport import ESPHomeTransport, HomeAssistantESPHomeTransport
 from .rf.esphome_api import ESPHomeAPIBackend
@@ -82,7 +84,6 @@ from .rf.fake import FakeRFBackend
 from .rf.registry import normalize_controller_id
 from .rf.waveform import ProflameTransmissionPlan
 from .rf.yardstick import (
-    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
     YARDSTICK_RX_LEARNING_PACKET_BYTES,
     YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
     YardStickBackend,
@@ -109,6 +110,9 @@ class Proflame2RuntimeEntry:
     device_id: str
     fireplace_id: str
     controller_id: str
+    rf_band: str | None = None
+    radio_configuration_in_progress: bool = False
+    radio_configuration_error: str | None = None
     controller_device_id: str | None = None
     controller_device_identifier: tuple[str, str] | None = None
     display_short_name: str = DEFAULT_FIREPLACE_SHORT_NAME
@@ -386,6 +390,18 @@ def _resolve_linked_controller_device(
 ) -> tuple[str, tuple[str, str] | None] | None:
     """Resolve the linked ESPHome controller device id and optional identifier."""
 
+    if normalize_controller_id(entry.data.get(CONF_BACKEND_TYPE, "")) == BACKEND_YARDSTICK:
+        # One default USB radio, exclusively assigned. Both devices belong to
+        # this fireplace config entry; no independently removable controller entry.
+        identifier = controller_device_identifier("yardstick:0")
+        device = dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={identifier},
+            manufacturer="Great Scott Gadgets",
+            name="YardStick One",
+            model="Yard Stick One",
+        )
+        return device.id, identifier
     linked_entry_id = _linked_esphome_entry_id(entry)
     if linked_entry_id is None:
         return None
@@ -573,9 +589,11 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
             debug_logging_enabled=debug_logging_enabled,
         )
     elif backend_type == BACKEND_YARDSTICK:
+        band = yardstick_band(entry.data.get(CONF_RF_BAND, DEFAULT_RF_BAND))
         backend = YardStickBackend(
             hass=hass,
-            frequency_hz=YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+            frequency_hz=band.rx_frequency_hz,
+            tx_frequency_hz=band.tx_frequency_hz,
             packet_length_bytes=YARDSTICK_RX_LEARNING_PACKET_BYTES,
             sweep_enabled=YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
         )
@@ -601,6 +619,7 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
         device_id=device.id,
         fireplace_id=fireplace_id,
         controller_id=controller_id,
+        rf_band=entry.data.get(CONF_RF_BAND, DEFAULT_RF_BAND) if backend_type == BACKEND_YARDSTICK else None,
         controller_device_id=controller_device_id,
         controller_device_identifier=controller_device_identifier,
         display_short_name=sanitize_fireplace_short_name(
@@ -820,6 +839,9 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "device_id": runtime_entry.device_id,
         "fireplace_id": runtime_entry.fireplace_id,
         "controller_id": runtime_entry.controller_id,
+        "rf_band": runtime_entry.rf_band,
+        "radio_configuration_in_progress": runtime_entry.radio_configuration_in_progress,
+        "radio_configuration_error": runtime_entry.radio_configuration_error,
         "controller_device_id": runtime_entry.controller_device_id,
         "controller_device_identifier": runtime_entry.controller_device_identifier,
         "display_short_name": runtime_entry.display_short_name,
