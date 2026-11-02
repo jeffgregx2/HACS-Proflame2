@@ -37,7 +37,7 @@ jobs:
         timeout-minutes: 10
         run: make learning-id-package-test ARCHIVE="$OUTPUT_DIR/proflame2-learning-id.pyz"
       - name: Retain development downloads
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: learning-id-${{ matrix.os }}-python-${{ matrix.python }}
           path: |

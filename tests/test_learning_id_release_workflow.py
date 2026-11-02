@@ -46,5 +46,5 @@ def test_development_packages_test_both_operating_systems_and_python_bounds():
     assert "make learning-id-package " in commands
     assert "make learning-id-package-test " in commands
     assert "gh release" not in commands
-    assert any(step.get("uses") == "actions/upload-artifact@v4" for step in job["steps"])
+    assert any(step.get("uses") == "actions/upload-artifact@v6" for step in job["steps"])
     assert "runner.temp" not in str(job.get("env", {}))
