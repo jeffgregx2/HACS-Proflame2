@@ -127,7 +127,7 @@
       }
     },
     "progress": {
-      "learn_remote": "Listening with {backend_name}.\n\n**Do this now:**\n**{instruction}**\n\nThis step times out after 2 minutes if no packet is observed. Close this dialog to cancel listening."
+      "learn_remote": "Listening with {backend_name}.\n\n**Do this now:**\n**{instruction}**\n\nComplete the requested action within 2 minutes. Repeated packets do not extend the timeout. Close this dialog to cancel listening."
     },
     "error": {
       "invalid_learning_id": "Invalid Learning ID. Copy the complete ID, including its PF2 prefix. Check for missing characters or an unsupported version.",

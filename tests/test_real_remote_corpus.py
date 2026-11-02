@@ -117,11 +117,11 @@ def test_willy_learning_retains_fixed_control_bits() -> None:
     session.valid_packets = session.packets_seen = len(session.packets)
     result = derive_learn_result_from_session(session)
     assert result is not None and result.success
-    assert result.extended_w4_base == 0x84
-    assert (result.extended_w6, result.extended_w8) == (0x50, 0x02)
+    assert result.extended_w4_base == 0x80
+    assert (result.extended_w6, result.extended_w7, result.extended_w8) == (20, 0xC8, 0)
 
 
-@pytest.mark.parametrize("fixed_bit", [0x04, 0x08, 0x80])
+@pytest.mark.parametrize("fixed_bit", [0x08, 0x80])
 def test_extended_learning_rejects_inconsistent_fixed_control_bits(fixed_bit: int) -> None:
     session = LearnSession(backend=FakeRFBackend(), step_timeout=1.0, receive_timeout=0.1)
     session.remote_id = 0x338705

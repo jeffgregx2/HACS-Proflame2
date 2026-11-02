@@ -401,3 +401,69 @@ def test_no_terminal_requires_explicit_unguided_mode():
     assert "interactive terminal" in result.stderr
     assert "--unguided" in result.stderr
     assert not result.stdout
+
+
+def with_mode(row, mode):
+    words = list(bytes.fromhex(row["raw_words"]))
+    words[3] = (words[3] & 0xFC) | mode
+    words[8:] = [lane(words[:8:2]), lane(words[1:8:2])]
+    return {**row, "raw_words": bytes(words).hex()}
+
+
+def test_extended_guided_recovers_thermostat_and_ignores_exit_repeat():
+    with session() as capture:
+        capture.prepare()
+        capture.read_until("Press Power ON once")
+        state = dict(Power=1, Light=3, Fan=1, Flame=6)
+        row = record(state, True)
+        capture.send(with_mode(row, 2))
+        capture.read_until("Turn OFF thermostat and SMART mode")
+        capture.send(with_mode(row, 3))
+        # Manual OFF releases the mode wait; it does not satisfy Power ON.
+        capture.send(with_mode(row, 0))
+        capture.read_until("Press Power ON once")
+        capture.send(with_mode(row, 0))
+        capture.send(row)
+        capture.read_until("Received: Power ON.")
+        capture.read_until("Select Light on the remote. Press DOWN ONCE; the remote should show 2 bars")
+        state["Light"] = 2
+        capture.send(record(state, True))
+        capture.read_until("Received: Light 2.")
+        capture.keyboard("q")
+        capture.wait()
+        assert capture.process.returncode == 130
+        assert not capture.process.stdout.read()
+
+
+def test_extended_guided_mode_wait_times_out_without_an_id():
+    with session(timeout="0.1") as capture:
+        capture.prepare()
+        capture.read_until("Press Power ON once")
+        row = record(dict(Power=1, Light=3, Fan=1, Flame=6), True)
+        capture.send(with_mode(row, 2))
+        capture.read_until("Turn OFF thermostat and SMART mode")
+        capture.send(with_mode(row, 3))
+        capture.wait()
+        assert capture.process.returncode == 1
+        assert not capture.process.stdout.read()
+
+
+def test_manual_exit_at_target_requires_a_subsequent_action():
+    with session() as capture:
+        capture.prepare()
+        capture.read_until("Press Power ON once")
+        row = record(dict(Power=1, Light=3, Fan=1, Flame=6), True)
+        capture.send(with_mode(row, 2))
+        capture.read_until("Turn OFF thermostat and SMART mode")
+        capture.send(row)
+        capture.read_until("Press Power OFF, then ON")
+        capture.send(row)  # The exit packet's delayed repeat is not a press.
+        capture.send(with_mode(row, 0))
+        capture.read_until("Press Power ON once")
+        capture.send(row)
+        capture.read_until("Received: Power ON.")
+        capture.read_until("Select Light on the remote")
+        capture.keyboard("q")
+        capture.wait()
+        assert capture.process.returncode == 130
+        assert not capture.process.stdout.read()

@@ -87,6 +87,12 @@ same scale, with W8 the high byte. The stored W7/W8 pair is a manual-transmit
 template value, not a current sensor reading. Preserve all template bytes on
 import; these field interpretations do not change the Learning ID format.
 
+New extended profiles use a canonical Celsius manual template: W4 bit 2 clear,
+W6 `0x14`, W7 `0xC8`, W8 `0x00`. Equivalent control evidence generates the
+same ID despite changes in received units, setpoint, or room temperature. This
+normalization applies during learning only; exporting or importing an existing
+profile preserves its stored template, including Fahrenheit settings.
+
 See the [extended protocol temperature mapping](issue_15_extended_protocol_design.md#temperature-fields-and-units)
 for capture evidence and the distinction between received telemetry and the
 temperature values used when deriving new manual profiles.

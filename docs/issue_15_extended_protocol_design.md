@@ -79,20 +79,19 @@ Extended profiles persist `protocol_variant=extended_10_word` and a template:
 this variant. Existing seven-word profiles continue to load and transmit
 unchanged.
 
-Guided learning accepts validated ten-word RMT frames, selects a manual-mode
-sample to obtain `w4_base`, `w6`, and `w8`, and stores `W7=0xC8` for
-manual Home Assistant frames. The original learned raw frame, including its
-extension words, remains available for initial-state restoration and diagnostics.
+Guided learning accepts validated ten-word RMT frames and derives retained W4
+bits 3 and 7 from manual ON evidence. Units, setpoint, and room temperature may
+change during learning. They do not establish identity or provide additional
+control-command diversity. Thermostat/SMART traffic pauses guided learning;
+returning to manual mode resumes the pending instruction automatically.
 
-That describes the current implementation, not the meaning of the fields:
-W8 is temperature data and may change during learning. W7 alone does not
-specify a temperature. `W7=0xC8` means 20.0°C only when W8 is zero and W4 bit 2
-is clear. The [Issue #32 learning fix design](issue_32_learning_mode_design.md)
-removes units, setpoint, and room temperature from identity consistency and
-proposes a canonical Celsius manual TX template for newly learned profiles:
-W4 bit 2 clear, W6 `0x14`, W7 `0xC8`, W8 `0x00`. Existing profiles retain their
-stored units and temperature fields unchanged. Received
-checksums must always be validated using the original, unmodified bytes.
+New profiles use a canonical Celsius manual TX template: W4 bit 2 clear,
+W6 `0x14`, W7 `0xC8`, W8 `0x00`. Existing profiles and imported Learning IDs
+retain their stored units and temperature fields unchanged. Original frames,
+including their extension words, remain available for initial-state restoration
+and diagnostics. Received checksums are always validated using the original,
+unmodified bytes. See the [Issue #32 learning fix design](issue_32_learning_mode_design.md)
+for the shared HA and standalone helper rules.
 
 ## Transmit Rules
 

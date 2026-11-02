@@ -73,8 +73,8 @@ def test_capture_evidence_is_not_manufactured_to_pass_learning(remote):
     profile = json.loads(restored.stdout)
     assert profile["serial_id"] == records[0]["id"]
     assert profile["extended_template"] == {
-        "w4_base": fixed,
-        "w6": records[0]["w6"],
+        "w4_base": fixed & 0x88,
+        "w6": 20,
         "w7": 0xC8,
-        "w8": records[0]["w8"],
+        "w8": 0,
     }

@@ -123,7 +123,9 @@ rtl_433 -R 207 -f 315M -F json > remote-capture.json
 ```
 
 For a 433.92 MHz remote, use `-f 433.92M`. If needed, replace `rtl_433` with
-its full path. Use only one native remote, with thermostat mode disabled.
+its full path. Use only one native remote, with thermostat and SMART mode disabled.
+For extended remotes, units, setpoint, and room temperature may change without
+invalidating learning. Those changes do not count as additional control commands.
 Change several light/fan settings and return to the same combinations so each
 can be received again. Intermediate settings also count. Allow the remote
 time to repeat each command; this is not necessarily a two-second interval.

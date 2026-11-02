@@ -49,7 +49,7 @@ EXTENDED = RemoteProfile(
     ECCProfile(0, 0, 0, 0),
     FEATURES,
     protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
-    extended_template=ExtendedFrameTemplate(0x80, 0x15, 0xC8, 0),
+    extended_template=ExtendedFrameTemplate(0x80, 20, 0xC8, 0),
 )
 
 
@@ -78,7 +78,7 @@ def captured_extended_profiles():
             ECCProfile(0, 0, 0, 0),
             FEATURES,
             protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
-            extended_template=ExtendedFrameTemplate(fixed, first["w6"], 0xC8, first["w8"]),
+            extended_template=ExtendedFrameTemplate(fixed & 0x88, 20, 0xC8, 0),
         )
         yield pytest.param(profile, observations, id=remote["name"])
 

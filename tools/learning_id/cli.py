@@ -27,7 +27,7 @@ MAX_LINE = 16384
 MAX_INPUT = 16 * 1024 * 1024
 MAX_RECORDS = 100000
 GUIDANCE = (
-    "Keep power ON and thermostat OFF. Leave flame, front burner, auxiliary, and pilot unchanged.\n"
+    "Keep power ON and thermostat/SMART mode OFF. Leave flame, front burner, auxiliary, and pilot unchanged.\n"
     "Use Light and Fan values 0, 3, and 6. Repeat the SAME combinations of settings\n"
     "so each combination is received twice. Intermediate levels on the native remote are OK.\n"
     "The count tracks different received combinations, not individual button presses."

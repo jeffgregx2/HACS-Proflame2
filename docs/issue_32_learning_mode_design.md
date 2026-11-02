@@ -1,6 +1,7 @@
 # Thermostat mode and temperature handling during learning
 
-Status: proposed design. Tracking: [Issue #32](https://github.com/jeffgregx2/HACS-Proflame2/issues/32).
+Status: implemented locally on `dev`; automated validation passed. Hardware
+acceptance remains pending. Tracking: [Issue #32](https://github.com/jeffgregx2/HACS-Proflame2/issues/32).
 
 Extended remote learning must pause when thermostat or SMART mode is detected,
 resume automatically when the remote returns to manual mode, and tolerate room
@@ -236,3 +237,9 @@ two original failures before applying the implementation. Manual acceptance
 should confirm automatic mode recovery on LilyGO and successful fireplace
 control using the newly generated profile; protocol tests alone cannot prove
 hardware acceptance.
+
+Local validation completed with 1,856 repository tests passed, 34 skipped, and
+one deselected. The isolated installed helper passed 115 tests and six HA
+interoperability checks; its source archive passed all 33 checks through the
+existing Make targets. Changed Python files passed Ruff and Black checks.
+No deployment, RF transmission, or publication was performed.

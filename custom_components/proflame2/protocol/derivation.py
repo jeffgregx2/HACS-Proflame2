@@ -11,11 +11,28 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .ecc import derive_ecc_profile, extended_frame_integrity_matches
-from .models import EXTENDED_W4_FIXED_MASK, ECCProfile, ExtendedFrameTemplate, FireplaceFeatures, RemoteProfile
+from .models import ECCProfile, ExtendedFrameTemplate, FireplaceFeatures, RemoteProfile
 from .packet import ProflameFrame
 from .variants import PROTOCOL_VARIANT_EXTENDED_10_WORD
 
 DEFAULT_EXTENDED_MANUAL_W7 = 0xC8
+EXTENDED_IDENTITY_FLAGS_MASK = 0x88
+DEFAULT_EXTENDED_MANUAL_W6 = 20
+DEFAULT_EXTENDED_MANUAL_W8 = 0
+
+
+def learning_command_key(frame: ProflameFrame) -> tuple[int, int]:
+    """Identify controls without treating extended units/temperature as commands.
+
+    Callers must validate original frames before deduplication. The encoder's
+    stored-profile mask remains unchanged so imported Fahrenheit IDs still work.
+    """
+    return (frame.cmd1 & 0xFB if frame.is_extended else frame.cmd1, frame.cmd2)
+
+
+def thermostat_mode_active(frame: ProflameFrame) -> bool:
+    """Recognize thermostat ON and SMART, including SMART's set power bit."""
+    return bool(frame.cmd1 & 0x02)
 
 
 class ProfileConflictError(ValueError):
@@ -63,8 +80,8 @@ def derive_remote_profile(
 ) -> ProfileDerivation:
     """Validate every observation and derive one consistent remote profile.
 
-    Fixed-field checks apply to manual-mode extended frames. W7 is received
-    telemetry and is deliberately replaced by the established manual TX value.
+    Extended units and temperatures are validated as received, then replaced
+    only in the generated manual template. They are not remote identity fields.
     """
     observations = tuple(frames)
     if not observations:
@@ -78,8 +95,9 @@ def derive_remote_profile(
 
     extended = observations[0].is_extended
     missing = []
-    commands = {(frame.cmd1, frame.cmd2) for frame in observations}
-    if len(observations) < requirements.min_frames or len(commands) < requirements.min_commands:
+    evidence = [frame for frame in observations if not (extended and thermostat_mode_active(frame))]
+    commands = {learning_command_key(frame) for frame in evidence}
+    if len(evidence) < requirements.min_frames or len(commands) < requirements.min_commands:
         missing.append(f"At least {requirements.min_commands} different commands are needed.")
     serial_id = observations[0].serial_id
     if not extended:
@@ -97,20 +115,22 @@ def derive_remote_profile(
             missing.append("More different flame, fan, or other accessory commands are needed.")
         profile = RemoteProfile(serial_id, ecc, features)
     else:
-        manual = [frame for frame in observations if frame.cmd1 & 0x03 == 0x01]
-        templates = {(frame.cmd1 & EXTENDED_W4_FIXED_MASK, frame.err1, frame.extension_words[0]) for frame in manual}
+        manual = [frame for frame in evidence if frame.cmd1 & 0x03 == 0x01]
+        templates = {frame.cmd1 & EXTENDED_IDENTITY_FLAGS_MASK for frame in manual}
         if len(templates) > 1:
             raise ProfileConflictError("Manual commands have inconsistent fixed template fields.")
         if not manual or len({frame.cmd2 for frame in manual}) < requirements.min_manual_w5:
             missing.append("More different commands with the remote in manual mode are needed.")
         profile = None
         if templates:
-            w4_base, w6, w8 = next(iter(templates))
+            w4_base = next(iter(templates))
             profile = RemoteProfile(
                 serial_id,
                 ECCProfile(0, 0, 0, 0),
                 features,
                 protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
-                extended_template=ExtendedFrameTemplate(w4_base, w6, DEFAULT_EXTENDED_MANUAL_W7, w8),
+                extended_template=ExtendedFrameTemplate(
+                    w4_base, DEFAULT_EXTENDED_MANUAL_W6, DEFAULT_EXTENDED_MANUAL_W7, DEFAULT_EXTENDED_MANUAL_W8
+                ),
             )
     return ProfileDerivation(None, tuple(missing)) if missing else ProfileDerivation(profile)

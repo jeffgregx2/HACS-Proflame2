@@ -401,3 +401,80 @@ def test_missing_legacy_command_variation_cannot_pass_by_quantity():
     assert result.returncode != 0
     assert not result.stdout
     assert "power, light, or mode" in result.stderr
+
+
+def temperature_settings(row, *, fahrenheit, setpoint, room):
+    """Make synthetic settings observations with independent lane calculation."""
+    words = list(bytes.fromhex(row["raw_words"]))
+    words[3] = (words[3] & 0xFB) | (4 if fahrenheit else 0)
+    words[5:8] = [setpoint, room & 255, room >> 8]
+    words[8:] = [lane(words[:8:2]), lane(words[1:8:2])]
+    return {**row, "raw_words": bytes(words).hex()}
+
+
+def test_extended_mixed_settings_preserve_gates_and_id():
+    original = commands(5, True)
+    varied = [
+        temperature_settings(row, fahrenheit=i % 2, setpoint=26 if i % 2 else 79, room=245 if i % 2 else 768)
+        for i, row in enumerate(original)
+    ]
+    expected = run(original)
+    for rows in (varied, list(reversed(varied))):
+        result = run(rows)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == expected.stdout
+        assert "Confirmed" in result.stderr
+    # Repeated units/settings for one command cannot supply missing diversity.
+    result = run(
+        [temperature_settings(original[0], fahrenheit=i % 2, setpoint=20 + i, room=250 + i) for i in range(12)]
+    )
+    assert result.returncode == 1
+    assert not result.stdout
+
+
+def test_extended_settings_after_confirmation_are_still_validated():
+    original = commands(5, True)
+    changed = temperature_settings(original[0], fahrenheit=True, setpoint=79, room=790)
+    assert run([*original, changed]).returncode == 0
+    words = bytearray.fromhex(changed["raw_words"])
+    words[7] ^= 1
+    result = run([*original, {**changed, "raw_words": words.hex()}])
+    assert result.returncode == 1
+    assert not result.stdout
+
+
+def test_thermostat_packets_cannot_supply_helper_confirmation():
+    rows = []
+    for row in commands(5, True):
+        words = list(bytes.fromhex(row["raw_words"]))
+        words[3] |= 2
+        words[8:] = [lane(words[:8:2]), lane(words[1:8:2])]
+        rows.append({**row, "raw_words": bytes(words).hex()})
+    result = run(rows)
+    assert result.returncode == 1
+    assert not result.stdout
+    assert "manual" in result.stderr
+
+
+def test_excluded_thermostat_frame_still_locks_remote_identity():
+    first = commands(1, True)[0]
+    words = list(bytes.fromhex(first["raw_words"]))
+    words[0] ^= 1
+    words[3] |= 2
+    words[8:] = [lane(words[:8:2]), lane(words[1:8:2])]
+    other_remote = {**first, "raw_words": bytes(words).hex()}
+    result = run([other_remote, *commands(5, True)])
+    assert result.returncode == 1
+    assert not result.stdout
+    assert "disagree about your remote's settings" in result.stderr
+
+
+def test_late_retained_flag_conflict_still_fails_after_confirmation():
+    original = commands(5, True)
+    words = list(bytes.fromhex(original[0]["raw_words"]))
+    words[3] ^= 8
+    words[8:] = [lane(words[:8:2]), lane(words[1:8:2])]
+    result = run([*original, {**original[0], "raw_words": bytes(words).hex()}])
+    assert result.returncode == 1
+    assert not result.stdout
+    assert "disagree about your remote's settings" in result.stderr

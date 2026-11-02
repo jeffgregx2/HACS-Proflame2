@@ -116,7 +116,7 @@ Do not select it based only on your country or the fireplace brand.
 
 Follow the instructions printed in the terminal:
 
-1. Turn the fireplace **OFF** and disable thermostat mode on the remote.
+1. Turn the fireplace **OFF** and disable thermostat and SMART mode on the remote.
    Press **Return on the computer keyboard** when ready.
 2. Answer whether your remote can adjust both Light and Fan. Press Return for
    Yes, or type `n` and press Return for No. The helper adapts if one of these
@@ -130,6 +130,9 @@ Follow the instructions printed in the terminal:
 
 Take your time following the prompts. After each button press, confirmation
 should normally appear within a second or two.
+For extended remotes, if thermostat or SMART mode is detected, the helper asks
+you to turn both modes off and then continues automatically. Temperature,
+setpoint, or unit changes do not require restarting learning.
 Some remotes switch back to Flame automatically; select the control named in
 the instruction before pressing Up or Down. If you press the wrong button,
 read the helper's next instruction rather than guessing how to correct it.

@@ -63,6 +63,8 @@ from .learning import (
     DEFAULT_RECEIVE_TIMEOUT_SECONDS,
     ERROR_BACKEND_UNAVAILABLE,
     ERROR_CONTRADICTORY_PROFILE,
+    MANUAL_MODE_INSTRUCTION,
+    LearningModeTransition,
     LearnResult,
     LearnSession,
     async_capture_next_learning_packet,
@@ -206,7 +208,8 @@ FEATURE_SELECTION_SCHEMA = vol.Schema(
 LEARN_PROMPTS: tuple[tuple[str, str], ...] = (
     (
         "power_on",
-        "Press the Power button once. The fireplace does not need to start in any specific state.",
+        "Turn OFF thermostat and SMART mode, then press the Power button once. "
+        "The fireplace does not need to start in any specific state.",
     ),
     ("power_off", "Press the Power button again."),
     ("restore_power_on", "Press the Power button once more."),
@@ -236,7 +239,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     _learn_input: dict[str, Any] | None = None
     _learn_result: LearnResult | None = None
-    _learn_task: asyncio.Task[ProflamePacket | LearnResult] | None = None
+    _learn_task: asyncio.Task[ProflamePacket | LearnResult | LearningModeTransition] | None = None
     _learn_session: LearnSession | None = None
     _learn_prompt_index: int = 0
     _extended_diagnostic_active: bool = False
@@ -501,6 +504,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._learn_session.prompt_index = self._learn_prompt_index
         self._learn_session.prompt_label = self._current_learn_prompt_label()
         self._learn_session.prompt_instruction = self._current_learn_instruction()
+        self._learn_session.diagnostic_capture = self._extended_diagnostic_active
         if self._learn_session.packet_debug_logging_enabled:
             get_packet_debug_logger().info(
                 "config_flow: prompt_index=%s instruction=%s",
@@ -537,6 +541,9 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         capture_result = await self._learn_task
         self._learn_task = None
+
+        if isinstance(capture_result, LearningModeTransition):
+            return self.async_show_progress_done(next_step_id="learn_prompt")
 
         if isinstance(capture_result, LearnResult):
             self._learn_result = capture_result
@@ -789,6 +796,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _current_learn_instruction(self) -> str:
         """Return the current guided-learning prompt."""
 
+        if self._learn_session is not None and self._learn_session.waiting_for_manual:
+            return MANUAL_MODE_INSTRUCTION
         if self._extended_diagnostic_active:
             return EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][1]
         if self._learn_prompt_index < len(LEARN_PROMPTS):

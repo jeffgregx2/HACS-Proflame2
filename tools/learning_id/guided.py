@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import BinaryIO, TextIO
 
+from proflame2_protocol.derivation import learning_command_key, thermostat_mode_active
 from proflame2_protocol.packet import ProflameFrame
 from proflame2_protocol.rtl433 import normalize_rtl433_record
 
@@ -150,6 +151,15 @@ class Guide:
         raise ValueError("The guided sequence did not collect enough consistent matches. Save JSON for support.")
 
     def instruction(self, target: Target) -> str:
+        if self.frame is not None and self.frame.is_extended and level(self.frame, target.control) == target.value:
+            if target.control == "Power":
+                state = "ON" if target.value else "OFF"
+                other = "OFF" if target.value else "ON"
+                return f"Press Power {other}, then {state}. Waiting for a new command restoring {state}..."
+            return (
+                f"Change {target.control} away from {target.value}, then return to {target.value}. "
+                "Waiting for the requested setting..."
+            )
         if target.control == "Power":
             return f"Press Power {'ON' if target.value else 'OFF'} once. Waiting for its received command..."
         current = level(self.frame, target.control)
@@ -166,7 +176,7 @@ def collect(stream: BinaryIO, evidence: Evidence, timeout: float, terminal: Text
     receiver = Receiver(stream)
     receiver.answer(
         terminal,
-        "Before starting: turn the fireplace OFF and disable thermostat mode.\n"
+        "Before starting: turn the fireplace OFF and disable thermostat and SMART mode.\n"
         "Use only the native remote during this test; do not use HA controls.\n"
         "These button presses may operate the fireplace. Follow its normal operating instructions.\n"
         "Take your time. Press Return when it is OFF and you are ready (q cancels).",
@@ -192,7 +202,16 @@ def collect(stream: BinaryIO, evidence: Evidence, timeout: float, terminal: Text
     deadline = time.monotonic() + timeout
     last_command = None
     finishing = False
+    waiting_for_manual = False
     while True:
+        # Buffered/repeated RF lines must not keep a mode wait alive merely
+        # because Receiver.event() can return immediately without select().
+        if time.monotonic() >= deadline:
+            if waiting_for_manual:
+                raise ValueError(
+                    "Timed out waiting for thermostat and SMART mode to turn off. No Learning ID generated."
+                )
+            raise ValueError("No requested command received before the timeout. No Learning ID generated.")
         kind, value = receiver.event(max(0, deadline - time.monotonic()), terminal)
         if kind == "keyboard":
             if value == "q":
@@ -209,7 +228,27 @@ def collect(stream: BinaryIO, evidence: Evidence, timeout: float, terminal: Text
         if normalized is None:
             continue
         frame = normalized.frame
-        if frame.cmd1 & 2:
+        if frame.is_extended:
+            evidence.validate_observation(frame)
+            if thermostat_mode_active(frame):
+                if not waiting_for_manual:
+                    print(
+                        "Turn OFF thermostat and SMART mode. Learning will continue automatically. "
+                        "If it does not continue, press Power once after turning both modes off.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    waiting_for_manual = True
+                    deadline = time.monotonic() + timeout
+                continue
+            if waiting_for_manual:
+                waiting_for_manual = False
+                last_command = learning_command_key(frame)
+                guide.frame = frame
+                print(f"\n{guide.instruction(target)}", file=sys.stderr, flush=True)
+                deadline = time.monotonic() + timeout
+                continue
+        elif thermostat_mode_active(frame):
             raise ValueError("Thermostat mode is enabled. Turn it off and restart guided learning.")
         # Ignore OFF/repeat data until the requested first ON command arrives.
         if guide.frame is None and not level(frame, "Power"):
@@ -221,6 +260,10 @@ def collect(stream: BinaryIO, evidence: Evidence, timeout: float, terminal: Text
         guide.frame = frame
         if previous_gate == 0 and evidence.gate:
             print("A plausible Learning ID has been created. Now we need to confirm it.", file=sys.stderr)
+        command = learning_command_key(frame)
+        if frame.is_extended and command == last_command:
+            # A repeat can corroborate evidence, but cannot complete a target.
+            continue
         if evidence.gate == 3 and not finishing and level(frame, target.control) == target.value:
             print(target.receipt(), file=sys.stderr, flush=True)
             if not level(frame, "Power"):
@@ -231,11 +274,10 @@ def collect(stream: BinaryIO, evidence: Evidence, timeout: float, terminal: Text
             finishing = True
             if level(frame, "Power"):
                 print(f"\n{guide.instruction(target)}", file=sys.stderr, flush=True)
-                last_command = (frame.cmd1, frame.cmd2)
+                last_command = learning_command_key(frame)
                 deadline = time.monotonic() + timeout
                 continue
             deadline = time.monotonic() + timeout
-        command = (frame.cmd1, frame.cmd2)
         if level(frame, target.control) != target.value:
             if command != last_command:
                 print(

@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 
 from .variants import PROTOCOL_VARIANT_EXTENDED_10_WORD, PROTOCOL_VARIANT_LEGACY_7_WORD
 
-# Known dynamic W4 fields are power, thermostat and light. Preserve the rest
-# as learned extended-frame flags; their meanings are not yet established.
+# Stored W4 flags include temperature units (bit 2) and retained bits 3/7.
+# Preserve them when encoding existing/imported profiles. New learning uses a
+# separate identity mask and canonical Celsius fields; bit 3 remains unknown.
 EXTENDED_W4_FIXED_MASK = 0x8C
 
 

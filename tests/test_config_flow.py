@@ -1271,7 +1271,8 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass, monkeypatch)
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     assert result["step_id"] == "learn_progress"
     assert result["description_placeholders"]["instruction"] == (
-        "Press the Power button once. The fireplace does not need to start in any specific state."
+        "Turn OFF thermostat and SMART mode, then press the Power button once. "
+        "The fireplace does not need to start in any specific state."
     )
 
     result = await _advance_guided_learning(hass, result["flow_id"], result)
@@ -1344,7 +1345,7 @@ async def test_extended_rmt_learning_creates_manual_profile(hass, monkeypatch) -
     assert result["data"][CONF_REMOTE_ID] == 0x08E905
     assert result["data"]["protocol_variant"] == PROTOCOL_VARIANT_EXTENDED_10_WORD
     assert result["data"]["extended_w4_base"] == 0x80
-    assert result["data"]["extended_w6"] == 0x15
+    assert result["data"]["extended_w6"] == 20
     assert result["data"]["extended_w7"] == 0xC8
     assert result["data"]["extended_w8"] == 0x00
 
@@ -1851,3 +1852,59 @@ async def test_same_remote_id_can_be_used_with_two_different_linked_lilygo_entri
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_ESPHOME_ENTRY_ID] == second_controller.entry_id
     assert result["options"][CONF_FIREPLACE_SHORT_NAME] == "BR"
+
+
+async def test_extended_mode_recovery_updates_both_displays_and_keeps_prompt(hass, monkeypatch):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+    from custom_components.proflame2.learning import MANUAL_MODE_INSTRUCTION
+
+    _enable_fake_backend(monkeypatch)
+    backend = ExtendedFrameFakeRFBackend()
+    display = []
+    progress = []
+
+    async def update_learning_mode(**state):
+        display.append(state)
+
+    original = Proflame2ConfigFlow.async_show_progress
+
+    def show_progress(self, **kwargs):
+        progress.append(kwargs["description_placeholders"]["instruction"])
+        return original(self, **kwargs)
+
+    backend.update_learning_mode = update_learning_mode
+    monkeypatch.setattr(Proflame2ConfigFlow, "async_show_progress", show_progress)
+    backend.queue_packets(
+        *[
+            _extended_packet(remote_id=0x123456, cmd1=w4, cmd2=w5, w6=w6)
+            for w4, w5, w6 in (
+                (0x86, 0, 79),
+                (0x87, 0, 79),
+                (0x85, 6, 79),  # pause, SMART, exit baseline
+                (0x85, 6, 79),
+                (0x81, 6, 26),  # repeat and units switch do not advance
+                (0x80, 6, 26),
+                (0x81, 6, 25),
+                (0x80, 6, 25),
+                (0x85, 5, 78),
+            )
+        ]
+    )
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.001
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "learn"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "Mode recovery", CONF_BACKEND_TYPE: "fake"}
+    )
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["step_id"] == "learn_features"
+    assert MANUAL_MODE_INSTRUCTION in progress
+    mode_messages = [state for state in display if state.get("instruction") == MANUAL_MODE_INSTRUCTION]
+    assert mode_messages
+    assert {state["step_title"] for state in mode_messages} == {"Learn 1"}
+    accepted = [state for state in display if state.get("status") == "Packet accepted"]
+    assert [state["step_title"] for state in accepted] == ["Learn 1", "Learn 2", "Learn 3", "Learn 4"]
+    assert not backend.connected

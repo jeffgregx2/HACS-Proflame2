@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from proflame2_protocol.derivation import LearningRequirements, ProfileConflictError, derive_remote_profile
+from proflame2_protocol.derivation import (
+    LearningRequirements,
+    ProfileConflictError,
+    derive_remote_profile,
+    learning_command_key,
+    thermostat_mode_active,
+    validate_frame,
+)
 from proflame2_protocol.models import FireplaceFeatures, RemoteProfile
 from proflame2_protocol.packet import ProflameFrame
 
@@ -23,12 +30,15 @@ class Evidence:
     missing: tuple[str, ...] = ("No fireplace commands have been received.",)
     _candidate: RemoteProfile | None = field(default=None, init=False, repr=False)
     _basis: frozenset[tuple[int, int]] | None = field(default=None, init=False, repr=False)
+    _identity: tuple[int, bool] | None = field(default=None, init=False, repr=False)
 
-    def add(self, frame: ProflameFrame) -> None:
-        """Reject contradictions before deduplication, including unmatched commands."""
-        first = next(iter(self.frames.values()), None)
-        if first is not None and (first.serial_id != frame.serial_id or first.is_extended != frame.is_extended):
+    def validate_observation(self, frame: ProflameFrame) -> None:
+        """Validate raw evidence even when mode handling excludes it from gates."""
+        validate_frame(frame)
+        identity = (frame.serial_id, frame.is_extended)
+        if self._identity is not None and identity != self._identity:
             raise ProfileConflictError("Commands must come from one remote and one protocol format.")
+        self._identity = identity
         # Validate independently against the candidate rather than re-solving
         # every previous observation on every repeated frame in a long file.
         candidate = derive_remote_profile((frame,), self.features, requirements=SINGLE_FRAME).profile
@@ -36,7 +46,14 @@ class Evidence:
             raise ProfileConflictError("Additional commands contradict the previously derived profile.")
         if self._candidate is None:
             self._candidate = candidate
-        key = (frame.cmd1, frame.cmd2)
+
+    def add(self, frame: ProflameFrame) -> None:
+        """Reject contradictions before deduplication, including unmatched commands."""
+        self.validate_observation(frame)
+        if frame.is_extended and thermostat_mode_active(frame):
+            self.missing = ("Turn OFF thermostat and SMART mode, then send different manual commands.",)
+            return
+        key = learning_command_key(frame)
         if key not in self.frames and len(self.frames) >= 4096:
             raise ValueError("Too many different commands; input limit reached.")
         self.frames.setdefault(key, frame)

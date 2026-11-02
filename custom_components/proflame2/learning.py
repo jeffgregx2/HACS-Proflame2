@@ -12,6 +12,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -45,7 +46,14 @@ from .packet_debug import (
     async_enable_packet_debug_logging,
     get_packet_debug_logger,
 )
-from .protocol.derivation import LearningRequirements, ProfileConflictError, derive_remote_profile
+from .protocol.derivation import (
+    LearningRequirements,
+    ProfileConflictError,
+    derive_remote_profile,
+    learning_command_key,
+    thermostat_mode_active,
+    validate_frame,
+)
 from .protocol.ecc import derive_ecc_profile
 from .protocol.models import PROTOCOL_VARIANT_EXTENDED_10_WORD, FireplaceFeatures
 from .protocol.packet import ProflameFrame, ProflamePacket
@@ -75,6 +83,18 @@ ERROR_CONTRADICTORY_PROFILE = "contradictory_profile"
 ERROR_AMBIGUOUS_PROFILE = "ambiguous_profile"
 ERROR_BACKEND_UNAVAILABLE = "backend_unavailable"
 RESTORE_PROMPT_LABELS = {"restore_power_on"}
+MANUAL_MODE_INSTRUCTION = (
+    "Turn OFF thermostat and SMART mode on your remote. Press the thermostat button until both modes are off. "
+    "Learning will continue automatically. If it does not continue, press Power once after turning both modes off."
+)
+
+
+class LearningModeTransition(Enum):
+    """Mode events change instructions without completing a prompted action."""
+
+    MANUAL_REQUIRED = "manual_required"
+    MANUAL_RESTORED = "manual_restored"
+
 
 LearningBackendFactory = Callable[[str], RFBackend | Awaitable[RFBackend]]
 
@@ -163,6 +183,10 @@ class LearnSession:
     controller_lease: ControllerArbiter | None = None
     controller_lease_owner: object | None = None
     suspended_runtimes: list = field(default_factory=list)
+    waiting_for_manual: bool = False
+    last_manual_command: tuple[int, int] | None = None
+    extended_protocol: bool | None = None
+    diagnostic_capture: bool = False
 
 
 @dataclass(frozen=True)
@@ -463,7 +487,9 @@ def _seed_fake_learning_packets(backend: FakeRFBackend) -> None:
     )
 
 
-async def async_capture_next_learning_packet(session: LearnSession) -> ProflamePacket | LearnResult:
+async def async_capture_next_learning_packet(
+    session: LearnSession,
+) -> ProflamePacket | LearnResult | LearningModeTransition:
     """Capture the next distinct packet for one guided-learning prompt.
 
     The timeout applies only to the current prompted action. A slow but active
@@ -481,10 +507,15 @@ async def async_capture_next_learning_packet(session: LearnSession) -> ProflameP
             _record_no_learning_packet(session, receive_timeout)
             continue
 
-        _record_learning_packet_observed(session, receive_timeout, packet)
-        remote_failure = _ensure_learning_remote_id(session, receive_timeout, packet)
-        if remote_failure is not None:
-            return remote_failure
+        failure = _validate_learning_observation(session, receive_timeout, packet)
+        if failure is not None:
+            return failure
+
+        if packet.frame.is_extended and not session.diagnostic_capture:
+            result = await _capture_extended_manual_action(session, receive_timeout, packet)
+            if result is not None:
+                return result
+            continue
 
         frame_key = _learning_frame_key(packet)
         if frame_key in session._seen_frames:
@@ -497,6 +528,63 @@ async def async_capture_next_learning_packet(session: LearnSession) -> ProflameP
         return await _accept_distinct_learning_packet(session, receive_timeout, packet, frame_key)
 
     return await _finish_learning_prompt_timeout(session)
+
+
+def _validate_learning_observation(
+    session: LearnSession, receive_timeout: float, packet: ProflamePacket
+) -> LearnResult | None:
+    """Check original bytes and identity before allowing mode or command changes."""
+    try:
+        validate_frame(packet.frame)
+    except ProfileConflictError as exc:
+        return LearnResult(success=False, error_code=ERROR_CONTRADICTORY_PROFILE, error=str(exc))
+    _record_learning_packet_observed(session, receive_timeout, packet)
+    remote_failure = _ensure_learning_remote_id(session, receive_timeout, packet)
+    if remote_failure is not None:
+        return remote_failure
+    if session.extended_protocol is None:
+        session.extended_protocol = packet.frame.is_extended
+    elif session.extended_protocol != packet.frame.is_extended:
+        return LearnResult(
+            success=False,
+            error_code=ERROR_CONTRADICTORY_PROFILE,
+            error="Commands must come from one remote and one protocol format.",
+        )
+    return None
+
+
+async def _capture_extended_manual_action(
+    session: LearnSession, receive_timeout: float, packet: ProflamePacket
+) -> ProflamePacket | LearningModeTransition | None:
+    """Separate mode events and unchanged telemetry from prompted commands."""
+    transition = _observe_extended_learning_mode(session, packet)
+    if transition is not None:
+        return transition
+    if session.waiting_for_manual:
+        return None
+    command = learning_command_key(packet.frame)
+    if command == session.last_manual_command:
+        _log_learning_receive_heartbeat(
+            session, outcome="unchanged_manual_command", receive_timeout=receive_timeout, packet=packet
+        )
+        return None
+    session.last_manual_command = command
+    # A restore may return to an earlier command, provided the latest controls
+    # changed. Keep raw frames, rather than normalized copies, as evidence.
+    return await _accept_distinct_learning_packet(session, receive_timeout, packet, _learning_frame_key(packet))
+
+
+def _observe_extended_learning_mode(session: LearnSession, packet: ProflamePacket) -> LearningModeTransition | None:
+    """Observe validated mode changes before duplicate or action acceptance."""
+    if thermostat_mode_active(packet.frame):
+        if not session.waiting_for_manual:
+            session.waiting_for_manual = True
+            return LearningModeTransition.MANUAL_REQUIRED
+    elif session.waiting_for_manual:
+        session.waiting_for_manual = False
+        session.last_manual_command = learning_command_key(packet.frame)
+        return LearningModeTransition.MANUAL_RESTORED
+    return None
 
 
 def _start_learning_prompt_wait(session: LearnSession) -> _LearningPromptContext:
@@ -819,7 +907,11 @@ def _build_prompt_timeout_result(session: LearnSession) -> LearnResult:
         valid_packets=session.valid_packets,
         warnings=session.warnings,
         error_code=ERROR_TIMEOUT,
-        error="Timed out waiting for the requested remote action before learning could continue.",
+        error=(
+            "Timed out waiting for thermostat and SMART mode to turn off. Turn both modes off before trying again."
+            if session.waiting_for_manual
+            else "Timed out waiting for the requested remote action before learning could continue."
+        ),
     )
 
 

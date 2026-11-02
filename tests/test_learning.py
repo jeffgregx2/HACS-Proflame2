@@ -138,7 +138,7 @@ def test_guided_learning_derives_extended_manual_profile() -> None:
         "remote_id": 0x08E905,
         "protocol_variant": PROTOCOL_VARIANT_EXTENDED_10_WORD,
         "extended_w4_base": 0x80,
-        "extended_w6": 0x15,
+        "extended_w6": 20,
         "extended_w7": 0xC8,
         "extended_w8": 0x00,
     }
@@ -179,7 +179,7 @@ def test_extended_learning_rejects_inconsistent_fixed_template_fields() -> None:
     session.packets = [
         _extended_packet(cmd1=0x81, cmd2=0x06, w6=0x15),
         _extended_packet(cmd1=0x80, cmd2=0x06, w6=0x15),
-        _extended_packet(cmd1=0x81, cmd2=0x05, w6=0x16),
+        _extended_packet(cmd1=0x89, cmd2=0x05, w6=0x16),
     ]
     session.valid_packets = len(session.packets)
     session.packets_seen = len(session.packets)
@@ -790,3 +790,78 @@ def test_learning_backend_failure_result_includes_exception_class() -> None:
         assert result.error == "RuntimeError: backend exploded"
 
     asyncio.run(_run())
+
+
+async def test_extended_thermostat_is_not_a_completed_action():
+    backend = FakeRFBackend()
+    await backend.connect()
+    backend.queue_packets(_extended_packet(cmd1=0x86, cmd2=0x00))
+    session = LearnSession(backend=backend, step_timeout=0.1, receive_timeout=0.01)
+    result = await async_capture_next_learning_packet(session)
+    assert not isinstance(result, ProflamePacket)
+    assert not session.packets
+
+
+@pytest.mark.parametrize("manual_mode", [0x80, 0x81])
+async def test_extended_learning_resumes_without_counting_mode_exit(manual_mode):
+    from custom_components.proflame2.learning import LearningModeTransition
+
+    backend = FakeRFBackend()
+    await backend.connect()
+    session = LearnSession(backend=backend, step_timeout=0.05, receive_timeout=0.001)
+    initial = _extended_packet(cmd1=0x85, cmd2=6, w6=79, w7=255, w8=2)
+    backend.queue_packets(initial)
+    assert await async_capture_next_learning_packet(session) == initial
+    backend.queue_packets(_extended_packet(cmd1=0x86, cmd2=0))
+    assert await async_capture_next_learning_packet(session) is LearningModeTransition.MANUAL_REQUIRED
+    backend.queue_packets(_extended_packet(cmd1=0x87, cmd2=0), _extended_packet(cmd1=manual_mode, cmd2=6))
+    assert await async_capture_next_learning_packet(session) is LearningModeTransition.MANUAL_RESTORED
+    assert session.packets == [initial]
+    # Both an exact delayed repeat and a units/temperature-only change must be
+    # ignored, including for restore prompts. Only the last command changes controls.
+    session.prompt_label = "restore_power_on"
+    backend.queue_packets(
+        _extended_packet(cmd1=manual_mode, cmd2=6),
+        _extended_packet(cmd1=manual_mode | 4, cmd2=6, w6=78, w7=0, w8=3),
+        _extended_packet(cmd1=0x81, cmd2=5),
+    )
+    packet = await async_capture_next_learning_packet(session)
+    assert packet.frame.cmd2 == 5
+    assert len(session.packets) == 2
+    assert not session.waiting_for_manual
+    await backend.close()
+
+
+async def test_extended_mode_wait_timeout_is_specific_and_bounded():
+    from custom_components.proflame2.learning import LearningModeTransition
+
+    backend = FakeRFBackend()
+    await backend.connect()
+    session = LearnSession(backend=backend, step_timeout=0.02, receive_timeout=0.001)
+    backend.queue_packets(_extended_packet(cmd1=0x86, cmd2=0))
+    assert await async_capture_next_learning_packet(session) is LearningModeTransition.MANUAL_REQUIRED
+    backend.queue_packets(*[_extended_packet(cmd1=0x87, cmd2=0)] * 20)
+    result = await async_capture_next_learning_packet(session)
+    assert result.error_code == ERROR_TIMEOUT
+    assert "thermostat and SMART" in result.error
+    assert not session.packets
+    await backend.close()
+
+
+async def test_invalid_original_frame_cannot_release_manual_mode_wait():
+    from dataclasses import replace
+
+    from custom_components.proflame2.learning import LearningModeTransition
+
+    backend = FakeRFBackend()
+    await backend.connect()
+    session = LearnSession(backend=backend, step_timeout=0.05, receive_timeout=0.001)
+    backend.queue_packets(_extended_packet(cmd1=0x86, cmd2=0))
+    assert await async_capture_next_learning_packet(session) is LearningModeTransition.MANUAL_REQUIRED
+    valid = _extended_packet(cmd1=0x81, cmd2=5)
+    backend.queue_packets(ProflamePacket.from_frame(replace(valid.frame, err2=valid.frame.err2 ^ 1)))
+    result = await async_capture_next_learning_packet(session)
+    assert result.error_code == ERROR_CONTRADICTORY_PROFILE
+    assert session.waiting_for_manual
+    assert not session.packets
+    await backend.close()
