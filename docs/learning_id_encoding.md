@@ -80,8 +80,16 @@ decoded body including checksum is nine bytes.
 The payload is seven bytes; the full decoded body including checksum is eleven
 bytes. Live power, thermostat, and light bits are removed from W4. W5 comes from
 the requested command; W9/W10 are recomputed using the remote ID and command and
-template words. Legacy C/D constants are unused for extended profiles. W7 is a
-stored manual-transmit template value, not a current sensor reading.
+template words. Legacy C/D constants are unused for extended profiles. W4 bit 2
+is retained in the mask and selects Fahrenheit (1) or Celsius (0). W6 is a
+whole-degree setpoint in that scale; W8:W7 is room temperature in tenths of the
+same scale, with W8 the high byte. The stored W7/W8 pair is a manual-transmit
+template value, not a current sensor reading. Preserve all template bytes on
+import; these field interpretations do not change the Learning ID format.
+
+See the [extended protocol temperature mapping](issue_15_extended_protocol_design.md#temperature-fields-and-units)
+for capture evidence and the distinction between received telemetry and the
+temperature values used when deriving new manual profiles.
 
 ### Checksum
 

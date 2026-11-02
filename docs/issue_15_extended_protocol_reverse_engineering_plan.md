@@ -1,5 +1,16 @@
 # Issue 15 Extended Protocol Reverse-Engineering Plan
 
+## Temperature mapping update
+
+The [controlled unit-switch captures in Issue #32](https://github.com/jeffgregx2/HACS-Proflame2/issues/32#issuecomment-6566490137)
+resolve the earlier W7/W8 hypotheses below: W4 bit 2 selects Fahrenheit (1) or
+Celsius (0), W6 is the whole-degree setpoint, and `(W8 << 8) | W7` is room
+temperature in tenths of the selected scale. W8 is not reserved or a fixed
+remote characteristic. W4 bit 3 remains unknown. See the
+[current field mapping](issue_15_extended_protocol_design.md#temperature-fields-and-units).
+The dated observations and original investigation tasks below are retained as
+the historical record; their earlier uncertainty does not override this mapping.
+
 ## Purpose
 
 This is the durable engineering plan for the SIT TMFSLA / `T99058402300`
