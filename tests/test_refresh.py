@@ -546,3 +546,21 @@ async def test_display_sync_is_not_rf_activity(hass, clock):
     await services.async_sync_runtime_rx_policy(runtime)
     assert runtime.refresh_schedule.activity_deadline == 10600
     assert not runtime.backend.sent_packets
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_refresh_of_observed_zero_obeys_permission_without_igniting(hass, clock, enabled):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+
+    entry, runtime = await setup(hass, options={CONF_ALLOW_FLAME_OFF_WHEN_ON: enabled})
+    state = FireplaceState(True, flame=0, fan=3, light=2)
+    packet = encode_packet(state, runtime.remote_profile, allow_flame_off_when_on=True)
+    await services.async_apply_observed_packet(hass, runtime, packet)
+    clock.now = runtime.refresh_schedule.deadline
+    await services.async_request_refresh(hass, runtime)
+    if enabled:
+        assert len(runtime.backend.sent_packets) == 1
+        assert runtime.backend.sent_packets[0].state == state
+    else:
+        assert runtime.backend.sent_packets == []
+    assert runtime.last_packet.state == state

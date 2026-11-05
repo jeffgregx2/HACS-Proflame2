@@ -47,6 +47,7 @@ CONF_LEARNING_DEBUG_LOGGING = "learning_debug_logging"
 CONF_YARDSTICK_LEARNING_FREQUENCY_HZ = "yardstick_learning_frequency_hz"
 CONF_YARDSTICK_LEARNING_SWEEP_ENABLED = "yardstick_learning_sweep_enabled"
 CONF_ACTIVE_LISTENING = "active_listening"
+CONF_ALLOW_FLAME_OFF_WHEN_ON = "allow_flame_off_when_on"
 CONF_REFRESH_PERIOD_MINUTES = "refresh_period_minutes"
 DEFAULT_REFRESH_PERIOD_MINUTES = 0
 CONF_INITIAL_FRAME = "initial_frame"

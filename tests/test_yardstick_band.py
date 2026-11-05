@@ -191,6 +191,10 @@ async def test_manual_setup_stores_band_and_needs_no_separate_controller_setup(h
     )
     assert result["step_id"] == "yardstick_band"
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_RF_BAND: "433"})
+    assert result["step_id"] == "manual_features"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "optional_settings"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_RF_BAND] == "433"
     await hass.async_block_till_done()
@@ -208,7 +212,9 @@ async def test_feature_options_reload_preserves_controller_band_and_entity_ids(h
     before_devices = {item.id for item in dr.async_entries_for_config_entry(devices, config.entry_id)}
     options = await hass.config_entries.options.async_init(config.entry_id)
     options = await hass.config_entries.options.async_configure(options["flow_id"], {"next_step_id": "features"})
-    await hass.config_entries.options.async_configure(options["flow_id"], {"fan": False})
+    options = await hass.config_entries.options.async_configure(options["flow_id"], {"fan": False})
+    assert options["step_id"] == "optional_settings"
+    await hass.config_entries.options.async_configure(options["flow_id"], {})
     await hass.async_block_till_done()
     assert config.data[CONF_RF_BAND] == "433"
     after = {item.unique_id: item.entity_id for item in er.async_entries_for_config_entry(entities, config.entry_id)}

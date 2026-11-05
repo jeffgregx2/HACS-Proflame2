@@ -140,6 +140,8 @@ async def test_installed_helper_id_imports_into_ha_and_preserves_manual_encoding
     )
     assert flow["step_id"] == "manual_features"
     flow = await hass.config_entries.flow.async_configure(flow["flow_id"], asdict(profile.features))
+    assert flow["step_id"] == "optional_settings"
+    flow = await hass.config_entries.flow.async_configure(flow["flow_id"], {})
     assert flow["type"] is FlowResultType.CREATE_ENTRY
     assert CONF_LEARNING_ID not in flow["data"]
     await hass.async_block_till_done()

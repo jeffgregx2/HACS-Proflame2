@@ -865,3 +865,30 @@ async def test_invalid_original_frame_cannot_release_manual_mode_wait():
     assert session.waiting_for_manual
     assert not session.packets
     await backend.close()
+
+
+def test_learning_accepts_manual_flame_zero_without_granting_transmit_permission():
+    """Recorded command pairs with synthetic identity remain valid learning input."""
+
+    async def run():
+        backend = FakeRFBackend()
+        await backend.connect()
+        packets = (
+            _packet(remote_id=0x123456, cmd1=0xE1, err1=0xDD, cmd2=0x39, err2=0x10),
+            _packet(remote_id=0x123456, cmd1=0xE1, err1=0xDD, cmd2=0x38, err2=0x31),
+            _packet(remote_id=0x123456, cmd1=0xA1, err1=0x19, cmd2=0x38, err2=0x31),
+        )
+        backend.queue_packets(*packets)
+        result = await async_learn_remote_profile(backend, timeout=0.2, receive_timeout=0.01)
+        assert result.success is True
+        assert (result.c1, result.d1, result.c2, result.d2) == (13, 2, 6, 10)
+        session = LearnSession(backend=backend, step_timeout=1, receive_timeout=0.1)
+        session.remote_id = 0x123456
+        session.packets = list(packets)
+        session.valid_packets = session.packets_seen = len(packets)
+        guided = derive_learn_result_from_session(session)
+        assert guided is not None and guided.success
+        assert guided.final_packet.state.power and guided.final_packet.state.flame == 0
+        assert backend.sent_packets == []  # Learning restoration observes remote actions.
+
+    asyncio.run(run())

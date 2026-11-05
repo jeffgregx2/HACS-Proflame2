@@ -1258,6 +1258,194 @@ async def test_active_listener_retries_when_linked_esphome_not_ready(hass) -> No
         await runtime_entry.active_listener_task
 
 
+async def _wait_for_listener_condition(predicate, *, timeout=0.5):
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.001)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["runtime_not_ready", "missing_action", "disconnected", "timeout", "offline_after_connect", "replaced_runtime"],
+)
+async def test_active_listener_recovers_real_transport_and_receives_without_user_action(hass, monkeypatch, failure):
+    from custom_components.proflame2 import services
+    from custom_components.proflame2.const import DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS
+    from custom_components.proflame2.protocol.encoder import encode_state
+    from custom_components.proflame2.protocol.models import FireplaceState
+    from custom_components.proflame2.rf.capture import frame_to_air_bytes
+    from custom_components.proflame2.runtime import async_unload_runtime_entry
+
+    # Use real transport/backend setup and real RX event delivery, not a mocked
+    # success response. Nothing calls the send path or periodic display sync.
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_INITIAL_SECONDS", 0.001, raising=False)
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_MAX_SECONDS", 0.004, raising=False)
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS] = 0.01
+    native = _fake_esphome_runtime_data()
+    linked = _add_linked_esphome_entry(hass, native)
+    device_id = _add_linked_esphome_device(hass, linked, identifier=("esphome", "listener-test"))
+    entry = _add_entry(hass, options={CONF_ESPHOME_ENTRY_ID: linked.entry_id, CONF_ACTIVE_LISTENING: True})
+    runtime = await async_setup_runtime_entry(hass, entry)
+    expected_services = dict(native.services)
+    if failure in {"offline_after_connect", "replaced_runtime"}:
+        await runtime.backend.connect()
+        native.active_listening_enabled = False
+    if failure == "runtime_not_ready":
+        linked.runtime_data = None
+    elif failure == "missing_action":
+        native.services = {}
+    elif failure == "disconnected":
+        native.client.execute_error = "Not connected to test-controller"
+    elif failure == "offline_after_connect":
+        native.available = False
+        native.client.execute_error = "Not connected to test-controller"
+    elif failure == "replaced_runtime":
+        native = _fake_esphome_runtime_data()
+        expected_services = dict(native.services)
+        native.services = {}
+        linked.runtime_data = native
+    else:
+        from unittest.mock import AsyncMock
+
+        original = native.client.execute_service
+        native.client.execute_service = AsyncMock(side_effect=TimeoutError("API timed out"))
+
+    attempts = 0
+    original_connect = runtime.backend.connect
+
+    async def counted_connect():
+        nonlocal attempts
+        attempts += 1
+        await original_connect()
+
+    monkeypatch.setattr(runtime.backend, "connect", counted_connect)
+    try:
+        await async_start_active_listener(hass, runtime)
+        await _wait_for_listener_condition(lambda: attempts >= 3)
+        task = runtime.active_listener_task
+        assert task is not None and not task.done()
+        linked.runtime_data = native
+        native.available = True
+        native.services = expected_services
+        native.client.execute_error = None
+        if failure == "timeout":
+            native.client.execute_service = original
+        await _wait_for_listener_condition(lambda: runtime.backend.connected)
+        assert native.active_listening_enabled
+        frame = encode_state(FireplaceState(True, flame=3, fan=2, light=4), runtime.remote_profile)
+        hass.bus.async_fire(
+            ESPHOME_RX_EVENT_TYPE,
+            {
+                ATTR_DEVICE_ID: device_id,
+                "schema_version": "2",
+                "protocol": "proflame2",
+                "event_kind": "pulse_capture",
+                "payload_hex": frame_to_air_bytes(frame).hex(),
+                # Match the supported RMT final-low-guard truncation. A bare
+                # 182-bit legacy body lacks the full-frame separator evidence.
+                "pcm_bit_length": "181",
+                "packet_count": "1",
+            },
+        )
+        await _wait_for_listener_condition(lambda: runtime.last_observed_packet is not None)
+        assert runtime.last_observed_packet.frame == frame
+        assert runtime.active_listener_task is task
+        assert all(name != "proflame2_tx_stateful" for name, _ in native.client.calls)
+        assert runtime.control_task is None
+    finally:
+        await async_unload_runtime_entry(hass, entry)
+
+
+@pytest.mark.parametrize("error", [RuntimeError("Not connected"), ValueError("Invalid received frame")])
+async def test_active_listener_recovers_from_receive_errors_after_start(hass, monkeypatch, caplog, error):
+    from custom_components.proflame2 import services
+    from custom_components.proflame2.protocol.encoder import encode_packet
+    from custom_components.proflame2.protocol.models import FireplaceState
+    from custom_components.proflame2.runtime import async_unload_runtime_entry
+
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_INITIAL_SECONDS", 0.001, raising=False)
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_MAX_SECONDS", 0.004, raising=False)
+    _install_mock_esphome_transport(hass, MockESPHomeTransport())
+    entry = _add_entry(hass, options={CONF_ACTIVE_LISTENING: True})
+    runtime = await async_setup_runtime_entry(hass, entry)
+    first = encode_packet(FireplaceState(True, flame=2), runtime.remote_profile)
+    last = encode_packet(FireplaceState(True, flame=4), runtime.remote_profile)
+    received = asyncio.Queue()
+    received.put_nowait(first)
+    for _ in range(5):
+        received.put_nowait(error)
+    received.put_nowait(last)
+
+    class Backend:
+        connected = True
+
+        async def receive(self, **kwargs):
+            item = await received.get()
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        async def close(self, **kwargs):
+            pass
+
+    runtime.backend = Backend()
+    try:
+        await async_start_active_listener(hass, runtime)
+        task = runtime.active_listener_task
+        await async_start_active_listener(hass, runtime)
+        assert runtime.active_listener_task is task
+        await _wait_for_listener_condition(lambda: runtime.last_observed_packet is last)
+        assert runtime.active_listener_task is task and not task.done()
+        assert len([r for r in caplog.records if "active listening interrupted" in r.getMessage()]) == 1
+    finally:
+        await async_unload_runtime_entry(hass, entry)
+
+
+@pytest.mark.parametrize("stop", ["disabled", "shutdown", "backend_removed", "unload"])
+async def test_active_listener_stops_intentionally_during_retry(hass, monkeypatch, stop):
+    from custom_components.proflame2 import services
+    from custom_components.proflame2.runtime import async_unload_runtime_entry
+
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_INITIAL_SECONDS", 0.001, raising=False)
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_MAX_SECONDS", 0.002, raising=False)
+    _install_mock_esphome_transport(hass, MockESPHomeTransport())
+    entry = _add_entry(hass, options={CONF_ACTIVE_LISTENING: True})
+    runtime = await async_setup_runtime_entry(hass, entry)
+
+    class Backend:
+        calls = 0
+
+        async def receive(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("Linked ESPHome entry does not expose action 'proflame2_tx_stateful'")
+
+        async def close(self, **kwargs):
+            pass
+
+    backend = Backend()
+    runtime.backend = backend
+    try:
+        await async_start_active_listener(hass, runtime)
+        task = runtime.active_listener_task
+        await _wait_for_listener_condition(lambda: backend.calls >= 3)
+        if stop == "disabled":
+            runtime.active_listening_enabled = False
+        elif stop == "shutdown":
+            runtime.shutting_down = True
+        elif stop == "backend_removed":
+            runtime.backend = None
+        else:
+            await async_unload_runtime_entry(hass, entry)
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.5)
+        assert runtime.active_listener_task is None
+        count = backend.calls
+        await asyncio.sleep(0.01)
+        assert backend.calls == count
+    finally:
+        await async_unload_runtime_entry(hass, entry)
+
+
 async def test_esphome_runtime_can_link_later_when_controller_device_appears(hass) -> None:
     linked_entry = _add_linked_esphome_entry(hass, _fake_esphome_runtime_data())
     entry = _add_entry(

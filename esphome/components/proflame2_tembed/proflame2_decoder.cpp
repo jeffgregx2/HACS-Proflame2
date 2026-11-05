@@ -140,22 +140,12 @@ bool same_frame(const CandidateFrame& left, const CandidateFrame& right) {
          left.cmd2 == right.cmd2 && left.err2 == right.err2;
 }
 
-bool observed_state_valid(uint8_t cmd1, uint8_t cmd2) {
-  const bool power = (cmd1 & 0x01U) != 0U;
-  const bool thermostat = (cmd1 & 0x02U) != 0U;
-  const uint8_t light = static_cast<uint8_t>((cmd1 >> 4U) & 0x07U);
+bool observed_state_valid(uint8_t /*cmd1*/, uint8_t cmd2) {
   const uint8_t flame = static_cast<uint8_t>(cmd2 & 0x07U);
   const uint8_t fan = static_cast<uint8_t>((cmd2 >> 4U) & 0x07U);
-  if (light > 7U || fan > 6U) {
-    return false;
-  }
-  if (!power) {
-    return flame <= 6U;
-  }
-  if (thermostat) {
-    return flame <= 6U;
-  }
-  return flame >= 1U && flame <= 6U;
+  // Manual remotes can keep power ON with the main burner OFF. Receive
+  // validation reports that state independently of HA's transmit permission.
+  return flame <= 6U && fan <= 6U;
 }
 
 void copy_frame_to_decoded(const CandidateFrame& frame, Proflame2DecodedPacket* decoded) {

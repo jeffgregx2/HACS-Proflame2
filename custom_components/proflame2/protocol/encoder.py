@@ -34,10 +34,14 @@ def encode_state(
     profile: RemoteProfile,
     *,
     allow_power_off_flame: bool = False,
+    allow_flame_off_when_on: bool = False,
 ) -> ProflameFrame:
     """Encode a full-state fireplace command into a deterministic frame."""
 
-    state.validate_transmit(allow_power_off_flame=allow_power_off_flame)
+    state.validate_transmit(
+        allow_power_off_flame=allow_power_off_flame,
+        allow_flame_off_when_on=allow_flame_off_when_on,
+    )
     cmd1 = build_cmd1(state)
     cmd2 = build_cmd2(state)
 
@@ -72,6 +76,7 @@ def encode_packet(
     source: str | None = None,
     warnings: tuple[str, ...] | list[str] | None = None,
     allow_power_off_flame: bool = False,
+    allow_flame_off_when_on: bool = False,
 ) -> ProflamePacket:
     """Encode a semantic fireplace state into an operational packet."""
 
@@ -79,6 +84,7 @@ def encode_packet(
         state,
         profile,
         allow_power_off_flame=allow_power_off_flame,
+        allow_flame_off_when_on=allow_flame_off_when_on,
     )
     return ProflamePacket(
         remote_id=profile.serial_id,

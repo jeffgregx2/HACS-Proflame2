@@ -38,7 +38,7 @@ learning-id-package-test:
 	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/learning_id/test_archive.sh $(if $(ARCHIVE),--archive "$(ARCHIVE)",)
 
 firmware-unit-test:
-	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/run_tests.sh $(PYTEST_ARGS) tests/test_esphome_cpp_unit.py tests/test_radio_register_trace.py
+	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/run_tests.sh $(PYTEST_ARGS) tests/test_esphome_cpp_unit.py tests/test_radio_register_trace.py tests/test_issue33_flame_zero.py
 
 lint-python:
 	$(RUFF) check custom_components tools tests

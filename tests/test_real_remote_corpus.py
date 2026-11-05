@@ -157,9 +157,12 @@ def test_extended_flame_zero_does_not_rewrite_native_power_bit(thermostat: bool)
         encode_state(state, _profile(frame))
 
 
-def test_legacy_power_on_flame_zero_is_still_rejected() -> None:
+def test_legacy_power_on_flame_zero_is_observed_but_transmit_is_opt_in() -> None:
+    state = state_from_frame(ProflameFrame(0x3B3F02, 1, 0x76, 0, 0x18))
+    assert state.power is True and state.flame == 0
     with pytest.raises(ValueError, match="Flame must be between 1 and 6"):
-        state_from_frame(ProflameFrame(0x3B3F02, 1, 0x76, 0, 0x18))
+        state.validate_transmit()
+    state.validate_transmit(allow_flame_off_when_on=True)
 
 
 def test_corpus_accounts_for_all_four_real_remotes() -> None:

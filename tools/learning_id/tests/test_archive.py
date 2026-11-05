@@ -341,3 +341,41 @@ def test_release_builder_requires_clean_known_source(tmp_path):
     with zipfile.ZipFile(tmp_path / "development/proflame2-learning-id.pyz") as archive:
         assert json.loads(archive.read("proflame2_learning_id/BUILD_INFO.json"))["source_dirty"] is True
         assert "Synthetic uncommitted test change" in archive.read("proflame2_learning_id/cli.py").decode()
+
+
+def test_archive_accepts_manual_flame_zero_commands_without_ha(tmp_path):
+    # Original command/Err evidence, paired with an explicit synthetic identity.
+    pairs = [
+        (0xE1, 0xDD, 0x39, 0x10),
+        (0xE1, 0xDD, 0x38, 0x31),
+        (0xA1, 0x19, 0x38, 0x31),
+        (0xE1, 0xDD, 0x68, 0xC4),
+        (0xA1, 0x19, 0x68, 0xC4),
+    ]
+    records = []
+    for cmd1, err1, cmd2, err2 in pairs:
+        row = {
+            "model": "Proflame2-Remote",
+            "protocol_variant": "legacy_7_word",
+            "raw_words": bytes((0x12, 0x34, 0x56, cmd1, cmd2, err1, err2)).hex(),
+        }
+        records.extend((row, row.copy()))
+    data = "\n".join(map(json.dumps, records)) + "\n"
+    result = run("--input-mode", "file", "--unguided", data=data, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("PF2-1-L-") and len(result.stdout.splitlines()) == 1
+    assert "Confirmed" in result.stderr
+    decoded = subprocess.run(
+        [
+            PYTHON,
+            "-I",
+            "-c",
+            "import sys;sys.path.insert(0,sys.argv[1]);from proflame2_protocol.packet import ProflameFrame,state_from_frame;state=state_from_frame(ProflameFrame(0x123456,0xE1,0xDD,0x38,0x31));assert state.power and state.flame==0 and state.light==6 and state.fan==3",
+            ARCHIVE,
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert decoded.returncode == 0, decoded.stderr

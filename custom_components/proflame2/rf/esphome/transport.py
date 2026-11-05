@@ -100,6 +100,7 @@ ESPHOME_TX_REPEAT_COUNT_ENTITY_OBJECT_ID = "proflame2_tx_repeat_count"
 ESPHOME_LAST_REQUEST_REPEAT_COUNT_ENTITY_OBJECT_ID = "proflame2_last_request_repeat_count"
 ESPHOME_LAST_TX_ELAPSED_MS_ENTITY_OBJECT_ID = "proflame2_last_tx_elapsed_ms"
 ESPHOME_FIRMWARE_PROTOCOL_VERSION_ENTITY_OBJECT_ID = "proflame2_firmware_protocol_version"
+ESPHOME_FIRMWARE_VERSION_ENTITY_OBJECT_ID = "proflame2_firmware_version"
 ESPHOME_CONFIG_REVISION_ENTITY_OBJECT_ID = "proflame2_config_revision"
 ESPHOME_LAST_PAYLOAD_HEX_ENTITY_OBJECT_ID = "proflame2_last_payload_hex"
 ESPHOME_LAST_MARCSTATE_BEFORE_TX_ENTITY_OBJECT_ID = "proflame2_last_marcstate_before_tx"
@@ -200,6 +201,7 @@ class _TelemetrySnapshot:
     tx_success_count: int = 0
     tx_failure_count: int = 0
     firmware_protocol_version: int | None = None
+    proflame2_firmware_version: str | None = None
     config_revision: int | None = None
     rx_packet_count: int = 0
     rx_dropped_packet_count: int = 0
@@ -607,6 +609,14 @@ class HomeAssistantESPHomeTransport:
     async def receive_rx_event(self, timeout: float | None = None) -> ESPHomeRXEvent | None:
         if not self.connected or not self.configured or not self._rx_event_transport_ready:
             return None
+        entry = self.hass.config_entries.async_get_entry(self.linked_entry_id)
+        current_runtime = getattr(entry, "runtime_data", None)
+        if current_runtime is not self._runtime_data or not getattr(current_runtime, "available", False):
+            # Cached action/state objects are not evidence of a live connection.
+            # Let the owning RX loop reconnect and reapply policy to the current
+            # runtime rather than silently polling an obsolete queue forever.
+            self.connected = False
+            raise RuntimeError("Linked ESPHome runtime is unavailable or changed; reconnect required.")
         try:
             if timeout is None:
                 return await self._rx_queue.get()
@@ -726,8 +736,25 @@ class HomeAssistantESPHomeTransport:
                 raise RuntimeError("ESPHome TX action executed but endpoint telemetry did not confirm the request.")
             await asyncio.sleep(self.poll_interval_seconds)
 
-    def _collect_snapshot(self) -> _TelemetrySnapshot:
-        runtime_data = self._runtime_data
+    def proflame2_firmware_version(self) -> str | None:
+        """Read live release telemetry without requiring a working action API.
+
+        A disconnected endpoint's stored value is not proof of its current
+        firmware. Resolve fresh runtime data after reconnect instead of using
+        this transport's last connected runtime or ESPHome's compiler version.
+        """
+        entry = self.hass.config_entries.async_get_entry(self.linked_entry_id)
+        runtime_data = getattr(entry, "runtime_data", None)
+        if runtime_data is None or not getattr(runtime_data, "available", False):
+            return None
+        value = self._collect_snapshot(runtime_data).proflame2_firmware_version
+        if value is None or value.strip().lower() in {"", "unknown", "unavailable"}:
+            return None
+        return " ".join(value.split())
+
+    def _collect_snapshot(self, runtime_data: Any | None = None) -> _TelemetrySnapshot:
+        if runtime_data is None:
+            runtime_data = self._runtime_data
         if runtime_data is None:
             return _TelemetrySnapshot()
 
@@ -789,6 +816,7 @@ class HomeAssistantESPHomeTransport:
             rx_transport_unavailable_count=int_value(ESPHOME_RX_TRANSPORT_UNAVAILABLE_COUNT_ENTITY_OBJECT_ID) or 0,
             rx_last_rejection_snapshot=text_value(ESPHOME_RX_LAST_REJECTION_SNAPSHOT_ENTITY_OBJECT_ID),
             firmware_protocol_version=int_value(ESPHOME_FIRMWARE_PROTOCOL_VERSION_ENTITY_OBJECT_ID),
+            proflame2_firmware_version=text_value(ESPHOME_FIRMWARE_VERSION_ENTITY_OBJECT_ID),
             config_revision=int_value(ESPHOME_CONFIG_REVISION_ENTITY_OBJECT_ID),
         )
 

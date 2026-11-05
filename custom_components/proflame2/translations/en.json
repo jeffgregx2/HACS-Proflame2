@@ -22,11 +22,7 @@
           "name": "Fireplace name",
           "fireplace_short_name": "Display short name",
           "backend_type": "Controller Type",
-          "learning_id": "Learning ID",
-          "refresh_period_minutes": "Refresh period in minutes"
-        },
-        "data_description": {
-          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF."
+          "learning_id": "Learning ID"
         }
       },
       "manual_legacy": {
@@ -40,34 +36,18 @@
           "c1": "C1",
           "d1": "D1",
           "c2": "C2",
-          "d2": "D2",
-          "fan": "Fan supported",
-          "light": "Light supported",
-          "front": "Front burner supported",
-          "aux": "Aux supported",
-          "cpi": "CPI supported",
-          "refresh_period_minutes": "Refresh period in minutes"
-        },
-        "data_description": {
-          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF."
+          "d2": "D2"
         }
       },
       "manual_features": {
-        "title": "Select supported features",
-        "description": "The Learning ID identifies your native remote. Choose the features to enable for this fireplace; these choices are not stored in the ID.",
+        "title": "Fireplace features (1 of 2)",
+        "description": "Select the features your fireplace supports. Continue to configure optional settings; changes are saved on the next page.",
         "data": {
           "fan": "Fan supported",
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported",
-          "debug_logging": "Enable debug logging",
-          "active_listening": "Enable active listening",
-          "refresh_period_minutes": "Refresh period in minutes",
-          "fireplace_short_name": "Display short name"
-        },
-        "data_description": {
-          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF."
+          "cpi": "CPI supported"
         }
       },
       "manual_esphome": {
@@ -94,21 +74,14 @@
         }
       },
       "learn_features": {
-        "title": "Select supported features",
-        "description": "Learning found the permanent remote profile. Select the fireplace features that should be enabled.",
+        "title": "Fireplace features (1 of 2)",
+        "description": "Select the features your fireplace supports. Continue to configure optional settings; changes are saved on the next page.",
         "data": {
           "fan": "Fan supported",
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log",
-          "active_listening": "Enable active listening",
-          "fireplace_short_name": "Display short name",
-          "refresh_period_minutes": "Refresh period in minutes"
-        },
-        "data_description": {
-          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF."
+          "cpi": "CPI supported"
         }
       },
       "learn_failed": {
@@ -130,6 +103,20 @@
         "description": "315 MHz is the default for most users. Choose 433 MHz only if your original remote uses 433 or 433.92 MHz.\n\nCheck the remote's identification label on the back or inside the battery cover. If the frequency is not printed, use the model/part number on that label to check the remote or fireplace manual's radio-frequency specification. Do not infer the frequency from digits in an FCC ID.\n\nLearning starts after you submit this choice. You can change it later in the fireplace device's Configuration section. One controller supports one fireplace.",
         "data": {
           "rf_band": "RF band"
+        }
+      },
+      "optional_settings": {
+        "title": "Optional settings (2 of 2)",
+        "description": "Choose optional behavior, then submit to save both pages. Leave flame OFF support disabled unless your original remote supports it.",
+        "data": {
+          "refresh_period_minutes": "Refresh period in minutes",
+          "allow_flame_off_when_on": "Allow flame OFF while power is ON",
+          "active_listening": "Enable active listening",
+          "debug_logging": "Enable packet debug log"
+        },
+        "data_description": {
+          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF.",
+          "allow_flame_off_when_on": "Enable only if your original remote can turn the flame off while keeping the fireplace ON for lights or fan operation. Otherwise, leave this off."
         }
       }
     },
@@ -160,31 +147,27 @@
       "invalid_profile_name": "Profile name is required.",
       "duplicate_profile_id": "A saved profile with that name already exists.",
       "unknown_profile": "Choose an existing saved profile.",
-      "invalid_refresh_period": "Enter a non-negative whole number of minutes (0 disables refresh)."
+      "invalid_refresh_period": "Enter a non-negative whole number of minutes (0 disables refresh).",
+      "flame_zero_conflict": "Turn power OFF or select a positive flame before disabling this option. Edit or delete any saved profiles with power ON and flame 0, then try again."
     },
     "step": {
       "init": {
         "title": "Manage fireplace settings",
         "menu_options": {
-          "features": "Edit supported features",
+          "features": "Edit fireplace settings",
           "profiles": "Manage saved profiles"
         }
       },
       "features": {
-        "title": "Edit supported features",
+        "title": "Fireplace features (1 of 2)",
         "data": {
           "fan": "Fan supported",
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log",
-          "active_listening": "Enable active listening",
-          "refresh_period_minutes": "Refresh period in minutes"
+          "cpi": "CPI supported"
         },
-        "data_description": {
-          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF."
-        }
+        "description": "Select the features your fireplace supports. Continue to configure optional settings; changes are saved on the next page."
       },
       "profiles": {
         "title": "Manage saved profiles",
@@ -233,6 +216,21 @@
         "description": "Delete saved profile: {profile_name}",
         "data": {
           "confirm": "Confirm delete"
+        }
+      },
+      "optional_settings": {
+        "title": "Optional settings (2 of 2)",
+        "description": "Choose optional behavior, then submit to save both pages. Leave flame OFF support disabled unless your original remote supports it.",
+        "data": {
+          "refresh_period_minutes": "Refresh period in minutes",
+          "allow_flame_off_when_on": "Allow flame OFF while power is ON",
+          "active_listening": "Enable active listening",
+          "debug_logging": "Enable packet debug log",
+          "fireplace_short_name": "Display short name"
+        },
+        "data_description": {
+          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF.",
+          "allow_flame_off_when_on": "Enable only if your original remote can turn the flame off while keeping the fireplace ON for lights or fan operation. Otherwise, leave this off."
         }
       }
     }

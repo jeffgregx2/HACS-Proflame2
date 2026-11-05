@@ -176,6 +176,13 @@ There are three different ways you can control your fireplace from within Home A
 
 Each fireplace created by this integration includes controls for the supported fireplace settings, such as Power, Flame, Fan, and Light. When you adjust those controls, the integration briefly waits before sending the update because Proflame2 fireplaces receive a complete fireplace state rather than individual setting changes. This allows several quick adjustments to be combined into one command instead of sending multiple one-second updates to the fireplace.
 
+Some fireplaces allow the burner to turn off while lights or fan operation remain
+available. If your original remote supports this, enable **Allow flame OFF while
+power is ON** under **Edit fireplace settings → Optional settings**. Flame can
+then be set to 0 without turning power OFF. Leave this option disabled for other
+fireplaces. See the [setup guide](docs/add_fireplace_profile.md#optional-settings)
+for details and the LilyGO firmware update requirement.
+
 ### Service Interface
 
 Individual dashboard controls briefly wait before sending so multiple setting changes can be combined into one fireplace command. When an automation or script already knows the full desired fireplace state, use the `proflame2.set_state` service to send it immediately. For example:
@@ -221,7 +228,7 @@ YardStick does not currently support active listening. It can learn from the ori
 remote during setup and it can control the fireplace, but it will not keep Home
 Assistant synchronized when another remote is used later.
 
-To change the Active Listening settings, open Settings -> Devices & services -> Proflame 2 Fireplace in Home Assistant and select the Gear icon next to your existing fireplace.  Select `Edit supported features` -> `Enable active listening` and change it to the desired value.
+To change the Active Listening settings, open Settings -> Devices & services -> Proflame 2 Fireplace in Home Assistant and select the Gear icon next to your existing fireplace.  Select `Edit fireplace settings`, continue to **Optional settings**, then set `Enable active listening` to the desired value.
 
 ## Optional Inactivity Refresh
 

@@ -14,6 +14,7 @@ from custom_components.proflame2.const import (
     BACKEND_FAKE,
     BACKEND_YARDSTICK,
     CONF_ACTIVE_LISTENING,
+    CONF_ALLOW_FLAME_OFF_WHEN_ON,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -228,6 +229,7 @@ def test_normalize_manual_profile_input_splits_data_and_options() -> None:
         CONF_DEBUG_LOGGING: False,
         CONF_ACTIVE_LISTENING: False,
         CONF_REFRESH_PERIOD_MINUTES: 0,
+        CONF_ALLOW_FLAME_OFF_WHEN_ON: False,
         CONF_FIREPLACE_SHORT_NAME: "LIVING",
         CONF_PROFILES: {},
     }
@@ -392,6 +394,7 @@ def test_feature_options_default_as_expected() -> None:
         CONF_DEBUG_LOGGING: False,
         CONF_ACTIVE_LISTENING: False,
         CONF_REFRESH_PERIOD_MINUTES: 0,
+        CONF_ALLOW_FLAME_OFF_WHEN_ON: False,
         CONF_FIREPLACE_SHORT_NAME: "---",
         CONF_PROFILES: {},
     }

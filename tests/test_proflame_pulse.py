@@ -211,3 +211,20 @@ def test_esphome_pulse_event_uses_pcm_bit_length_and_preserves_extension_metadat
     assert "frame_format=extended_10_word" in candidates[0].validation_notes
     assert "extension_hex=00ec77" in candidates[0].validation_notes
     assert "extended_integrity=valid" in candidates[0].validation_notes
+
+
+def test_manual_legacy_zero_crosses_rmt_event_to_semantic_packet_boundary():
+    # Original command/Err evidence with a deliberately synthetic serial.
+    frame = ProflameFrame(serial_id=0x123456, cmd1=0xE1, err1=0xDD, cmd2=0x38, err2=0x31)
+    event = ESPHomeRXEvent(
+        event_id="synthetic-zero",
+        raw_payload=frame_to_air_bytes(frame),
+        capture_metadata={"event_kind": "pulse_capture", "pcm_bit_length": "181"},
+    )
+    candidates = ESPHomeAPIBackend()._scan_fifo_event(event)
+    assert len(candidates) == 1
+    assert candidates[0].packet.state.power
+    assert candidates[0].packet.state.flame == 0
+    assert candidates[0].packet.state.light == 6
+    assert candidates[0].packet.state.fan == 3
+    assert candidates[0].frame == frame

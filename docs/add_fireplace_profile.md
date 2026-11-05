@@ -12,7 +12,7 @@ integration.
 3. Open Settings -> Devices & services -> Proflame 2 Fireplace.
 4. Select `Add entry`.
 5. Choose how Home Assistant should learn or receive the remote profile values.
-6. Select the fireplace features your installation supports.
+6. Select the fireplace features your installation supports, then review optional settings and save.
 7. Validate basic controls from Home Assistant.
 
 The controller you choose is the device Home Assistant will use to control the
@@ -122,8 +122,10 @@ instructions.
 
 ## Select Supported Features
 
-After learning completes, Home Assistant asks which fireplace features should be
-enabled.
+Setup ends with two pages: **Fireplace features** and **Optional settings**.
+Choose the supported features first, then review optional settings and submit to
+save. Closing either page cancels without saving. The same two pages are used
+when editing fireplace settings.
 
 Individual fireplaces do not support every Proflame2 feature. Enable only the
 features your fireplace actually has. These choices control which Home Assistant
@@ -138,6 +140,14 @@ Available feature choices:
 - `Aux supported`: enable auxiliary controls for fireplaces that have an
   auxiliary output.
 - `CPI supported`: enable Continuous Pilot Ignition controls.
+
+### Optional Settings
+
+- **Allow flame OFF while power is ON**: enable only if your original remote
+  can turn the burner off while leaving the fireplace ON for lights or fan
+  operation. It is disabled by default. When enabled, Flame can be set to 0;
+  subsequent accessory adjustments keep the burner off. Normal Power ON still
+  starts at the retained flame setting or level 1.
 - `Refresh period in minutes`: send the current fireplace settings again after
   this many minutes without a command being sent or heard from the original
   remote. The default `0` turns this off. Reminders are sent only while Home
@@ -152,8 +162,21 @@ Available feature choices:
   this off unless you want Home Assistant to track changes made from the
   original remote.
 
-This screen also shows `Display short name` again so you can confirm or adjust
-the short label before the fireplace is created.
+The display short name is entered earlier during setup. You can edit it later
+on **Optional settings**.
+
+For flame-zero support, update both the integration and LilyGO firmware to a
+release containing the Issue #33 fix. Older firmware may miss remote-driven
+updates in that state. YardStick users need only the integration update.
+
+To disable flame-zero support, first turn power OFF or choose a positive flame,
+and edit or delete any saved profiles that use power ON with flame 0. Physical
+fan and pilot behavior remains controlled by your fireplace.
+
+For support captures, enable **Debug logging** from the Proflame2 integration's
+three-dot menu. The log automatically includes the integration version and, for
+LilyGO, its reported Proflame2 firmware version when available. This is separate
+from **Enable packet debug log** above and **PCM Payload Logging** on the device.
 
 ## Manual Fireplace Profile
 
@@ -201,11 +224,11 @@ choices in HA does not change the ID, and you do not need to save it again.
 Choose **Enter a Learning ID** when adding a fireplace profile, paste the complete value,
 and provide the name and controller for this installation. For LilyGO, select
 the ESPHome controller in the next step. Then choose which fireplace features
-to enable on the **Select supported features** screen.
+to enable on the **Fireplace features** page, followed by **Optional settings**.
 
 The ID restores the remote's identity, protocol, and learned transmit values.
 You select supported features during setup and can adjust them afterward using
-**Edit supported features**. The ID does not copy the current fireplace settings,
+**Edit fireplace settings**. The ID does not copy the current fireplace settings,
 controller connection, or radio band.
 Make sure the LilyGO is configured for the original remote's frequency.
 

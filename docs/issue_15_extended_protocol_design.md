@@ -1,5 +1,10 @@
 # Issue #15 Extended Protocol Beta Design
 
+For independent manual power/flame fields and the confirmed legacy power-ON,
+flame-zero sequences from Issue #33, see the
+[manual-state protocol reference](protocol_manual_state.md). Receive-state
+acceptance is separate from opt-in permission to transmit flame-zero commands.
+
 ## Scope
 
 This document specifies the beta implementation for the ten-word Proflame2

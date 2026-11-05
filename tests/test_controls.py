@@ -1521,3 +1521,145 @@ async def test_startup_restores_last_known_state_without_transmitting(hass) -> N
     assert primary.state == "On · Flame 4 · Fan 1"
     assert primary.attributes["state_confidence"] == STATE_CONFIDENCE_RESTORED
     assert primary.attributes["operational_status"] == "ready"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_observed_flame_zero_is_honest_in_number_ui_and_survives_reload(hass, enabled):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+    from custom_components.proflame2.protocol.encoder import encode_packet
+    from custom_components.proflame2.services import async_apply_observed_packet
+
+    entry = _add_entry(hass, options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: enabled})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    packet = encode_packet(
+        FireplaceState(True, flame=0, fan=3, light=2), runtime.remote_profile, allow_flame_off_when_on=True
+    )
+    await async_apply_observed_packet(hass, runtime, packet)
+    await hass.async_block_till_done()
+    number = hass.states.get(_number_entity_id(entry.title, "Flame"))
+    assert float(number.state) == 0
+    assert number.attributes["min"] == 0
+    assert runtime.backend.sent_packets == []
+    if not enabled:
+        with pytest.raises(HomeAssistantError, match="flame"):
+            await hass.services.async_call(
+                "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Light"), "value": 4}, blocking=True
+            )
+        assert runtime.backend.sent_packets == []
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    restored = async_get_runtime_entries(hass)[entry.entry_id]
+    assert runtime_current_state(restored) == packet.state
+    assert restored.allow_flame_off_when_on is enabled
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 0
+    assert restored.backend.sent_packets == []
+
+
+@pytest.mark.parametrize("extended", [False, True])
+async def test_flame_zero_service_entity_profile_and_coalescing(hass, extended):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON, CONF_PROFILES
+    from custom_components.proflame2.protocol.decoder import decode_state
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data[DOMAIN][DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    data = (
+        {
+            CONF_PROTOCOL_VARIANT: PROTOCOL_VARIANT_EXTENDED_10_WORD,
+            CONF_EXTENDED_W4_BASE: 0x80,
+            CONF_EXTENDED_W6: 20,
+            CONF_EXTENDED_W7: 200,
+            CONF_EXTENDED_W8: 0,
+        }
+        if extended
+        else {}
+    )
+    entry = _add_entry(
+        hass,
+        profile_data=data,
+        options={
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_AUX: True,
+            CONF_FRONT: True,
+            CONF_CPI: not extended,
+            CONF_ALLOW_FLAME_OFF_WHEN_ON: True,
+            CONF_PROFILES: {
+                "lights": {
+                    "name": "Lights",
+                    CONF_POWER: True,
+                    CONF_FLAME: 0,
+                    CONF_FAN: 3,
+                    CONF_LIGHT: 2,
+                    CONF_AUX: True,
+                }
+            },
+        },
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    await hass.services.async_call(
+        DOMAIN,
+        "set_state",
+        {CONF_POWER: True, CONF_FLAME: 0, CONF_FAN: 3, CONF_LIGHT: 6, CONF_AUX: True},
+        blocking=True,
+    )
+    zero = runtime_current_state(runtime)
+    assert zero == FireplaceState(True, flame=0, fan=3, light=6, aux=True)
+    assert runtime.backend.sent_packets[-1].frame.cmd1 & 1
+    assert runtime.backend.sent_packets[-1].frame.cmd2 & 7 == 0
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Light"), "value": 2}, blocking=True
+    )
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Fan"), "value": 6}, blocking=True
+    )
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _switch_entity_id(entry.title, "Power")}, blocking=True
+    )
+    await asyncio.sleep(0.05)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=0, fan=6, light=2, aux=True)
+    for packet in runtime.backend.sent_packets:
+        assert packet.state.flame == 0 and packet.state.power
+        assert decode_state(packet.frame, runtime.remote_profile) == packet.state
+    await hass.services.async_call(DOMAIN, "apply_profile", {"profile_id": "lights"}, blocking=True)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=0, fan=3, light=2, aux=True)
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 4}, blocking=True
+    )
+    await asyncio.sleep(0.05)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=4, fan=3, light=2, aux=True)
+
+
+@pytest.mark.parametrize("value", [-1, 7, 0.5, "0.5", True])
+async def test_flame_zero_service_rejects_invalid_levels_before_tx(hass, value):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+
+    entry = _add_entry(hass, options={CONF_ALLOW_FLAME_OFF_WHEN_ON: True})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    with pytest.raises((HomeAssistantError, ValueError)):
+        await hass.services.async_call(DOMAIN, "set_state", {CONF_POWER: True, CONF_FLAME: value}, blocking=True)
+    assert runtime.backend.sent_packets == []
+
+
+async def test_flame_zero_confirmation_retains_zero_and_accessory_state(hass):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+    from custom_components.proflame2.protocol.encoder import encode_packet
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0.05
+    hass.data[DOMAIN][DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS] = 0.01
+    entry = _add_entry(hass, options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: True})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    zero = FireplaceState(True, flame=0, fan=3, light=2)
+    runtime.backend.queue_packets(encode_packet(zero, runtime.remote_profile, allow_flame_off_when_on=True))
+    await hass.services.async_call(
+        DOMAIN, "set_state", {CONF_POWER: True, CONF_FLAME: 0, CONF_FAN: 3, CONF_LIGHT: 2}, blocking=True
+    )
+    await asyncio.sleep(0.07)
+    await hass.async_block_till_done()
+    assert runtime_current_state(runtime) == zero
+    assert runtime.state_confidence == STATE_CONFIDENCE_OBSERVED
+    assert len(runtime.backend.sent_packets) == 1
+    assert runtime.backend.sent_packets[0].state == zero

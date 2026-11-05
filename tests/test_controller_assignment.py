@@ -201,6 +201,14 @@ async def test_concurrent_manual_flows_cannot_both_claim_controller(hass, monkey
         results = await asyncio.gather(
             *(hass.config_entries.flow.async_configure(result["flow_id"], {"rf_band": "315"}) for result in results)
         )
+    assert all(result["step_id"] == "manual_features" for result in results)
+    results = await asyncio.gather(
+        *(hass.config_entries.flow.async_configure(result["flow_id"], {}) for result in results)
+    )
+    assert all(result["step_id"] == "optional_settings" for result in results)
+    results = await asyncio.gather(
+        *(hass.config_entries.flow.async_configure(result["flow_id"], {}) for result in results)
+    )
     assert sum(result["type"] is FlowResultType.CREATE_ENTRY for result in results) == 1
     assert sum(result.get("reason") == "controller_in_use" for result in results) == 1
     assert len(hass.config_entries.async_entries(DOMAIN)) == 1

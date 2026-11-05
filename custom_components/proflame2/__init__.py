@@ -226,6 +226,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await _async_migrate_registry_identity(hass, entry)
     runtime_entry = await async_setup_runtime_entry(hass, entry)
+    from .version_logging import async_register_version_logging
+
+    async_register_version_logging(hass, entry, runtime_entry)
     device_linked = async_refresh_runtime_device_link(hass, runtime_entry, entry)
     if (
         runtime_entry.backend_type == BACKEND_ESPHOME

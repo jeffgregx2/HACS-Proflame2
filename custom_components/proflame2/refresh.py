@@ -91,7 +91,7 @@ def current_refresh_state(entry: Proflame2RuntimeEntry) -> FireplaceState | None
     if state is None or not state.power:
         return None
     try:
-        state.validate_transmit()
+        state.validate_transmit(allow_flame_off_when_on=entry.allow_flame_off_when_on)
     except ValueError:
         return None
     return state

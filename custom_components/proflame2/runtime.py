@@ -21,6 +21,7 @@ from .const import (
     BACKEND_FAKE,
     BACKEND_YARDSTICK,
     CONF_ACTIVE_LISTENING,
+    CONF_ALLOW_FLAME_OFF_WHEN_ON,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -134,6 +135,7 @@ class Proflame2RuntimeEntry:
     state_confidence: str = STATE_CONFIDENCE_UNKNOWN
     active_profile_state: FireplaceState | None = None
     active_listening_enabled: bool = False
+    allow_flame_off_when_on: bool = False
     debug_logging_enabled: bool = False
     learning_id: str | None = None
     debounce_task: asyncio.Task[None] | None = None
@@ -219,6 +221,7 @@ async def async_set_runtime_current_state(
         state,
         runtime_entry.remote_profile,
         source=source,
+        allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
     )
     if runtime_entry.last_packet.source is None:
         runtime_entry.last_packet.source = source
@@ -279,6 +282,8 @@ async def async_restore_runtime_state(hass: HomeAssistant, runtime_entry: Profla
             restored_state,
             runtime_entry.remote_profile,
             source="restored_state",
+            # Reconstruct stored observations; this is not a transmit path.
+            allow_flame_off_when_on=True,
         )
     runtime_entry.state_confidence = str(restored.get("state_confidence", STATE_CONFIDENCE_RESTORED))
     runtime_entry.last_applied_profile_id = restored.get("last_applied_profile_id")
@@ -619,11 +624,13 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
         saved_profiles=normalize_profiles(
             entry.options.get(CONF_PROFILES, {}),
             features=features,
+            allow_flame_off_when_on=bool(entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)),
         ),
         refresh_schedule=RefreshSchedule(
             period_seconds=60 * validate_refresh_period(entry.options.get(CONF_REFRESH_PERIOD_MINUTES, 0))
         ),
         active_listening_enabled=active_listening_enabled,
+        allow_flame_off_when_on=bool(entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)),
         debug_logging_enabled=debug_logging_enabled,
     )
     try:

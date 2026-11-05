@@ -20,6 +20,7 @@ from .const import (
     BACKEND_ESPHOME,
     BACKEND_YARDSTICK,
     CONF_ACTIVE_LISTENING,
+    CONF_ALLOW_FLAME_OFF_WHEN_ON,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -147,9 +148,6 @@ def _manual_profile_schema() -> vol.Schema:
             vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
             vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _backend_selector(),
             vol.Required(CONF_LEARNING_ID): str,
-            vol.Required(CONF_REFRESH_PERIOD_MINUTES, default=DEFAULT_REFRESH_PERIOD_MINUTES): vol.All(
-                int, vol.Range(min=0)
-            ),
         }
     )
 
@@ -167,14 +165,6 @@ def _manual_legacy_profile_schema() -> vol.Schema:
             vol.Required(CONF_D1): str,
             vol.Required(CONF_C2): str,
             vol.Required(CONF_D2): str,
-            vol.Required(CONF_FAN, default=DEFAULT_FEATURE_OPTIONS[CONF_FAN]): bool,
-            vol.Required(CONF_LIGHT, default=DEFAULT_FEATURE_OPTIONS[CONF_LIGHT]): bool,
-            vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
-            vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
-            vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
-            vol.Required(CONF_REFRESH_PERIOD_MINUTES, default=DEFAULT_REFRESH_PERIOD_MINUTES): vol.All(
-                int, vol.Range(min=0)
-            ),
         }
     )
 
@@ -198,14 +188,30 @@ FEATURE_SELECTION_SCHEMA = vol.Schema(
         vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
         vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
         vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
-        vol.Required(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): bool,
-        vol.Required(CONF_ACTIVE_LISTENING, default=False): bool,
-        vol.Required(CONF_REFRESH_PERIOD_MINUTES, default=DEFAULT_REFRESH_PERIOD_MINUTES): vol.All(
-            int, vol.Range(min=0)
-        ),
-        vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
     }
 )
+
+
+def _optional_settings_schema(*, edit_short_name: bool = False, defaults: dict[str, Any] | None = None) -> vol.Schema:
+    """Keep behavior settings separate from installed fireplace features."""
+    defaults = defaults or {}
+    fields = {
+        vol.Required(
+            CONF_REFRESH_PERIOD_MINUTES,
+            default=defaults.get(CONF_REFRESH_PERIOD_MINUTES, DEFAULT_REFRESH_PERIOD_MINUTES),
+        ): vol.All(int, vol.Range(min=0)),
+        vol.Required(CONF_ALLOW_FLAME_OFF_WHEN_ON, default=defaults.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)): bool,
+        vol.Required(CONF_ACTIVE_LISTENING, default=defaults.get(CONF_ACTIVE_LISTENING, False)): bool,
+        vol.Required(CONF_DEBUG_LOGGING, default=defaults.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)): bool,
+    }
+    if edit_short_name:
+        fields[
+            vol.Required(
+                CONF_FIREPLACE_SHORT_NAME, default=defaults.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
+            )
+        ] = str
+    return vol.Schema(fields)
+
 
 LEARN_PROMPTS: tuple[tuple[str, str], ...] = (
     (
@@ -247,8 +253,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _extended_diagnostic_active: bool = False
     _extended_diagnostic_log_path: str | None = None
     _extended_diagnostic_task: asyncio.Task[str | None] | None = None
-    _manual_pending_data: dict[str, Any] | None = None
-    _manual_pending_options: dict[str, Any] | None = None
+    _pending_entry_data: dict[str, Any] | None = None
+    _pending_entry_options: dict[str, Any] | None = None
     _manual_learning_id_import: bool = False
     _yardstick_setup_mode: str = "manual"
 
@@ -352,17 +358,17 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if linked_entry_id:
                 normalized.data[CONF_ESPHOME_ENTRY_ID] = linked_entry_id
             if self._validate_manual_esphome_link(normalized.data) is not None:
-                self._manual_pending_data = normalized.data
-                self._manual_pending_options = normalized.options
+                self._pending_entry_data = normalized.data
+                self._pending_entry_options = normalized.options
                 return await self.async_step_manual_esphome()
-        self._manual_pending_data = normalized.data
-        self._manual_pending_options = normalized.options
+        self._pending_entry_data = normalized.data
+        self._pending_entry_options = normalized.options
         return await self._async_finish_manual_setup()
 
     async def _async_finish_manual_setup(self):
         """Imported remote data needs local feature selection before entry creation."""
 
-        data, options = self._manual_pending_data, self._manual_pending_options
+        data, options = self._pending_entry_data, self._pending_entry_options
         assert data is not None and options is not None
         if not self._manual_learning_id_import and self._entry_exists_for_controller_and_remote(
             controller_id=data[CONF_BACKEND_TYPE],
@@ -375,13 +381,11 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if data[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK and CONF_RF_BAND not in data:
             self._yardstick_setup_mode = "manual"
             return await self.async_step_yardstick_band()
-        if self._manual_learning_id_import:
-            return await self.async_step_manual_features()
-        return await self._async_create_profile_entry(title=data[CONF_NAME], data=data, options=options)
+        return await self.async_step_manual_features()
 
     async def async_step_yardstick_band(self, user_input: dict[str, Any] | None = None):
         """Collect controller band before opening a YardStick for learning or control."""
-        data = self._learn_input if self._yardstick_setup_mode == "learn" else self._manual_pending_data
+        data = self._learn_input if self._yardstick_setup_mode == "learn" else self._pending_entry_data
         if data is None:
             return await self.async_step_user()
         if controller_assignments(self.hass, data, {}):
@@ -416,21 +420,37 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_manual_features(self, user_input: dict[str, Any] | None = None):
         """Choose fireplace features locally, independently of the Learning ID."""
 
-        data, options = self._manual_pending_data, self._manual_pending_options
+        data, options = self._pending_entry_data, self._pending_entry_options
         if data is None or options is None:
             return await self.async_step_manual()
-        errors: dict[str, str] = {}
         if user_input is not None:
+            self._pending_entry_options = {**options, **normalize_feature_options(user_input)}
+            return await self.async_step_optional_settings()
+        return self.async_show_form(
+            step_id="manual_features",
+            last_step=False,
+            data_schema=self.add_suggested_values_to_schema(FEATURE_SELECTION_SCHEMA, options),
+        )
+
+    async def async_step_optional_settings(self, user_input: dict[str, Any] | None = None):
+        """Commit setup only after the final behavior-settings page succeeds."""
+        data, options = self._pending_entry_data, self._pending_entry_options
+        if data is None or options is None:
+            return await self.async_step_user()
+        errors = {}
+        if user_input is not None:
+            self._pending_entry_options = {**options, **user_input}
             try:
-                updated = normalize_entry_options({**options, **user_input})
+                updated = normalize_entry_options(self._pending_entry_options)
             except InvalidRefreshPeriodError:
                 errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
             else:
                 return await self._async_create_profile_entry(title=data[CONF_NAME], data=data, options=updated)
         return self.async_show_form(
-            step_id="manual_features",
+            step_id="optional_settings",
+            last_step=True,
             data_schema=self.add_suggested_values_to_schema(
-                FEATURE_SELECTION_SCHEMA, {**options, **(user_input or {})}
+                _optional_settings_schema(defaults=self._pending_entry_options), self._pending_entry_options
             ),
             errors=errors,
         )
@@ -438,13 +458,13 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_manual_esphome(self, user_input: dict[str, Any] | None = None):
         """Collect the ESPHome device link only for manual LilyGO setup."""
 
-        if self._manual_pending_data is None or self._manual_pending_options is None:
+        if self._pending_entry_data is None or self._pending_entry_options is None:
             return await self.async_step_manual()
 
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._manual_pending_data[CONF_ESPHOME_ENTRY_ID] = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
-            esphome_entry_error = self._validate_manual_esphome_link(self._manual_pending_data)
+            self._pending_entry_data[CONF_ESPHOME_ENTRY_ID] = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
+            esphome_entry_error = self._validate_manual_esphome_link(self._pending_entry_data)
             if esphome_entry_error is None:
                 return await self._async_finish_manual_setup()
             errors[CONF_ESPHOME_ENTRY_ID] = esphome_entry_error
@@ -641,13 +661,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._learn_result is None or not self._learn_result.success or self._learn_input is None:
             return await self.async_step_learn_failed()
 
-        errors: dict[str, str] = {}
         if user_input is not None:
-            try:
-                options = normalize_entry_options(user_input)
-            except InvalidRefreshPeriodError:
-                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
-        if user_input is not None and not errors:
             data = {
                 CONF_NAME: self._learn_input[CONF_NAME],
                 CONF_BACKEND_TYPE: self._learn_input[CONF_BACKEND_TYPE],
@@ -660,25 +674,21 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if self._learn_result.final_packet is not None:
                 data[CONF_INITIAL_FRAME] = asdict(self._learn_result.final_packet.frame)
                 data[CONF_INITIAL_PACKET_SOURCE] = self._learn_result.final_packet.source or "observed_packet"
-            return await self._async_create_profile_entry(
-                title=data[CONF_NAME],
-                data=data,
-                options=options,
-            )
+            self._pending_entry_data = data
+            self._pending_entry_options = {
+                **normalize_feature_options(user_input),
+                CONF_FIREPLACE_SHORT_NAME: self._learn_input.get(
+                    CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME
+                ),
+                CONF_DEBUG_LOGGING: self._learn_input.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING),
+                CONF_ACTIVE_LISTENING: self._learn_input[CONF_BACKEND_TYPE] == BACKEND_ESPHOME,
+            }
+            return await self.async_step_optional_settings()
 
         suggested_values = default_feature_options()
-        suggested_values[CONF_FIREPLACE_SHORT_NAME] = self._learn_input.get(
-            CONF_FIREPLACE_SHORT_NAME,
-            DEFAULT_FIREPLACE_SHORT_NAME,
-        )
-        suggested_values[CONF_DEBUG_LOGGING] = self._learn_input.get(
-            CONF_DEBUG_LOGGING,
-            DEFAULT_DEBUG_LOGGING,
-        )
-        suggested_values[CONF_ACTIVE_LISTENING] = self._learn_input[CONF_BACKEND_TYPE] == BACKEND_ESPHOME
         return self.async_show_form(
             step_id="learn_features",
-            errors=errors,
+            last_step=False,
             data_schema=self.add_suggested_values_to_schema(
                 FEATURE_SELECTION_SCHEMA,
                 user_input or suggested_values,
@@ -929,37 +939,62 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
     async def async_step_features(self, user_input: dict[str, Any] | None = None):
         """Manage editable feature flag options."""
 
-        errors: dict[str, str] = {}
         if user_input is not None:
-            try:
-                updated = normalize_entry_options({**self.config_entry.options, **user_input})
-            except InvalidRefreshPeriodError:
-                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
-        if user_input is not None and not errors:
-            updated.update(normalize_feature_options(user_input))
-            updated[CONF_DEBUG_LOGGING] = bool(
-                user_input.get(
-                    CONF_DEBUG_LOGGING,
-                    updated.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING),
-                )
-            )
-            updated[CONF_ACTIVE_LISTENING] = bool(
-                user_input.get(CONF_ACTIVE_LISTENING, updated.get(CONF_ACTIVE_LISTENING, False))
-            )
-            updated[CONF_FIREPLACE_SHORT_NAME] = sanitize_fireplace_short_name(
-                user_input.get(
-                    CONF_FIREPLACE_SHORT_NAME,
-                    updated.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME),
-                )
-            )
-            return self.async_create_entry(data=updated)
-
-        suggested_values = default_feature_options()
-        suggested_values.update(normalize_entry_options(self.config_entry.options))
+            self._pending_options = {**self.config_entry.options, **normalize_feature_options(user_input)}
+            return await self.async_step_optional_settings()
         return self.async_show_form(
             step_id="features",
+            last_step=False,
+            data_schema=self.add_suggested_values_to_schema(FEATURE_SELECTION_SCHEMA, self.config_entry.options),
+        )
+
+    async def async_step_optional_settings(self, user_input: dict[str, Any] | None = None):
+        """Validate pending settings and save atomically, without changing state."""
+        pending = getattr(self, "_pending_options", dict(self.config_entry.options))
+        errors = {}
+        if user_input is not None:
+            pending = {**pending, **user_input}
+            self._pending_options = pending
+            if (
+                self.config_entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)
+                and not pending.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)
+                and self._has_flame_zero_conflict(pending)
+            ):
+                errors[CONF_ALLOW_FLAME_OFF_WHEN_ON] = "flame_zero_conflict"
+            else:
+                try:
+                    updated = {**pending, **normalize_entry_options(pending)}
+                except InvalidRefreshPeriodError:
+                    errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
+                else:
+                    return self.async_create_entry(data=updated)
+        suggested = {**normalize_entry_options(self.config_entry.options), **pending}
+        return self.async_show_form(
+            step_id="optional_settings",
+            last_step=True,
+            data_schema=self.add_suggested_values_to_schema(
+                _optional_settings_schema(edit_short_name=True, defaults=suggested), suggested
+            ),
             errors=errors,
-            data_schema=self.add_suggested_values_to_schema(FEATURE_SELECTION_SCHEMA, user_input or suggested_values),
+        )
+
+    def _has_flame_zero_conflict(self, options: dict[str, Any]) -> bool:
+        from .runtime import async_get_runtime_entries, runtime_current_state
+
+        runtime = async_get_runtime_entries(self.hass).get(self.config_entry.entry_id)
+        states = []
+        if runtime is not None:
+            states = [runtime_current_state(runtime), runtime.desired_state]
+            states += [
+                intent.state
+                for intent in (runtime.control_intents.pending, runtime.control_intents.in_flight)
+                if intent is not None
+            ]
+        if any(state is not None and state.power and state.flame == 0 for state in states):
+            return True
+        return any(
+            profile.get(CONF_POWER) and profile.get(CONF_FLAME) == 0
+            for profile in options.get(CONF_PROFILES, {}).values()
         )
 
     async def async_step_profiles(self, user_input: dict[str, Any] | None = None):
@@ -1020,6 +1055,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
                 profile = normalize_saved_profile_input(
                     user_input,
                     features=self._features,
+                    allow_flame_off_when_on=bool(self.config_entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)),
                 )
                 if profile[CONF_PROFILE_ID] in self._profiles:
                     raise DuplicateProfileIdError(profile[CONF_PROFILE_ID])
@@ -1030,7 +1066,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
             except DuplicateProfileIdError:
                 errors[CONF_NAME] = "duplicate_profile_id"
             else:
-                updated = normalize_entry_options(self.config_entry.options)
+                updated = {**self.config_entry.options, **normalize_entry_options(self.config_entry.options)}
                 updated[CONF_PROFILES][profile[CONF_PROFILE_ID]] = profile
                 return self.async_create_entry(data=updated)
 
@@ -1057,6 +1093,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
                 profile = normalize_saved_profile_input(
                     user_input,
                     features=self._features,
+                    allow_flame_off_when_on=bool(self.config_entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)),
                     profile_id=profile_id,
                 )
             except InvalidProfileNameError:
@@ -1064,7 +1101,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
             except InvalidSavedProfileError as exc:
                 errors[_extract_invalid_profile_field(user_input, str(exc))] = "invalid_profile"
             else:
-                updated = normalize_entry_options(self.config_entry.options)
+                updated = {**self.config_entry.options, **normalize_entry_options(self.config_entry.options)}
                 updated[CONF_PROFILES][profile_id] = profile
                 return self.async_create_entry(data=updated)
 
@@ -1088,7 +1125,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
 
         existing = self._profiles[profile_id]
         if user_input is not None and user_input.get("confirm"):
-            updated = normalize_entry_options(self.config_entry.options)
+            updated = {**self.config_entry.options, **normalize_entry_options(self.config_entry.options)}
             updated[CONF_PROFILES].pop(profile_id, None)
             return self.async_create_entry(data=updated)
 
@@ -1120,7 +1157,7 @@ def _profile_schema(features) -> vol.Schema:
     schema: dict[Any, Any] = {
         vol.Required(CONF_NAME): str,
         vol.Required(CONF_POWER, default=True): bool,
-        vol.Required(CONF_FLAME, default=1): vol.Coerce(int),
+        vol.Required(CONF_FLAME, default=1): vol.Any(int, float),
     }
     if features.fan:
         schema[vol.Optional(CONF_FAN, default=0)] = vol.Coerce(int)

@@ -10,6 +10,7 @@ from typing import Any
 from .const import (
     BACKEND_ESPHOME,
     CONF_ACTIVE_LISTENING,
+    CONF_ALLOW_FLAME_OFF_WHEN_ON,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -258,6 +259,7 @@ def default_entry_options() -> dict[str, Any]:
         **default_feature_options(),
         CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
         CONF_ACTIVE_LISTENING: False,
+        CONF_ALLOW_FLAME_OFF_WHEN_ON: False,
         CONF_REFRESH_PERIOD_MINUTES: DEFAULT_REFRESH_PERIOD_MINUTES,
         CONF_FIREPLACE_SHORT_NAME: DEFAULT_FIREPLACE_SHORT_NAME,
         CONF_PROFILES: {},
@@ -286,6 +288,7 @@ def normalize_entry_options(
         return normalized
 
     normalized.update(normalize_feature_options(raw_options))
+    normalized[CONF_ALLOW_FLAME_OFF_WHEN_ON] = bool(raw_options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False))
     normalized[CONF_REFRESH_PERIOD_MINUTES] = validate_refresh_period(
         raw_options.get(CONF_REFRESH_PERIOD_MINUTES, DEFAULT_REFRESH_PERIOD_MINUTES)
     )
@@ -300,6 +303,7 @@ def normalize_entry_options(
     normalized[CONF_PROFILES] = normalize_profiles(
         raw_options.get(CONF_PROFILES, {}),
         features=features or fireplace_features_from_options(normalized),
+        allow_flame_off_when_on=normalized[CONF_ALLOW_FLAME_OFF_WHEN_ON],
     )
     return normalized
 
@@ -429,6 +433,7 @@ def normalize_profiles(
     raw_profiles: dict[str, Any] | None,
     *,
     features: FireplaceFeatures,
+    allow_flame_off_when_on: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Normalize the saved profile map stored in config-entry options."""
 
@@ -438,6 +443,7 @@ def normalize_profiles(
             payload,
             features=features,
             profile_id=str(profile_id),
+            allow_flame_off_when_on=allow_flame_off_when_on,
         )
         if normalized_profile[CONF_PROFILE_ID] in normalized:
             raise DuplicateProfileIdError(f"Duplicate profile id: {normalized_profile[CONF_PROFILE_ID]}")
@@ -450,6 +456,7 @@ def normalize_saved_profile_input(
     *,
     features: FireplaceFeatures,
     profile_id: str | None = None,
+    allow_flame_off_when_on: bool = False,
 ) -> dict[str, Any]:
     """Normalize one saved profile into a complete desired fireplace state."""
 
@@ -460,7 +467,7 @@ def normalize_saved_profile_input(
     normalized_profile_id = profile_id or build_profile_id(name)
 
     try:
-        state, _warnings = build_requested_state(features, user_input)
+        state, _warnings = build_requested_state(features, user_input, allow_flame_off_when_on=allow_flame_off_when_on)
     except StateValidationError as exc:
         raise InvalidSavedProfileError(str(exc)) from exc
 

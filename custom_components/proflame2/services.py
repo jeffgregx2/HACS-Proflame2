@@ -73,6 +73,8 @@ from .runtime import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_ACTIVE_LISTENER_RETRY_INITIAL_SECONDS = 1.0
+_ACTIVE_LISTENER_RETRY_MAX_SECONDS = 30.0
 BACKEND_SEND_TIMEOUT_SECONDS = 30.0
 CONTROLLER_RECOVERY_GRACE_SECONDS = 2.0
 _RETAINED_OFF_CONTROL_KEYS = frozenset({CONF_FAN, CONF_LIGHT, CONF_FRONT, CONF_AUX, CONF_CPI})
@@ -96,9 +98,9 @@ SERVICE_SET_STATE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_DEVICE_ID): vol.Any(str, [str]),
         vol.Optional(ATTR_ENTITY_ID): vol.Any(str, [str]),
         vol.Optional(ATTR_AREA_ID): vol.Any(str, [str]),
-        vol.Optional(CONF_FLAME): vol.Coerce(int),
-        vol.Optional(CONF_FAN): vol.Coerce(int),
-        vol.Optional(CONF_LIGHT): vol.Coerce(int),
+        vol.Optional(CONF_FLAME): vol.Any(int, float, str),
+        vol.Optional(CONF_FAN): vol.Any(int, float, str),
+        vol.Optional(CONF_LIGHT): vol.Any(int, float, str),
         vol.Optional(CONF_FRONT): bool,
         vol.Optional(CONF_AUX): bool,
         vol.Optional(CONF_CPI): bool,
@@ -342,7 +344,15 @@ async def async_stage_control_change(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         return
 
-    desired_state = build_staged_state(runtime_entry.features, base_state, changes)
+    try:
+        desired_state = build_staged_state(
+            runtime_entry.features,
+            base_state,
+            changes,
+            allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
+        )
+    except StateValidationError as exc:
+        raise HomeAssistantError(str(exc)) from exc
 
     intents = runtime_entry.control_intents
     expected_state = intents.in_flight.state if intents.in_flight is not None else current_state
@@ -735,9 +745,14 @@ async def _async_display_sync_loop(hass: HomeAssistant, runtime_entry: Proflame2
 
 
 async def _async_active_listener_loop(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
-    """Continuously receive observed packets when active listening is enabled."""
+    """Own RX recovery until listening is disabled or the entry shuts down.
 
-    retry_delay_seconds = 1.0
+    Action discovery and the native API can become ready after this task starts.
+    A receive/decode failure must not leave recovery dependent on a user command
+    or the unrelated periodic display sync. Cancellation remains intentional.
+    """
+    retry_delay_seconds = _ACTIVE_LISTENER_RETRY_INITIAL_SECONDS
+    interrupted = False
     try:
         while (
             not runtime_entry.shutting_down
@@ -749,36 +764,54 @@ async def _async_active_listener_loop(hass: HomeAssistant, runtime_entry: Profla
                     await asyncio.sleep(0.1)
                     continue
                 packet = await runtime_entry.backend.receive(timeout=_confirmation_receive_timeout_seconds(hass))
-            except RuntimeError as exc:
-                message = str(exc)
-                if "Linked ESPHome entry is not loaded or has no runtime_data" not in message:
-                    raise
-                _log_control_event(
-                    runtime_entry,
-                    "active listener waiting for linked ESPHome runtime data: %s",
-                    message,
-                    level=logging.DEBUG,
-                )
+                if (
+                    not runtime_entry.shutting_down
+                    and runtime_entry.active_listening_enabled
+                    and not runtime_entry.learning_in_progress
+                    and packet is not None
+                    and packet.remote_id == runtime_entry.remote_profile.serial_id
+                ):
+                    await async_apply_observed_packet(hass, runtime_entry, packet)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Reconnect after API failures; malformed observed packets must
+                # remain rejected without unnecessarily reconfiguring the radio.
+                connection_error = isinstance(exc, (RuntimeError, OSError))
+                if connection_error and hasattr(runtime_entry.backend, "connected"):
+                    runtime_entry.backend.connected = False
+                if not interrupted:
+                    _LOGGER.warning(
+                        "Proflame2 active listening interrupted config_entry_id=%s; retrying automatically: %s",
+                        runtime_entry.config_entry_id,
+                        exc,
+                        exc_info=not connection_error,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Proflame2 active listening retry failed config_entry_id=%s delay=%ss: %s",
+                        runtime_entry.config_entry_id,
+                        retry_delay_seconds,
+                        exc,
+                    )
+                interrupted = True
                 await asyncio.sleep(retry_delay_seconds)
+                retry_delay_seconds = min(retry_delay_seconds * 2, _ACTIVE_LISTENER_RETRY_MAX_SECONDS)
                 continue
-            if (
-                runtime_entry.learning_in_progress
-                or packet is None
-                or packet.remote_id != runtime_entry.remote_profile.serial_id
-            ):
-                if packet is None:
-                    await asyncio.sleep(0.01)
-                continue
-            await async_apply_observed_packet(hass, runtime_entry, packet)
+            if interrupted:
+                _LOGGER.info(
+                    "Proflame2 active listening resumed config_entry_id=%s",
+                    runtime_entry.config_entry_id,
+                )
+            interrupted = False
+            retry_delay_seconds = _ACTIVE_LISTENER_RETRY_INITIAL_SECONDS
+            if packet is None:
+                await asyncio.sleep(0.01)
     except asyncio.CancelledError:
         raise
-    except Exception:
-        _LOGGER.exception(
-            "Proflame2 active listening loop failed config_entry_id=%s",
-            runtime_entry.config_entry_id,
-        )
     finally:
-        runtime_entry.active_listener_task = None
+        if runtime_entry.active_listener_task is asyncio.current_task():
+            runtime_entry.active_listener_task = None
 
 
 async def async_apply_observed_packet(
@@ -1213,7 +1246,9 @@ async def async_execute_set_state(
         {key: value for key, value in data.items() if key != ATTR_ENTITY_ID},
     )
     try:
-        requested_state, ignored_warnings = build_requested_state(runtime_entry.features, data)
+        requested_state, ignored_warnings = build_requested_state(
+            runtime_entry.features, data, allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on
+        )
     except StateValidationError as exc:
         runtime_entry.last_error = str(exc)
         _log_control_event(
@@ -1551,6 +1586,7 @@ def _prepare_send_request(
         source=source,
         warnings=warnings,
         allow_power_off_flame=(source == "debounced_control"),
+        allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
     )
     packet.transmission_plan = build_transmission_plan(packet.frame)
     packet.display_state = ESPHomeDisplayState(
