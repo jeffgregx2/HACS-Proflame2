@@ -31,6 +31,7 @@
 #include "radio_cc1101.h"
 #include "rf_band.h"
 #include "rmt_ook_receiver.h"
+#include "rmt_repeat_selection.h"
 #include "telemetry_publisher.h"
 #include "tx_controller.h"
 #include "wifi_diagnostics.h"
@@ -279,6 +280,9 @@ public:
   void set_rx_dropped_packet_count_sensor(sensor::Sensor* sensor) {
     this->rx_dropped_packet_count_sensor_ = sensor;
   }
+  void set_rx_rmt_malformed_repeats_skipped_sensor(sensor::Sensor* sensor) {
+    this->rx_rmt_malformed_repeats_skipped_sensor_ = sensor;
+  }
   void set_rx_no_rf_capture_count_sensor(sensor::Sensor* sensor) {
     this->rx_no_rf_capture_count_sensor_ = sensor;
   }
@@ -388,6 +392,9 @@ public:
   }
   uint32_t get_rx_dropped_packet_count() const {
     return this->rx_dropped_packet_count_;
+  }
+  uint32_t get_rx_rmt_malformed_repeats_skipped() const {
+    return this->rx_rmt_malformed_repeats_skipped_;
   }
   uint32_t get_rx_no_rf_capture_count() const {
     return this->rx_no_rf_capture_count_;
@@ -670,6 +677,7 @@ protected:
   sensor::Sensor* config_revision_sensor_{nullptr};
   sensor::Sensor* battery_percent_sensor_{nullptr};
   sensor::Sensor* rx_dropped_packet_count_sensor_{nullptr};
+  sensor::Sensor* rx_rmt_malformed_repeats_skipped_sensor_{nullptr};
   sensor::Sensor* rx_no_rf_capture_count_sensor_{nullptr};
   sensor::Sensor* rx_incomplete_fifo_count_sensor_{nullptr};
   sensor::Sensor* rx_decode_failed_count_sensor_{nullptr};
@@ -725,6 +733,7 @@ protected:
   uint8_t published_firmware_protocol_version_cache_{UINT8_MAX};
   uint8_t published_config_revision_cache_{UINT8_MAX};
   uint32_t published_rx_dropped_packet_count_cache_{UINT32_MAX};
+  uint32_t published_rx_rmt_malformed_repeats_skipped_cache_{UINT32_MAX};
   uint32_t published_rx_no_rf_capture_count_cache_{UINT32_MAX};
   uint32_t published_rx_incomplete_fifo_count_cache_{UINT32_MAX};
   uint32_t published_rx_decode_failed_count_cache_{UINT32_MAX};
@@ -772,6 +781,7 @@ protected:
   uint32_t rx_fifo_capture_session_index_{0};
   FifoRxController rx_fifo_{};
   uint32_t rx_dropped_packet_count_{0};
+  uint32_t rx_rmt_malformed_repeats_skipped_{0};
   uint32_t rx_no_rf_capture_count_{0};
   uint32_t rx_incomplete_fifo_count_{0};
   uint32_t rx_decode_failed_count_{0};

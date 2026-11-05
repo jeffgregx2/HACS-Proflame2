@@ -206,19 +206,23 @@ void RmtOokReceiver::end() {
 #endif
 }
 
-bool RmtOokReceiver::poll(RmtOokCapture& capture, std::string& error) {
+bool RmtOokReceiver::poll(RmtOokCapture& capture, std::string& error, RmtSegmentObserver observer,
+                          void* observer_context) {
   if (this->channel_ == nullptr || this->queue_ == nullptr) {
     error = "rmt_not_active";
     return false;
   }
 #ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  (void)observer;
+  (void)observer_context;
   return this->poll_diagnostic_(capture, error);
 #else
   rmt_rx_done_event_data_t event{};
   if (xQueueReceive(this->queue_, &event, 0) != pdTRUE) {
     return false;
   }
-  const bool converted = this->convert_symbols_(event.received_symbols, event.num_symbols, capture, error);
+  const bool converted =
+      this->convert_symbols_(event.received_symbols, event.num_symbols, capture, error, observer, observer_context);
   std::string arm_error;
   if (!this->arm_(arm_error)) {
     error = arm_error;
@@ -534,7 +538,7 @@ bool RmtOokReceiver::begin(int gpio_num, std::string& error) {
   return this->buffered_.begin(gpio_num, error);
 }
 void RmtOokReceiver::end() { this->buffered_.request_stop(); }
-bool RmtOokReceiver::poll(RmtOokCapture&, std::string& error) {
+bool RmtOokReceiver::poll(RmtOokCapture&, std::string& error, RmtSegmentObserver, void*) {
   error.clear();
   this->buffered_.process();
   return false;
@@ -544,14 +548,17 @@ void RmtOokReceiver::export_raw_window() { this->buffered_.export_tick(); }
 
 #ifndef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
 bool RmtOokReceiver::convert_symbols_(const rmt_symbol_word_t* symbols, size_t count, RmtOokCapture& capture,
-                                      std::string& error) const {
+                                      std::string& error, RmtSegmentObserver observer, void* observer_context) const {
   capture = RmtOokCapture{};
   if (symbols == nullptr || count == 0U || count > SYMBOL_CAPACITY) {
     error = "rmt_invalid_symbol_count";
     return false;
   }
   RmtOokCapture current{};
-  auto complete_segment = [&capture, &current]() {
+  auto complete_segment = [&capture, &current, observer, observer_context]() {
+    if (observer != nullptr && current.pcm_bit_count != 0U) {
+      observer(current, observer_context);
+    }
     if (current.pcm_bit_count > capture.pcm_bit_count) {
       capture = current;
     }

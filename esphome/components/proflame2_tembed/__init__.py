@@ -63,6 +63,7 @@ CONF_FIRMWARE_PROTOCOL_VERSION = "firmware_protocol_version"
 CONF_CONFIG_REVISION = "config_revision"
 CONF_BATTERY_PERCENT = "battery_percent"
 CONF_RX_DROPPED_PACKET_COUNT = "rx_dropped_packet_count"
+CONF_RX_RMT_MALFORMED_REPEATS_SKIPPED = "rx_rmt_malformed_repeats_skipped"
 CONF_RX_NO_RF_CAPTURE_COUNT = "rx_no_rf_capture_count"
 CONF_RX_INCOMPLETE_FIFO_COUNT = "rx_incomplete_fifo_count"
 CONF_RX_DECODE_FAILED_COUNT = "rx_decode_failed_count"
@@ -214,6 +215,11 @@ CONFIG_SCHEMA = (
             ),
             cv.Optional(CONF_RX_DROPPED_PACKET_COUNT): sensor.sensor_schema(
                 accuracy_decimals=0,
+                entity_category="diagnostic",
+            ),
+            cv.Optional(CONF_RX_RMT_MALFORMED_REPEATS_SKIPPED): sensor.sensor_schema(
+                accuracy_decimals=0,
+                state_class="total_increasing",
                 entity_category="diagnostic",
             ),
             cv.Optional(CONF_RX_NO_RF_CAPTURE_COUNT): sensor.sensor_schema(
@@ -415,6 +421,7 @@ async def to_code(config):
         (CONF_CONFIG_REVISION, "set_config_revision_sensor"),
         (CONF_BATTERY_PERCENT, "set_battery_percent_sensor"),
         (CONF_RX_DROPPED_PACKET_COUNT, "set_rx_dropped_packet_count_sensor"),
+        (CONF_RX_RMT_MALFORMED_REPEATS_SKIPPED, "set_rx_rmt_malformed_repeats_skipped_sensor"),
         (CONF_RX_NO_RF_CAPTURE_COUNT, "set_rx_no_rf_capture_count_sensor"),
         (CONF_RX_INCOMPLETE_FIFO_COUNT, "set_rx_incomplete_fifo_count_sensor"),
         (CONF_RX_DECODE_FAILED_COUNT, "set_rx_decode_failed_count_sensor"),

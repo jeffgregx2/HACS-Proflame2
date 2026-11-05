@@ -169,6 +169,31 @@ bps rate. A valid package must:
 Do not infer a frame only from total duration. Scan every bounded bit phase
 until a validated word sequence is found.
 
+### Conservative repeat selection
+
+Normal active listening retains the existing longest-segment winner and first
+winner on equal lengths. A narrow fallback applies only when that winner is an
+invalid 182-bit legacy or 260-bit extended segment. The shared bounded framing
+reader first checks for a structurally plausible frame of either format at any
+offset; finding one preserves the original bytes for Home Assistant.
+
+Otherwise, the selector can substitute a separate, unmodified 181-bit legacy or
+259-bit extended repeat from the same RMT window. Legacy candidates must match
+the current learned serial and both learned checksums. Extended candidates must
+pass both ten-word integrity lanes; Home Assistant retains responsibility for
+extended identity checks. Both handlers check the existing fan/flame ranges,
+including valid flame-zero and thermostat observations. All qualifying repeats
+must agree on the complete payload. Ambiguity or no valid alternative preserves
+the original raw winner.
+
+Selection runs after normal conversion and before the existing single
+`pulse_capture` publication, with receiver rearming completed first. It does not
+repair bits, change timing tolerances, or publish separate events for repeats.
+Guided learning and waveform diagnostic acquisition retain their existing paths.
+The controller exposes **Proflame2 RMT Malformed Repeats Skipped** to count
+examined malformed repeats omitted from the forwarded capture; see
+[the diagnostic counter definition](diagnostics/waveform_diagnostics.md#rmt-repeat-selection-counter).
+
 ### Frame Formats
 
 Use the existing 13-symbol / 26-encoded-bit word validation for every word:

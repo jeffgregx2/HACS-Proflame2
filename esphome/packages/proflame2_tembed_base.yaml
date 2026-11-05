@@ -53,7 +53,7 @@ substitutions:
   proflame2_display_debug_mode: "false"
   # Stamped by the release workflow. This is independent of the source ref so
   # a local development build can still identify the released firmware version.
-  proflame2_firmware_version: "v0.7.0-beta5"
+  proflame2_firmware_version: "v0.7.0-debug"
 
 i2c:
   sda: GPIO8
@@ -277,6 +277,11 @@ proflame2_tembed:
   rx_dropped_packet_count:
     name: Proflame2 RX Dropped Packets
     accuracy_decimals: 0
+    entity_category: diagnostic
+  rx_rmt_malformed_repeats_skipped:
+    name: Proflame2 RMT Malformed Repeats Skipped
+    accuracy_decimals: 0
+    state_class: total_increasing
     entity_category: diagnostic
 
 api:

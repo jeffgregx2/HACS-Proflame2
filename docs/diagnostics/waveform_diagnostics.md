@@ -33,6 +33,31 @@ The paths below are examples, not machine defaults. Configure actual storage,
 receiver details, and recorder locations in the external configuration described
 in [the diagnostic setup guide](README.md).
 
+## RMT repeat selection counter
+
+Normal LilyGO firmware exposes **Proflame2 RMT Malformed Repeats Skipped** on its
+ESPHome controller device. It counts examined near-frame malformed repeats that
+the normal RMT selector omits from the raw capture forwarded to Home Assistant.
+The same selector handles legacy and extended frames, using each format's own
+integrity checks. See [the repeat-selection design](../lilygo_rmt_legacy_repeat_selection_design.md)
+for the precise preservation and fallback rules.
+
+The value is not a count of lost commands or rejected HA packets. Several bad
+repeats can accompany one successful command. Conversely, a lone malformed row
+forwarded unchanged for HA to inspect adds nothing. Valid duplicates, known
+foreign legacy frames, short noise and lengths outside the selector's narrow
+inspection range add nothing. If the original malformed winner is replaced, it
+is included; if forwarded unchanged, it is excluded. Each successful capture
+contributes its delta once, after receiver rearming succeeds.
+
+The counter starts at zero on firmware boot, survives listening/profile changes,
+and saturates at the maximum unsigned 32-bit value. Its ESPHome state class is
+`total_increasing`. It is separate from FIFO drop/loss counters. Learning and
+waveform diagnostic acquisition do not increment it. A DEBUG message beginning
+`RX RMT repeat rescued` reports successful replacements, with format, original
+and selected lengths, agreeing repeats and the skipped delta. PCM Payload
+Logging continues to log the one raw event forwarded to HA.
+
 ## Receiver-Only Diagnostic Firmware
 
 Include the opt-in waveform package alongside the existing base/display packages

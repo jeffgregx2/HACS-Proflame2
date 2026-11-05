@@ -1161,7 +1161,10 @@ void Proflame2TEmbedComponent::poll_rmt_pulse_capture_() {
 #endif
   return;
 #endif
-  if (!this->rmt_ook_receiver_.poll(capture, error)) {
+  RmtRepeatSelection selection(this->rx_active_listener_requested_, this->display_.learn_active,
+                               this->rx_active_listener_profile_);
+  if (!this->rmt_ook_receiver_.poll(capture, error,
+                                    selection.enabled() ? &RmtRepeatSelection::observe_segment : nullptr, &selection)) {
     if (error.empty() || error == "rmt_pcm_empty") {
       return;
     }
@@ -1182,7 +1185,19 @@ void Proflame2TEmbedComponent::poll_rmt_pulse_capture_() {
     }
     return;
   }
+  const uint16_t original_bits = capture.pcm_bit_count;
+  const auto result = selection.finish(capture);
+  this->rx_rmt_malformed_repeats_skipped_ =
+      rmt_add_skipped_count(this->rx_rmt_malformed_repeats_skipped_, result.skipped_malformed);
+  if (result.replaced) {
+    ESP_LOGD(TAG, "RX RMT repeat rescued format=%s original_bits=%u selected_bits=%u agreeing=%u skipped=%" PRIu32,
+             selection.format_name(), original_bits, capture.pcm_bit_count, result.agreeing_repeats,
+             result.skipped_malformed);
+  }
   this->publish_rmt_pulse_capture_(capture);
+  if (result.skipped_malformed != 0U) {
+    this->publish_telemetry_();
+  }
 }
 
 void Proflame2TEmbedComponent::publish_rmt_pulse_capture_(const RmtOokCapture& capture) {
@@ -1819,6 +1834,9 @@ void Proflame2TEmbedComponent::publish_telemetry_() {
   TelemetryPublisher::publish_uint32_if_changed(this->rx_dropped_packet_count_sensor_,
                                                 &this->published_rx_dropped_packet_count_cache_,
                                                 this->rx_dropped_packet_count_);
+  TelemetryPublisher::publish_uint32_if_changed(this->rx_rmt_malformed_repeats_skipped_sensor_,
+                                                &this->published_rx_rmt_malformed_repeats_skipped_cache_,
+                                                this->rx_rmt_malformed_repeats_skipped_);
   TelemetryPublisher::publish_uint32_if_changed(this->rx_no_rf_capture_count_sensor_,
                                                 &this->published_rx_no_rf_capture_count_cache_,
                                                 this->rx_no_rf_capture_count_);

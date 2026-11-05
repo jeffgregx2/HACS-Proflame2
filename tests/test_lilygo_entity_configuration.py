@@ -30,7 +30,7 @@ def test_all_component_sensor_schema_defaults_are_diagnostic() -> None:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr in ("sensor_schema", "text_sensor_schema")
     ]
-    assert len(calls) == 29  # 21 base telemetry entities and eight RX debug entities.
+    assert len(calls) == 30  # 22 base telemetry entities and eight RX debug entities.
     for call in calls:
         assert any(
             keyword.arg == "entity_category"
@@ -219,9 +219,12 @@ def test_validated_entities_and_settling_configuration(
     assert radio["tx_repeat_count"] == 5  # Preserve the integration's request contract.
     assert radio["tx_frequency_offset_hz"] == 0
     telemetry = [value for value in radio.values() if isinstance(value, dict) and "name" in value]
-    assert len(telemetry) == (29 if debug else 21)
+    assert len(telemetry) == (30 if debug else 22)
     assert all(value["entity_category"] == "diagnostic" for value in telemetry)
     assert all(not value["disabled_by_default"] for value in telemetry)
+    skipped = radio["rx_rmt_malformed_repeats_skipped"]
+    assert skipped["name"] == "Proflame2 RMT Malformed Repeats Skipped"
+    assert skipped["state_class"] == "total_increasing"
     assert all(value["name"] != "Pre-TX Settling Delay" for value in config["number"])
     trace = next(value for value in config["switch"] if value["name"] == "Radio Register Trace Logging")
     assert trace["entity_category"] == "diagnostic"

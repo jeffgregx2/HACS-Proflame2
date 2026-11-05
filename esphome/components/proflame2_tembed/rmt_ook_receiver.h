@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "esphome/core/defines.h"
+#include "rmt_ook_capture.h"
 #ifdef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
 #include "diagnostics/buffered_ook_capture.h"
 #endif
@@ -29,17 +30,6 @@
 namespace esphome {
 namespace proflame2_tembed {
 
-struct RmtOokCapture {
-  static constexpr size_t MAX_PCM_BITS = 1024;
-
-  std::array<uint8_t, MAX_PCM_BITS / 8> pcm_bytes{};
-  uint16_t pcm_bit_count{0};
-  uint16_t symbol_count{0};
-  uint16_t transition_count{0};
-  uint32_t first_high_us{0};
-  uint32_t first_low_us{0};
-};
-
 class RmtOokReceiver {
 public:
   static constexpr uint32_t RESOLUTION_HZ = 1000000U;
@@ -48,7 +38,8 @@ public:
 
   bool begin(int gpio_num, std::string& error);
   void end();
-  bool poll(RmtOokCapture& capture, std::string& error);
+  bool poll(RmtOokCapture& capture, std::string& error, RmtSegmentObserver observer = nullptr,
+            void* observer_context = nullptr);
   bool active() const {
 #ifdef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
     return this->buffered_.active();
@@ -136,8 +127,8 @@ private:
   }
 #endif
 #ifndef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
-  bool convert_symbols_(const rmt_symbol_word_t* symbols, size_t count, RmtOokCapture& capture,
-                        std::string& error) const;
+  bool convert_symbols_(const rmt_symbol_word_t* symbols, size_t count, RmtOokCapture& capture, std::string& error,
+                        RmtSegmentObserver observer = nullptr, void* observer_context = nullptr) const;
   static void append_run_(RmtOokCapture& capture, bool high, uint32_t duration_us, bool& valid, std::string& error);
 #endif
 
