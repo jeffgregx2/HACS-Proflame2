@@ -40,8 +40,10 @@ inferred from brand, band, identity, or protocol variant.
 - Sending manual ON/zero requires **Allow flame OFF while power is ON**,
   disabled by default. Preserve zero through accessory edits and state replay;
   never silently substitute flame 1. Without permission, reject that command.
-- A normal OFF-to-ON action still uses the retained positive flame or level 1.
-  A redundant ON action while already ON/zero preserves zero.
+- Only an HA OFF-to-ON request without an explicit flame raises zero to level 1;
+  it otherwise retains the selected level. This applies with either option
+  setting. Explicit flame values and redundant ON requests bypass that rule.
+  Power OFF, accessory edits, and received/restored states preserve flame exactly.
 - Learning IDs and legacy C/D integrity constants are unaffected. The option
   belongs to fireplace configuration, not remote identity.
 

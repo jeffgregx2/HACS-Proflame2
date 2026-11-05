@@ -192,24 +192,29 @@ FEATURE_SELECTION_SCHEMA = vol.Schema(
 )
 
 
-def _optional_settings_schema(*, edit_short_name: bool = False, defaults: dict[str, Any] | None = None) -> vol.Schema:
+def _optional_settings_schema(
+    *, edit_short_name: bool = False, defaults: dict[str, Any] | None = None, supports_active_listening: bool = False
+) -> vol.Schema:
     """Keep behavior settings separate from installed fireplace features."""
     defaults = defaults or {}
     fields = {
-        vol.Required(
-            CONF_REFRESH_PERIOD_MINUTES,
-            default=defaults.get(CONF_REFRESH_PERIOD_MINUTES, DEFAULT_REFRESH_PERIOD_MINUTES),
-        ): vol.All(int, vol.Range(min=0)),
         vol.Required(CONF_ALLOW_FLAME_OFF_WHEN_ON, default=defaults.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)): bool,
-        vol.Required(CONF_ACTIVE_LISTENING, default=defaults.get(CONF_ACTIVE_LISTENING, False)): bool,
-        vol.Required(CONF_DEBUG_LOGGING, default=defaults.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)): bool,
     }
+    if supports_active_listening:
+        fields[vol.Required(CONF_ACTIVE_LISTENING, default=defaults.get(CONF_ACTIVE_LISTENING, False))] = bool
+    fields[vol.Required(CONF_DEBUG_LOGGING, default=defaults.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))] = bool
     if edit_short_name:
         fields[
             vol.Required(
                 CONF_FIREPLACE_SHORT_NAME, default=defaults.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
             )
         ] = str
+    fields[
+        vol.Required(
+            CONF_REFRESH_PERIOD_MINUTES,
+            default=defaults.get(CONF_REFRESH_PERIOD_MINUTES, DEFAULT_REFRESH_PERIOD_MINUTES),
+        )
+    ] = vol.All(int, vol.Range(min=0))
     return vol.Schema(fields)
 
 
@@ -437,11 +442,14 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         data, options = self._pending_entry_data, self._pending_entry_options
         if data is None or options is None:
             return await self.async_step_user()
+        supports_listening = get_backend_definition(data[CONF_BACKEND_TYPE]).supports_active_listening
         errors = {}
         if user_input is not None:
             self._pending_entry_options = {**options, **user_input}
             try:
                 updated = normalize_entry_options(self._pending_entry_options)
+                if not supports_listening:
+                    updated[CONF_ACTIVE_LISTENING] = False
             except InvalidRefreshPeriodError:
                 errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
             else:
@@ -450,7 +458,10 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="optional_settings",
             last_step=True,
             data_schema=self.add_suggested_values_to_schema(
-                _optional_settings_schema(defaults=self._pending_entry_options), self._pending_entry_options
+                _optional_settings_schema(
+                    defaults=self._pending_entry_options, supports_active_listening=supports_listening
+                ),
+                self._pending_entry_options,
             ),
             errors=errors,
         )
@@ -950,6 +961,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
 
     async def async_step_optional_settings(self, user_input: dict[str, Any] | None = None):
         """Validate pending settings and save atomically, without changing state."""
+        supports_listening = get_backend_definition(self.config_entry.data[CONF_BACKEND_TYPE]).supports_active_listening
         pending = getattr(self, "_pending_options", dict(self.config_entry.options))
         errors = {}
         if user_input is not None:
@@ -964,6 +976,8 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
             else:
                 try:
                     updated = {**pending, **normalize_entry_options(pending)}
+                    if not supports_listening:
+                        updated[CONF_ACTIVE_LISTENING] = False
                 except InvalidRefreshPeriodError:
                     errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
                 else:
@@ -973,7 +987,10 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
             step_id="optional_settings",
             last_step=True,
             data_schema=self.add_suggested_values_to_schema(
-                _optional_settings_schema(edit_short_name=True, defaults=suggested), suggested
+                _optional_settings_schema(
+                    edit_short_name=True, defaults=suggested, supports_active_listening=supports_listening
+                ),
+                suggested,
             ),
             errors=errors,
         )

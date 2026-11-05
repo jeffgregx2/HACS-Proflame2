@@ -15,6 +15,7 @@ from .capture import CaptureSample
 class FakeRFBackend(RFBackend):
     """In-memory backend that records sent frames without touching hardware."""
 
+    supports_active_listening = True
     name: str = "fake"
     connected: bool = False
     sent_packets: list[ProflamePacket] = field(default_factory=list)

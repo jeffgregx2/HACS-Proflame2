@@ -32,6 +32,7 @@ def build_requested_state(
     data: Mapping[str, Any],
     *,
     allow_flame_off_when_on: bool = False,
+    allow_power_off_flame: bool = False,
 ) -> tuple[FireplaceState, tuple[str, ...]]:
     """Validate service or profile input and build a full semantic state.
 
@@ -53,9 +54,12 @@ def build_requested_state(
         if not minimum <= flame <= 6:
             raise StateValidationError(f"flame must be between {minimum} and 6 when power is true.")
     else:
-        if flame_value is not None and _whole_level(flame_value, CONF_FLAME) not in (0,):
+        flame = 0 if flame_value is None else _whole_level(flame_value, CONF_FLAME)
+        if allow_power_off_flame:
+            if not 0 <= flame <= 6:
+                raise StateValidationError("flame must be between 0 and 6.")
+        elif flame != 0:
             raise StateValidationError("flame must be omitted or 0 when power is false.")
-        flame = 0
 
     warnings: list[str] = []
     fan = _validate_feature_number(features, data, CONF_FAN, 0, 6, warnings)
@@ -89,8 +93,7 @@ def build_staged_state(
 
     state = base_state or default_manual_state()
     power = state.power
-    # An already-ON zero is observed truth, never an implicit ignition request.
-    flame = state.flame if state.power or state.flame > 0 else 1
+    flame = state.flame
     fan = state.fan if features.fan else 0
     light = state.light if features.light else 0
     front = state.front if features.front else False
@@ -99,6 +102,8 @@ def build_staged_state(
 
     if CONF_POWER in changes:
         power = bool(changes[CONF_POWER])
+        if power and CONF_FLAME not in changes:
+            flame = flame_for_power_on(state)
     if CONF_FLAME in changes and changes[CONF_FLAME] is not None:
         flame = _whole_level(changes[CONF_FLAME], CONF_FLAME)
         if not 0 <= flame <= 6:
@@ -143,6 +148,15 @@ def build_staged_state(
         cpi=cpi,
     )
     return requested_state
+
+
+def flame_for_power_on(state: FireplaceState) -> int:
+    """Ignite at level 1 only for an implicit HA OFF-to-ON request.
+
+    Explicit flame values, observations and redundant ON requests never use
+    this as a zero-to-one normalization rule.
+    """
+    return 1 if not state.power and state.flame == 0 else state.flame
 
 
 def _validate_feature_number(

@@ -1227,6 +1227,8 @@ async def test_esphome_display_sync_reapplies_active_listener_policy(hass) -> No
 
 async def test_active_listener_retries_when_linked_esphome_not_ready(hass) -> None:
     class _Backend:
+        supports_active_listening = True
+
         def __init__(self) -> None:
             self.calls = 0
 
@@ -1377,6 +1379,7 @@ async def test_active_listener_recovers_from_receive_errors_after_start(hass, mo
     received.put_nowait(last)
 
     class Backend:
+        supports_active_listening = True
         connected = True
 
         async def receive(self, **kwargs):
@@ -1413,6 +1416,7 @@ async def test_active_listener_stops_intentionally_during_retry(hass, monkeypatc
     runtime = await async_setup_runtime_entry(hass, entry)
 
     class Backend:
+        supports_active_listening = True
         calls = 0
 
         async def receive(self, **kwargs):

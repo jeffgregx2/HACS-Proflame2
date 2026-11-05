@@ -93,7 +93,7 @@ class Proflame2NumberEntity(NumberEntity):
         # The setter still enforces the entry policy; displaying zero grants none.
         if self._key == CONF_FLAME:
             state = self._runtime_entry.desired_state or runtime_current_state(self._runtime_entry)
-            if self._runtime_entry.allow_flame_off_when_on or (state and state.power and state.flame == 0):
+            if self._runtime_entry.allow_flame_off_when_on or (state and state.flame == 0):
                 return 0
         return self._attr_native_min_value
 
@@ -103,10 +103,7 @@ class Proflame2NumberEntity(NumberEntity):
         state = desired_state or runtime_current_state(self._runtime_entry)
         if state is None:
             return 1 if self._key == CONF_FLAME else 0
-        value = self._extract_value(state)
-        if self._key == CONF_FLAME and value == 0 and not state.power:
-            return 1
-        return int(value)
+        return int(self._extract_value(state))
 
     async def async_set_native_value(self, value: float) -> None:
         if not float(value).is_integer():

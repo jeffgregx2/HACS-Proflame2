@@ -196,12 +196,10 @@ async def test_refresh_options_preserve_saved_profiles_and_reopen(hass):
     assert form["step_id"] == "optional_settings"
     invalid = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_REFRESH_PERIOD_MINUTES: True})
     assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
-    result = await hass.config_entries.options.async_configure(
-        form["flow_id"], {CONF_REFRESH_PERIOD_MINUTES: 5, CONF_ACTIVE_LISTENING: True}
-    )
+    result = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_REFRESH_PERIOD_MINUTES: 5})
     assert result["data"][CONF_REFRESH_PERIOD_MINUTES] == 5
     assert result["data"][CONF_PROFILES]["evening"][CONF_NAME] == "Evening"
-    assert result["data"][CONF_ACTIVE_LISTENING] is True
+    assert result["data"][CONF_ACTIVE_LISTENING] is False
     await hass.async_block_till_done()
     menu = await hass.config_entries.options.async_init(entry.entry_id)
     form = await hass.config_entries.options.async_configure(menu["flow_id"], {"next_step_id": "features"})
@@ -2093,3 +2091,44 @@ async def test_saved_profile_form_zero_uses_entry_permission_and_rejects_fractio
     else:
         assert result["errors"] == {CONF_FLAME: "invalid_profile"}
         assert not entry.options.get(CONF_PROFILES)
+
+
+@pytest.mark.parametrize("backend,supported", [(BACKEND_ESPHOME, True), (BACKEND_YARDSTICK, False), ("fake", True)])
+@pytest.mark.parametrize("editing", [False, True])
+async def test_active_listening_field_uses_declared_controller_capability(hass, backend, supported, editing):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    options = {CONF_ACTIVE_LISTENING: True}
+    if editing:
+        entry = MockConfigEntry(
+            domain=DOMAIN, data={CONF_BACKEND_TYPE: backend, CONF_REMOTE_ID: 0x123456}, options=options
+        )
+        entry.add_to_hass(hass)
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "features"})
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    else:
+        flow = Proflame2ConfigFlow()
+        flow.hass = hass
+        flow._pending_entry_data = {CONF_NAME: "Test", CONF_BACKEND_TYPE: backend, CONF_REMOTE_ID: 0x123456}
+        flow._pending_entry_options = options
+        result = await flow.async_step_optional_settings()
+    assert result["step_id"] == "optional_settings"
+    assert (CONF_ACTIVE_LISTENING in _form_schema_fields(result["data_schema"])) is supported
+    if editing:
+        saved = await hass.config_entries.options.async_configure(result["flow_id"], {})
+        assert saved["data"][CONF_ACTIVE_LISTENING] is supported
+
+
+async def test_active_listening_visibility_follows_capability_not_controller_name(hass, monkeypatch):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+    from custom_components.proflame2.rf.esphome_api import ESPHomeAPIBackend
+
+    # Changing the class capability changes the form even though its ID stays LilyGO.
+    monkeypatch.setattr(ESPHomeAPIBackend, "supports_active_listening", False)
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    flow._pending_entry_data = {CONF_NAME: "Test", CONF_BACKEND_TYPE: BACKEND_ESPHOME}
+    flow._pending_entry_options = {CONF_ACTIVE_LISTENING: True}
+    result = await flow.async_step_optional_settings()
+    assert CONF_ACTIVE_LISTENING not in _form_schema_fields(result["data_schema"])

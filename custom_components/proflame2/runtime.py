@@ -596,6 +596,7 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     else:
         raise ValueError(f"Unsupported backend type: {backend_type}")
 
+    active_listening_enabled = active_listening_enabled and backend.supports_active_listening
     set_active_listening_enabled = getattr(backend, "set_active_listening_enabled", None)
     if callable(set_active_listening_enabled):
         maybe_awaitable = set_active_listening_enabled(

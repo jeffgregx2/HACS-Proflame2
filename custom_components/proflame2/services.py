@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import voluptuous as vol
@@ -50,7 +50,7 @@ from .const import (
     STATE_CONFIDENCE_OBSERVED,
     STATE_CONFIDENCE_REQUESTED,
 )
-from .control import StateValidationError, build_requested_state, build_staged_state
+from .control import StateValidationError, build_requested_state, build_staged_state, flame_for_power_on
 from .control_intent import ControlIntent, ControllerArbiter, controller_arbiter
 from .packet_debug import get_packet_debug_logger
 from .protocol.encoder import encode_packet
@@ -671,8 +671,10 @@ async def _async_control_dispatcher(hass: HomeAssistant, entry: Proflame2Runtime
 
 
 async def async_start_active_listener(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
-    """Start background active listening when the hidden test flag enables it."""
+    """Start background listening only for a capable controller with RX enabled."""
 
+    if not getattr(runtime_entry.backend, "supports_active_listening", False):
+        runtime_entry.active_listening_enabled = False
     if runtime_entry.shutting_down or not runtime_entry.active_listening_enabled or runtime_entry.backend is None:
         _log_control_event(
             runtime_entry,
@@ -758,6 +760,7 @@ async def _async_active_listener_loop(hass: HomeAssistant, runtime_entry: Profla
             not runtime_entry.shutting_down
             and runtime_entry.active_listening_enabled
             and runtime_entry.backend is not None
+            and runtime_entry.backend.supports_active_listening
         ):
             try:
                 if runtime_entry.learning_in_progress:
@@ -1141,6 +1144,9 @@ async def async_sync_runtime_rx_policy(runtime_entry: Proflame2RuntimeEntry) -> 
     backend = runtime_entry.backend
     if backend is None or runtime_entry.learning_in_progress:
         return
+    if not getattr(backend, "supports_active_listening", False):
+        runtime_entry.active_listening_enabled = False
+        return
     set_active_listening_enabled = getattr(backend, "set_active_listening_enabled", None)
     if not callable(set_active_listening_enabled):
         return
@@ -1246,8 +1252,23 @@ async def async_execute_set_state(
         {key: value for key, value in data.items() if key != ATTR_ENTITY_ID},
     )
     try:
+        retain_off_flame = False
+        if CONF_POWER in data and CONF_FLAME not in data and source != "saved_profile":
+            # A power request without a flame uses existing settings. Explicit
+            # full-state commands and saved profiles retain their own values.
+            state = runtime_entry.desired_state or runtime_current_state(runtime_entry)
+            if state is None:
+                if data[CONF_POWER]:
+                    raise StateValidationError("Cannot turn power on because current state is unknown; specify flame.")
+            else:
+                flame = flame_for_power_on(state) if data[CONF_POWER] else state.flame
+                data = {**asdict(state), **data, CONF_FLAME: flame}
+                retain_off_flame = not data[CONF_POWER]
         requested_state, ignored_warnings = build_requested_state(
-            runtime_entry.features, data, allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on
+            runtime_entry.features,
+            data,
+            allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
+            allow_power_off_flame=retain_off_flame,
         )
     except StateValidationError as exc:
         runtime_entry.last_error = str(exc)
@@ -1585,7 +1606,9 @@ def _prepare_send_request(
         runtime_entry.remote_profile,
         source=source,
         warnings=warnings,
-        allow_power_off_flame=(source == "debounced_control"),
+        # Service/profile input was validated before dispatch. Retained OFF
+        # levels from power-only services and staged switches remain valid.
+        allow_power_off_flame=True,
         allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
     )
     packet.transmission_plan = build_transmission_plan(packet.frame)

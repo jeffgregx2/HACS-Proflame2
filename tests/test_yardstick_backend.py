@@ -1200,3 +1200,18 @@ def test_yardstick_error_mapping_is_user_facing(exc, reason, message) -> None:
 
     assert normalized.reason == reason
     assert message in str(normalized)
+
+
+def test_active_listening_capability_is_independent_of_yardstick_receive_support():
+    from custom_components.proflame2.rf.base import RFBackend
+    from custom_components.proflame2.rf.esphome_api import ESPHomeAPIBackend
+    from custom_components.proflame2.rf.fake import FakeRFBackend
+    from custom_components.proflame2.rf.registry import get_backend_definition
+    from custom_components.proflame2.rf.yardstick import YardStickBackend
+
+    assert RFBackend.supports_active_listening is False
+    assert YardStickBackend.supports_active_listening is False
+    assert ESPHomeAPIBackend.supports_active_listening is True
+    assert FakeRFBackend.supports_active_listening is True
+    assert get_backend_definition("yardstick").supports_active_listening is False
+    assert get_backend_definition("lilygo_cc1101").supports_active_listening is True

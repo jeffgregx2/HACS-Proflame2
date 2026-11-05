@@ -89,6 +89,7 @@ class FifoLearningAccumulator:
 class ESPHomeAPIBackend(RFBackend):
     """Backend adapter for a future ESPHome/T-Embed CC1101 endpoint."""
 
+    supports_active_listening = True
     name = BACKEND_ESPHOME
 
     def __init__(

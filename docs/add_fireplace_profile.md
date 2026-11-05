@@ -146,8 +146,10 @@ Available feature choices:
 - **Allow flame OFF while power is ON**: enable only if your original remote
   can turn the burner off while leaving the fireplace ON for lights or fan
   operation. It is disabled by default. When enabled, Flame can be set to 0;
-  subsequent accessory adjustments keep the burner off. Normal Power ON still
-  starts at the retained flame setting or level 1.
+  subsequent accessory adjustments keep the burner off. Power OFF preserves the
+  flame setting. Turning power from OFF to ON starts at the retained level,
+  using level 1 if it was 0. An explicit service/profile flame value takes
+  precedence. Sending Power ON again while already ON keeps flame 0.
 - `Refresh period in minutes`: send the current fireplace settings again after
   this many minutes without a command being sent or heard from the original
   remote. The default `0` turns this off. Reminders are sent only while Home
@@ -155,12 +157,11 @@ Available feature choices:
   regular reminders to stay on.
   See [Optional inactivity refresh](../README.md#optional-inactivity-refresh)
   for the reported ten-minute setting and native-remote battery requirements.
-- `Enable packet debug log`: write detailed packet/debug information for
-  troubleshooting. Leave this off unless you are diagnosing a problem.
-- `Enable active listening`: allow Home Assistant to keep listening for remote
-  updates after setup when the selected controller supports receiving. Leave
-  this off unless you want Home Assistant to track changes made from the
-  original remote.
+- `Enable packet debug log`: record detailed diagnostic information for
+  troubleshooting. Leave this off unless requested for support.
+- `Enable active listening`: update Home Assistant when you use the original
+  remote by keeping the radio in listening mode when not transmitting. This
+  option appears only for controllers that support active listening.
 
 The display short name is entered earlier during setup. You can edit it later
 on **Optional settings**.

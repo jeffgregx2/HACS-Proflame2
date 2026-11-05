@@ -116,7 +116,9 @@
         },
         "data_description": {
           "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF.",
-          "allow_flame_off_when_on": "Enable only if your original remote can turn the flame off while keeping the fireplace ON for lights or fan operation. Otherwise, leave this off."
+          "allow_flame_off_when_on": "Enable only if your original remote can turn the flame off while keeping the fireplace ON for lights or fan operation. Otherwise, leave this off.",
+          "active_listening": "Update Home Assistant when you use the original remote by keeping the radio in listening mode when not transmitting.",
+          "debug_logging": "Record detailed diagnostic information for troubleshooting. Leave this off unless requested for support."
         }
       }
     },
@@ -230,7 +232,9 @@
         },
         "data_description": {
           "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF.",
-          "allow_flame_off_when_on": "Enable only if your original remote can turn the flame off while keeping the fireplace ON for lights or fan operation. Otherwise, leave this off."
+          "allow_flame_off_when_on": "Enable only if your original remote can turn the flame off while keeping the fireplace ON for lights or fan operation. Otherwise, leave this off.",
+          "active_listening": "Update Home Assistant when you use the original remote by keeping the radio in listening mode when not transmitting.",
+          "debug_logging": "Record detailed diagnostic information for troubleshooting. Leave this off unless requested for support."
         }
       }
     }

@@ -143,10 +143,11 @@ relearning or identity-format migration is required.
 | Change flame from 1 to 0 while ON | Preserve every other requested field; do not convert this to power OFF. |
 | Change light, fan, auxiliary, CPI, or front control while ON/zero | Preserve flame 0 and power ON. Do not implicitly relight the burner. |
 | Raise flame from 0 to 1–6 | Preserve accessory settings and transmit the requested flame level. |
-| Power OFF | Preserve existing OFF/retained-settings behavior. Do not make OFF into accessories-only operation. |
-| Power ON from an OFF state with no positive retained flame | Keep the existing default ignition level of 1; the new option alone must not change normal power-on behavior. |
+| HA Power OFF without an explicit flame | Preserve the current flame and accessory settings, including zero, regardless of the option. |
+| HA OFF → ON without an explicit flame | Preserve the current level; change only zero to 1. Apply this to the Power switch and power requests through `set_state`, regardless of the option. Stage/report 1 immediately when this rule applies. |
 | Redundant Power ON while already ON/zero | Preserve zero; do not treat it as an implicit ignition request. |
-| Full-state service call or saved profile | Require an explicit valid state under the current command policy. Do not turn omitted fields into patch semantics; existing full-state defaults remain unchanged. |
+| Explicit-flame service call or saved profile | Honor the specified flame under existing validation; never apply automatic ignition to explicit zero. Existing defaults for omitted accessory fields remain unchanged. Saved profiles still require flame when ON. |
+| Service power request without flame | Use the current desired/current state for omitted settings, overriding fields explicitly supplied. Power ON requires a known state or explicit flame. Power OFF remains available when state is unknown, using existing safe OFF defaults. |
 | Receive a valid matching manual ON/zero frame | Report its actual power/flame/accessory values regardless of the TX option. Preserve identity/integrity checks. |
 | Invalid flame value | Reject values outside 0–6, non-whole levels, and prohibited combinations without transmitting. |
 
@@ -158,9 +159,11 @@ for an observed zero with a configured minimum of 1; if that cannot faithfully
 represent the state, resolve presentation before implementation is considered
 complete. Do not silently fabricate a flame level.
 
-Preserve the existing retained flame presentation when power is OFF; distinguish
-that remembered power-on setting from an observed ON/zero burner state. An
-unknown state must not be presented as a newly confirmed zero reading.
+When power is OFF, report the actual retained flame, including zero, with either
+option setting. Do not substitute 1 during reporting, restore, accessory edits,
+or Power OFF. Only an implicit HA OFF-to-ON action may raise zero to 1. A
+redundant ON action preserves zero; if TX permission is disabled it fails instead
+of relighting the burner. Unknown state must not be presented as a confirmed zero.
 
 If an ON/zero observation arrives while the option is disabled, an accessory-only
 edit must fail clearly rather than silently substituting flame 1. The user can
@@ -183,6 +186,9 @@ adding another device or configuration entry.
 | --- | --- | --- |
 | **Fireplace features** | Fan, light, front burner, auxiliary, CPI pilot | Select features the fireplace actually supports. |
 | **Optional settings** | Refresh period in minutes; Allow flame OFF while power is ON; existing active-listening and packet-debug settings; existing fireplace short name where currently editable | Configure integration behavior and retain access to existing settings. |
+
+The active-listening field appears only when the selected controller declares
+that capability. Receive/learning support alone does not qualify.
 
 Refresh remains 0 (disabled) by default, and the flame-zero option defaults OFF.
 Preserve each setup route's existing active-listening defaults and backend
@@ -347,7 +353,7 @@ receiver merely because both encoders can represent it.
 - The option is an explicit runtime/validation/encoding keyword with a default
   of false; it is not part of the remote profile or Learning ID.
 - Flame reports observed zero even when TX is disabled. The number
-  entity temporarily exposes minimum 0 for an observed ON/zero state so HA can
+  entity temporarily exposes minimum 0 for any known zero state so HA can
   represent it faithfully; the setter still rejects prohibited zero commands.
   Otherwise its minimum remains 1 until the option is enabled.
 - Hardware and behavior pages share schemas; guided and imported setup share
@@ -374,3 +380,47 @@ receiver merely because both encoders can represent it.
 No firmware has been installed, RF commands transmitted, or changes published.
 Reporter acceptance must verify physical accessories/pilot behavior and updated
 remote-driven HA state, as well as return to positive flame and normal OFF/ON.
+
+
+### Power-action refinement after user testing
+
+The Flame control and retained state no longer substitute 1 for an OFF/zero
+value, regardless of the option. Accessory edits while OFF preserve zero without
+transmitting. HA OFF-to-ON requests that omit flame raise zero to 1; explicit
+flame requests and redundant ON requests bypass this rule. `set_state` requests
+that omit flame retain the other current settings unless explicitly overridden.
+This is a narrow power-request exception to the full-state service contract;
+saved-profile defaults and explicit-flame commands retain their existing rules.
+
+The regression sequence covers restored OFF/light 2/flame 0 → light 0 (no TX)
+→ Power ON (TX and UI flame 1) → light 6 (flame 1) → flame 0 → Power OFF
+(TX/UI flame 0) → light 2 (retain zero, no TX), on both protocol variants.
+Additional service tests cover option ON/OFF, positive/zero levels, explicit
+values, redundant ON, and zero/positive preservation on Power OFF.
+
+Validation after this refinement: **2,059 integration tests passed**, with 34
+skipped and one deselected. Repository-wide Black/Ruff and whitespace checks
+passed. This supersedes the earlier 2,039-test software record above. The
+changes are local; physical acceptance and deployment remain separate.
+
+
+### Active-listening capability and option help
+
+`RFBackend.supports_active_listening` defaults to false; LilyGO and the in-memory
+test backend explicitly enable it. YardStick retains receive/learning support
+without claiming continuous idle listening. The registry reads the backend
+class declaration for form visibility without constructing a controller or
+opening a connection. Runtime setup, listener start, receive policy sync and the
+listener loop enforce the same capability; old saved true values on unsupported
+controllers do not start a listener. Final options save normalizes them to false.
+Temporary disconnection does not alter capability or hide an available option.
+
+Both setup and options use the requested active-listening helper text and the
+packet-debug explanation. Field layout stays with the existing checkbox controls.
+Regression checks cover capability-based visibility and persistence, a changed
+class capability with the same controller ID, runtime refusal with stale options
+and direct start requests, and unchanged YardStick learning/receive behavior.
+
+Validation: **2,068 integration tests passed**, with 34 skipped and one
+deselected. Repository-wide Black/Ruff and whitespace checks passed. Changes
+remain local and have not been deployed.

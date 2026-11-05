@@ -185,6 +185,16 @@ for details and the LilyGO firmware update requirement.
 
 ### Service Interface
 
+Power OFF preserves the current flame setting. Turning power from OFF to ON
+uses the current level, raising 0 to 1 so the burner lights. A service call
+that explicitly supplies `flame` uses that value instead; ON/flame 0 requires
+**Allow flame OFF while power is ON**. Repeating Power ON while already ON
+does not raise a zero flame.
+
+A `proflame2.set_state` call without `flame` uses the current settings for any
+omitted fields. This supports power-only requests. Calls that specify `flame`
+keep the full-state behavior described below.
+
 Individual dashboard controls briefly wait before sending so multiple setting changes can be combined into one fireplace command. When an automation or script already knows the full desired fireplace state, use the `proflame2.set_state` service to send it immediately. For example:
 
 ```yaml

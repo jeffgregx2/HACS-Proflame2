@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from ..protocol.models import FireplaceState
 from ..protocol.packet import ProflameFrame, ProflamePacket
@@ -82,6 +82,9 @@ class ReceiveStatus:
 class RFBackend(ABC):
     """Transport abstraction used by the Home Assistant coordinator layer."""
 
+    # Continuous idle listening is separate from receive/learning support and
+    # does not change when a capable controller temporarily disconnects.
+    supports_active_listening: ClassVar[bool] = False
     pcm_logging_enabled = False
 
     def set_pcm_logging_enabled(self, enabled: bool) -> None:

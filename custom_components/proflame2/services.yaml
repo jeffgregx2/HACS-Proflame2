@@ -1,6 +1,6 @@
 set_state:
   name: Set fireplace state
-  description: Atomically apply a full Proflame 2 fireplace command.
+  description: Apply a fireplace state. Omit flame for a power request using current settings; an OFF-to-ON request then raises flame 0 to 1. Explicit flame values use the configured permission.
   fields:
     device_id:
       required: false
