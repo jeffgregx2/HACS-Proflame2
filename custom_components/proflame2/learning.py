@@ -82,18 +82,20 @@ ERROR_INCONSISTENT_REMOTE_ID = "inconsistent_remote_id"
 ERROR_CONTRADICTORY_PROFILE = "contradictory_profile"
 ERROR_AMBIGUOUS_PROFILE = "ambiguous_profile"
 ERROR_BACKEND_UNAVAILABLE = "backend_unavailable"
-RESTORE_PROMPT_LABELS = {"restore_power_on"}
+RESTORE_PROMPT_LABELS = {"restore_power_on", "ensure_power_on"}
 MANUAL_MODE_INSTRUCTION = (
+    "Thermostat or SMART mode detected.  \n"
     "Turn OFF thermostat and SMART mode on your remote. Press the thermostat button until both modes are off. "
     "Learning will continue automatically. If it does not continue, press Power once after turning both modes off."
 )
 
 
 class LearningModeTransition(Enum):
-    """Mode events change instructions without completing a prompted action."""
+    """Prerequisite events change instructions without completing an action."""
 
     MANUAL_REQUIRED = "manual_required"
     MANUAL_RESTORED = "manual_restored"
+    POWER_REQUIRED = "power_required"
 
 
 LearningBackendFactory = Callable[[str], RFBackend | Awaitable[RFBackend]]
@@ -187,6 +189,7 @@ class LearnSession:
     last_manual_command: tuple[int, int] | None = None
     extended_protocol: bool | None = None
     diagnostic_capture: bool = False
+    last_observed_packet: ProflamePacket | None = None
 
 
 @dataclass(frozen=True)
@@ -519,6 +522,25 @@ async def async_capture_next_learning_packet(
         if failure is not None:
             return failure
 
+        if (
+            session.prompt_label == "ensure_power_on"
+            and not packet.frame.cmd1 & 0x01
+            and not (packet.frame.is_extended and thermostat_mode_active(packet.frame))
+        ):
+            # OFF repeats do not satisfy a power prerequisite or restart its deadline.
+            continue
+
+        if (
+            session.prompt_label in {"flame_down", "cmd2_change"}
+            and not packet.state.power
+            and not session.waiting_for_manual
+            and not (packet.frame.is_extended and thermostat_mode_active(packet.frame))
+        ):
+            # Even a duplicate OFF packet makes a flame instruction inapplicable.
+            if packet.frame.is_extended:
+                session.last_manual_command = learning_command_key(packet.frame)
+            return LearningModeTransition.POWER_REQUIRED
+
         if packet.frame.is_extended and not session.diagnostic_capture:
             result = await _capture_extended_manual_action(session, receive_timeout, packet)
             if result is not None:
@@ -558,6 +580,7 @@ def _validate_learning_observation(
             error_code=ERROR_CONTRADICTORY_PROFILE,
             error="Commands must come from one remote and one protocol format.",
         )
+    session.last_observed_packet = packet
     return None
 
 

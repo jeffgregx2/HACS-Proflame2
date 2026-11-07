@@ -792,6 +792,24 @@ def test_learning_backend_failure_result_includes_exception_class() -> None:
     asyncio.run(_run())
 
 
+@pytest.mark.parametrize("extended", [False, True])
+async def test_power_prerequisite_ignores_off_repeats_until_prompt_timeout(extended):
+    backend = FakeRFBackend()
+    await backend.connect()
+    packet = (
+        _extended_packet(cmd1=0x80, cmd2=6)
+        if extended
+        else _packet(remote_id=0x3B3F02, cmd1=0, err1=0x57, cmd2=6, err2=0xDE)
+    )
+    backend.queue_packets(*([packet] * 20))
+    session = LearnSession(backend=backend, step_timeout=0.02, receive_timeout=0.001, prompt_label="ensure_power_on")
+    result = await async_capture_next_learning_packet(session)
+    assert result.error_code == ERROR_TIMEOUT
+    assert not session.packets
+    assert session.last_observed_packet == packet
+    await backend.close()
+
+
 async def test_extended_thermostat_is_not_a_completed_action():
     backend = FakeRFBackend()
     await backend.connect()
@@ -858,10 +876,12 @@ async def test_invalid_original_frame_cannot_release_manual_mode_wait():
     session = LearnSession(backend=backend, step_timeout=0.05, receive_timeout=0.001)
     backend.queue_packets(_extended_packet(cmd1=0x86, cmd2=0))
     assert await async_capture_next_learning_packet(session) is LearningModeTransition.MANUAL_REQUIRED
+    previous_observation = session.last_observed_packet
     valid = _extended_packet(cmd1=0x81, cmd2=5)
     backend.queue_packets(ProflamePacket.from_frame(replace(valid.frame, err2=valid.frame.err2 ^ 1)))
     result = await async_capture_next_learning_packet(session)
     assert result.error_code == ERROR_CONTRADICTORY_PROFILE
+    assert session.last_observed_packet == previous_observation
     assert session.waiting_for_manual
     assert not session.packets
     await backend.close()

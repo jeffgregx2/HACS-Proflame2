@@ -1326,9 +1326,9 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass, monkeypatch)
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     assert result["step_id"] == "learn_progress"
+    assert result["description_placeholders"]["header"] == "Step 1 of 4"
     assert result["description_placeholders"]["instruction"] == (
-        "Turn OFF thermostat and SMART mode, then press the Power button once. "
-        "The fireplace does not need to start in any specific state."
+        "Press the Power button once. The fireplace does not need to start in any specific state."
     )
 
     result = await _advance_guided_learning(hass, result["flow_id"], result)
@@ -1436,12 +1436,14 @@ async def test_guided_learning_prompt_reuses_pending_capture_task(hass, monkeypa
     )
     flow = hass.config_entries.flow._progress[result["flow_id"]]
     original_task = flow._learn_task
+    original_action_number = flow._learn_action_number
     assert original_task is not None
 
     duplicate_result = await flow.async_step_learn_prompt()
 
     assert duplicate_result["type"] is FlowResultType.SHOW_PROGRESS
     assert flow._learn_task is original_task
+    assert flow._learn_action_number == original_action_number
     assert len(backend.receive_queue) == 4
 
     result = await _advance_guided_learning(hass, result["flow_id"], result)
@@ -1918,7 +1920,8 @@ async def test_same_remote_id_can_be_used_with_two_different_linked_lilygo_entri
     assert result["options"][CONF_FIREPLACE_SHORT_NAME] == "BR"
 
 
-async def test_extended_mode_recovery_updates_both_displays_and_keeps_prompt(hass, monkeypatch):
+@pytest.mark.parametrize("initial_power_off", [False, True])
+async def test_extended_mode_recovery_updates_both_displays_and_keeps_prompt(hass, monkeypatch, initial_power_off):
     from custom_components.proflame2.config_flow import Proflame2ConfigFlow
     from custom_components.proflame2.learning import MANUAL_MODE_INSTRUCTION
 
@@ -1933,11 +1936,15 @@ async def test_extended_mode_recovery_updates_both_displays_and_keeps_prompt(has
     original = Proflame2ConfigFlow.async_show_progress
 
     def show_progress(self, **kwargs):
-        progress.append(kwargs["description_placeholders"]["instruction"])
+        progress.append(kwargs["description_placeholders"])
         return original(self, **kwargs)
 
     backend.update_learning_mode = update_learning_mode
     monkeypatch.setattr(Proflame2ConfigFlow, "async_show_progress", show_progress)
+    if initial_power_off:
+        # A thermostat remote can first send OFF, advancing to "Power again"
+        # before its next ON packet identifies the active thermostat mode.
+        backend.queue_packets(_extended_packet(remote_id=0x123456, cmd1=0x84, cmd2=6, w6=79))
     backend.queue_packets(
         *[
             _extended_packet(remote_id=0x123456, cmd1=w4, cmd2=w5, w6=w6)
@@ -1965,13 +1972,184 @@ async def test_extended_mode_recovery_updates_both_displays_and_keeps_prompt(has
     )
     result = await _advance_guided_learning(hass, result["flow_id"], result)
     assert result["step_id"] == "learn_features"
-    assert MANUAL_MODE_INSTRUCTION in progress
+    mode_header, _, mode_instruction = MANUAL_MODE_INSTRUCTION.partition("\n")
+    mode_progress = [state for state in progress if state["header"] == mode_header.strip()]
+    assert mode_progress
+    assert all(state["instruction"] == mode_instruction for state in mode_progress)
+    assert MANUAL_MODE_INSTRUCTION.startswith("Thermostat or SMART mode detected.  \nTurn OFF")
     mode_messages = [state for state in display if state.get("instruction") == MANUAL_MODE_INSTRUCTION]
     assert mode_messages
-    assert {state["step_title"] for state in mode_messages} == {"Learn 1"}
+    assert {state["step_title"] for state in mode_messages} == {"Learn 3" if initial_power_off else "Learn 2"}
+    mode_position = progress.index(mode_progress[0])
+    resumed = next(state for state in progress[mode_position + 1 :] if state["header"] != mode_header.strip())
+    assert resumed["header"] == f"Step {4 if initial_power_off else 3} of 4"
     accepted = [state for state in display if state.get("status") == "Packet accepted"]
-    assert [state["step_title"] for state in accepted] == ["Learn 1", "Learn 2", "Learn 3", "Learn 4"]
+    assert [state["step_title"] for state in accepted] == (
+        ["Learn 1", "Learn 4", "Learn 5", "Learn 7"]
+        if initial_power_off
+        else ["Learn 3", "Learn 4", "Learn 5", "Learn 6"]
+    )
     assert not backend.connected
+
+
+def test_additional_learning_prompts_have_distinct_step_numbers():
+    """Repeated extra instructions remain distinguishable without a fixed total."""
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    flow = Proflame2ConfigFlow()
+    flow._learn_input = {CONF_BACKEND_TYPE: BACKEND_YARDSTICK}
+    flow._learn_prompt_index = 4
+    flow._learn_action_number = 5
+    first = flow._learn_progress_placeholders()
+    flow._learn_prompt_index = 5
+    flow._learn_action_number = 6
+    second = flow._learn_progress_placeholders()
+    assert first["header"] == "Additional step 5"
+    assert second["header"] == "Additional step 6"
+    assert first["instruction"] == second["instruction"]
+    assert "Flame Down or Flame Up" in first["instruction"]
+
+
+def test_learning_progress_layout_separates_header_and_instructions():
+    """Keep a compact header and paragraph break within HA's centered layout."""
+    translation = json.loads(
+        (Path(__file__).parents[1] / "custom_components/proflame2/translations/en.json").read_text()
+    )
+    template = translation["config"]["progress"]["learn_remote"]
+    text = template.format(backend_name="YardStick", header="Step 1 of 4", instruction="Press Power once.")
+    assert "**Step 1 of 4**\n\nPress Power once." in text
+    assert "Do this now" not in text
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("initially_on,interrupt_flame", [(False, False), (True, False), (False, True)])
+async def test_learning_checks_power_before_requesting_flame(
+    hass, monkeypatch, extended, initially_on, interrupt_flame
+):
+    """An ON starting state must not leave the user adjusting flame while OFF."""
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    _enable_fake_backend(monkeypatch)
+    backend = ExtendedFrameFakeRFBackend() if extended else FakeRFBackend()
+    progress = []
+    original = Proflame2ConfigFlow.async_show_progress
+
+    def show_progress(self, **kwargs):
+        progress.append(kwargs["description_placeholders"])
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(Proflame2ConfigFlow, "async_show_progress", show_progress)
+
+    def packet(power, flame=6):
+        if extended:
+            return _extended_packet(remote_id=0x3B3F02, cmd1=0x80 | int(power), cmd2=flame)
+        return _packet(
+            remote_id=0x3B3F02,
+            cmd1=int(power),
+            err1=0x76 if power else 0x57,
+            cmd2=flame,
+            err2=0xDE if flame == 6 else 0xBD,
+        )
+
+    backend.queue_packets(packet(not initially_on), packet(initially_on), packet(not initially_on))
+    if interrupt_flame:
+        backend.queue_packets(packet(False))
+    if initially_on or interrupt_flame:
+        # Repeated OFF frames cannot satisfy the corrective power-ON prompt.
+        backend.queue_packets(packet(False), packet(False), packet(True))
+    backend.queue_packets(packet(True, 5))
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.001
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "learn"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "Power prerequisite", CONF_BACKEND_TYPE: "fake"}
+    )
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["step_id"] == "learn_features"
+    corrections = [state for state in progress if "The fireplace is OFF" in state["instruction"]]
+    assert bool(corrections) is (initially_on or interrupt_flame)
+    if corrections:
+        assert {state["header"] for state in corrections} == (
+            {"Additional step 5"} if interrupt_flame else {"Step 4 of 4"}
+        )
+        correction_position = progress.index(corrections[-1])
+        resumed = progress[correction_position + 1]
+        assert resumed["header"] == f"Additional step {6 if interrupt_flame else 5}"
+        assert resumed["instruction"] == "Press the Flame Down button once."
+    assert not backend.connected
+
+
+async def test_additional_evidence_requests_continue_global_action_number(hass, monkeypatch):
+    """Extra evidence uses the same displayed counter as normal and corrective requests."""
+    from custom_components.proflame2 import config_flow
+    from custom_components.proflame2.protocol.ecc import build_err_byte
+
+    _enable_fake_backend(monkeypatch)
+    backend = FakeRFBackend()
+    progress = []
+    original_show = config_flow.Proflame2ConfigFlow.async_show_progress
+    original_derive = config_flow.derive_learn_result_from_session
+
+    def show_progress(self, **kwargs):
+        progress.append(kwargs["description_placeholders"]["header"])
+        return original_show(self, **kwargs)
+
+    def require_more_evidence(session):
+        return None if len(session.packets) < 5 else original_derive(session)
+
+    monkeypatch.setattr(config_flow.Proflame2ConfigFlow, "async_show_progress", show_progress)
+    monkeypatch.setattr(config_flow, "derive_learn_result_from_session", require_more_evidence)
+    backend.queue_packets(
+        *[
+            _packet(
+                remote_id=0x3B3F02,
+                cmd1=int(power),
+                err1=build_err_byte(int(power), 5, 7),
+                cmd2=flame,
+                err2=build_err_byte(flame, 1, 8),
+            )
+            for power, flame in ((True, 6), (False, 6), (True, 6), (True, 5), (True, 4), (True, 3))
+        ]
+    )
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.001
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "learn"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "More evidence", CONF_BACKEND_TYPE: "fake"}
+    )
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["step_id"] == "learn_features"
+    assert list(dict.fromkeys(progress)) == [
+        "Step 1 of 4",
+        "Step 2 of 4",
+        "Step 3 of 4",
+        "Step 4 of 4",
+        "Additional step 5",
+        "Additional step 6",
+    ]
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("flame,direction", [(0, "Up"), (1, "Up"), (6, "Down")])
+@pytest.mark.parametrize("prompt_index", [3, 4])
+def test_flame_learning_prompts_choose_an_available_direction(extended, flame, direction, prompt_index):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    if extended:
+        packet = _extended_packet(remote_id=0x123456, cmd1=0x81, cmd2=flame)
+    else:
+        packet = _packet(remote_id=0x123456, cmd1=1, err1=0, cmd2=flame, err2=0)
+    flow = Proflame2ConfigFlow()
+    flow._learn_prompt_index = prompt_index
+    flow._learn_session = LearnSession(backend=FakeRFBackend(), step_timeout=1, receive_timeout=0.01)
+    flow._learn_session.last_observed_packet = packet
+    assert flow._current_learn_instruction() == f"Press the Flame {direction} button once."
 
 
 @pytest.mark.parametrize("page", ["manual_features", "optional_settings"])

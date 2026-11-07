@@ -221,8 +221,7 @@ def _optional_settings_schema(
 LEARN_PROMPTS: tuple[tuple[str, str], ...] = (
     (
         "power_on",
-        "Turn OFF thermostat and SMART mode, then press the Power button once. "
-        "The fireplace does not need to start in any specific state.",
+        "Press the Power button once. The fireplace does not need to start in any specific state.",
     ),
     ("power_off", "Press the Power button again."),
     ("restore_power_on", "Press the Power button once more."),
@@ -255,6 +254,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _learn_task: asyncio.Task[ProflamePacket | LearnResult | LearningModeTransition] | None = None
     _learn_session: LearnSession | None = None
     _learn_prompt_index: int = 0
+    _learn_action_number: int = 0
     _extended_diagnostic_active: bool = False
     _extended_diagnostic_log_path: str | None = None
     _extended_diagnostic_task: asyncio.Task[str | None] | None = None
@@ -553,6 +553,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_learn_failed()
         self._learn_session = learn_session
         self._learn_prompt_index = 0
+        self._learn_action_number = 0
         self._extended_diagnostic_active = False
         self._extended_diagnostic_log_path = None
         self._extended_diagnostic_task = None
@@ -570,10 +571,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_progress(
                 step_id="learn_progress",
                 progress_action="learn_remote",
-                description_placeholders={
-                    "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
-                    "instruction": self._current_learn_instruction(),
-                },
+                description_placeholders=self._learn_progress_placeholders(),
                 progress_task=self._learn_task,
             )
 
@@ -581,7 +579,11 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._extended_diagnostic_log_path = await self._extended_diagnostic_task
             self._extended_diagnostic_task = None
 
-        self._learn_session.prompt_index = self._learn_prompt_index
+        if not self._extended_diagnostic_active:
+            self._learn_action_number += 1
+        self._learn_session.prompt_index = (
+            self._learn_prompt_index if self._extended_diagnostic_active else self._learn_action_number - 1
+        )
         self._learn_session.prompt_label = self._current_learn_prompt_label()
         self._learn_session.prompt_instruction = self._current_learn_instruction()
         self._learn_session.diagnostic_capture = self._extended_diagnostic_active
@@ -595,10 +597,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_progress(
             step_id="learn_progress",
             progress_action="learn_remote",
-            description_placeholders={
-                "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
-                "instruction": self._current_learn_instruction(),
-            },
+            description_placeholders=self._learn_progress_placeholders(),
             progress_task=self._learn_task,
         )
 
@@ -612,10 +611,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_progress(
                 step_id="learn_progress",
                 progress_action="learn_remote",
-                description_placeholders={
-                    "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
-                    "instruction": self._current_learn_instruction(),
-                },
+                description_placeholders=self._learn_progress_placeholders(),
                 progress_task=self._learn_task,
             )
 
@@ -632,7 +628,14 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 next_step_id="learn_features" if capture_result.success else "learn_failed"
             )
 
-        self._learn_prompt_index += 1
+        corrective_action = (
+            not self._extended_diagnostic_active
+            and self._learn_prompt_index >= 3
+            and (self._learn_session.prompt_label == "ensure_power_on" or not capture_result.state.power)
+        )
+        # Corrective packets remain derivation evidence, but don't complete a flame step.
+        if not corrective_action:
+            self._learn_prompt_index += 1
         if self._extended_diagnostic_active:
             if self._learn_prompt_index < len(EXTENDED_DIAGNOSTIC_PROMPTS):
                 return self.async_show_progress_done(next_step_id="learn_prompt")
@@ -869,20 +872,61 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Return the current guided-learning prompt."""
 
         if self._learn_session is not None and self._learn_session.waiting_for_manual:
-            return MANUAL_MODE_INSTRUCTION
-        if self._extended_diagnostic_active:
-            return EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][1]
-        if self._learn_prompt_index < len(LEARN_PROMPTS):
+            instruction = MANUAL_MODE_INSTRUCTION
+        elif self._extended_diagnostic_active:
+            instruction = EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][1]
+        elif self._flame_learning_needs_power_on():
+            instruction = "The fireplace is OFF. Press the Power button to turn it ON before adjusting the flame."
+        elif self._learn_prompt_index >= 3 and self._learn_session is not None:
+            packet = self._learn_session.last_observed_packet
+            if packet is not None:
+                direction = "Up" if packet.state.flame <= 1 else "Down"
+                instruction = f"Press the Flame {direction} button once."
+            else:
+                instruction = LEARN_PROMPTS[3][1] if self._learn_prompt_index == 3 else EXTRA_LEARN_PROMPT[1]
+        elif self._learn_prompt_index < len(LEARN_PROMPTS):
             instruction = LEARN_PROMPTS[self._learn_prompt_index][1]
         else:
             instruction = EXTRA_LEARN_PROMPT[1]
         return instruction
+
+    def _flame_learning_needs_power_on(self) -> bool:
+        """Require a received ON state before asking for a flame adjustment."""
+
+        return (
+            not self._extended_diagnostic_active
+            and self._learn_prompt_index >= 3
+            and self._learn_session is not None
+            and self._learn_session.last_observed_packet is not None
+            and not self._learn_session.last_observed_packet.state.power
+        )
+
+    def _learn_progress_placeholders(self) -> dict[str, str]:
+        """Separate HA's progress header from the action without changing capture state."""
+
+        instruction = self._current_learn_instruction()
+        if self._learn_session is not None and self._learn_session.waiting_for_manual:
+            header, _, instruction = instruction.partition("\n")
+            header = header.strip()
+        elif self._extended_diagnostic_active:
+            header = f"Diagnostic step {self._learn_prompt_index + 1} of {len(EXTENDED_DIAGNOSTIC_PROMPTS)}"
+        elif self._learn_action_number <= len(LEARN_PROMPTS):
+            header = f"Step {max(1, self._learn_action_number)} of {len(LEARN_PROMPTS)}"
+        else:
+            header = f"Additional step {self._learn_action_number}"
+        return {
+            "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
+            "header": header,
+            "instruction": instruction,
+        }
 
     def _current_learn_prompt_label(self) -> str:
         """Return the short label for the current guided-learning prompt."""
 
         if self._extended_diagnostic_active:
             return EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][0]
+        if self._flame_learning_needs_power_on():
+            return "ensure_power_on"
         if self._learn_prompt_index < len(LEARN_PROMPTS):
             return LEARN_PROMPTS[self._learn_prompt_index][0]
         return EXTRA_LEARN_PROMPT[0]

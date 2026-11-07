@@ -1,7 +1,116 @@
 # Thermostat mode and temperature handling during learning
 
-Status: implemented locally on `dev`; automated validation passed. Hardware
-acceptance remains pending. Tracking: [Issue #32](https://github.com/jeffgregx2/HACS-Proflame2/issues/32).
+Status: original learning fix released in v0.7.0-beta5 and confirmed by the
+reporter on beta6. Explicit detected-mode guidance refined locally on `dev`
+for v0.7.0; automated validation passed and the maintainer confirmed the revised
+action numbering in hardware testing. Reporter confirmation of the refinement
+is pending. Tracking: [Issue #32](https://github.com/jeffgregx2/HACS-Proflame2/issues/32).
+
+## Pre-GA guidance follow-up — 2026-11-07
+
+The [reporter's beta6 acceptance and feedback](https://github.com/jeffgregx2/HACS-Proflame2/issues/32#issuecomment-6699066815)
+confirms successful learning after leaving thermostat/SMART mode, but reports a
+confusing return from "Press the Power button again" to the mode instructions.
+The pause already identifies thermostat packets and retains the current learning
+step; its text did not explicitly state that the remote's mode was detected.
+
+The owner requires that explanation before v0.7.0 GA. Keep this change limited to
+the shared HA/LilyGO mode instruction: begin with **Thermostat or SMART mode
+detected.** on its own line (using a Markdown hard line break in HA), then retain
+the existing instructions for turning both modes off and automatic continuation.
+The first prompt only asks the user to press Power; it does not ask every user
+to turn thermostat/SMART off before any packet has identified the active mode.
+The owner additionally approved a small v0.7.0 presentation change: show a bold
+header followed by a blank line and the instructions, keeping HA's existing
+centered progress layout for all text. Request numbers 1–4 use **Step 1
+of 4** through **Step 4 of 4**. Later requests use **Additional step 5**,
+**Additional step 6**, and so on, even when their action text repeats. A mode
+pause uses **Thermostat or SMART mode detected.** as the header, without a step
+number; the instructions explain how to leave that mode. On returning to manual
+mode, the same internal learning stage resumes under a new action number.
+Diagnostic prompts use their
+existing separate sequence, labeled **Diagnostic step X of 4**. Header totals
+come from the existing prompt lists. A separate request counter increments for
+each new action, including power corrections, mode instructions and requests
+for more derivation evidence, independently of the internal learning stage.
+The thermostat warning keeps its unnumbered header, but its requested action
+counts toward subsequent numbering. Extra actions never restart their count
+at one. Refreshing a pending prompt, duplicate packets and ignored telemetry
+do not increment it. Reset the counter when starting a new learning session.
+LilyGO's Learn N title follows this request counter and retains plain
+instructions. These presentation changes
+do not alter packet acceptance, sequencing or timeout rules. Broader packet/retry progress feedback is
+separate v0.8.0 work. Mobile appearance still needs visual acceptance.
+
+Implementation and verification:
+
+- [x] Add the explicit detected-mode explanation to the shared instruction.
+- [x] Separate HA headers and instructions, including standard and additional
+  steps and an unnumbered mode pause. Retain the step number during mode recovery.
+- [x] Exercise thermostat/SMART detection both at the first prompt and after
+  an initial OFF packet advances to "Press the Power button again".
+- [x] Verify both HA and LilyGO show the explanation at the retained learning
+  stage, mode exit and repeats do not complete that stage, and learning succeeds.
+- [x] Run learning and configuration-flow regressions: **101 passed**, including separate header/instruction rendering, additional-step numbering and mode-pause coverage. The two
+  affected end-to-end cases failed for the missing explanation before the fix.
+- [ ] Obtain reporter confirmation of the revised guidance and include it in
+  the next v0.7.0 build. No firmware update is required for this text change.
+
+### Executable prompts and power prerequisites — 2026-11-07
+
+The maintainer found a blocking assumption in the original fixed sequence:
+starting ON and following OFF → ON → OFF leaves the fireplace OFF when step 4
+asks for Flame Down. The flow must inspect the last matching received state
+before asking for a flame adjustment; it cannot assume three Power presses end
+in ON. This correction is required for the v0.7.0 guided-learning flow.
+
+- Retain the latest observation after existing frame, identity and format
+  validation, including duplicate and mode-exit packets. Profile evidence remains
+  separate; a duplicate is not promoted into new derivation evidence.
+- Before standard or additional flame-adjustment prompts, if the observed
+  fireplace is OFF, ask: **The fireplace is OFF. Press the Power button to turn
+  it ON before adjusting the flame.** Show this on HA and LilyGO. Keep the
+  current internal learning stage, preserve accumulated evidence, and transmit
+  nothing. The corrective request and subsequent flame request have distinct,
+  increasing action numbers.
+- Wait for an ON observation from the matching remote. OFF repeats do not
+  satisfy the prerequisite or restart the per-prompt deadline. A previously
+  seen legacy ON packet can restore the power prerequisite, just as it can
+  satisfy the existing restore-power prompt. Extended learning retains its
+  command/telemetry duplicate rules.
+- A corrective packet does not advance the outstanding flame step. If it
+  independently supplies enough valid derivation evidence, learning may complete
+  normally; otherwise reissue the applicable flame instruction at the same
+  internal stage with the next action number.
+- If an OFF packet arrives while waiting for a flame adjustment, return to the
+  power prerequisite immediately, even if that OFF packet is a duplicate. Use
+  the existing prerequisite-transition return path without treating it as a
+  completed flame action. Thermostat/SMART handling retains priority.
+- Once ON, request Flame Up for flame 0 or 1, and Flame Down above 1. This
+  avoids asking a remote to lower flame below its usable minimum or raise it
+  beyond its maximum. These directions apply to additional flame prompts too.
+- Keep RF decoding, integrity checks, identity generation, diagnostic-capture
+  sequencing and the standalone rtl_433 helper outside this HA prompt correction.
+
+Regression coverage includes both legacy and extended learning, initially ON
+and OFF, unexpected power-off while a flame action is outstanding, repeated OFF
+packets during correction, restoration with a duplicate ON packet, minimum and
+maximum flame settings, additional prompts, and retained mode-recovery behavior.
+The original **101-test** wording/layout check preceded this correction;
+updated verification passed **121 learning/configuration-flow tests** and the
+full default regression selection passed **2,166 tests**, with **34 skipped**
+and one deselected. The skips cover 27 real ESPHome configuration checks (CLI
+not enabled), four installed-helper interoperability checks and three external
+rtl_433 detector checks. Black, Ruff and whitespace checks passed.
+The maintainer subsequently reported that the revised flow and action numbering
+worked well. Broader remote and mobile acceptance remains pending.
+
+After separating action numbering from capture stages, **122 learning and
+configuration-flow tests passed**. Coverage includes corrective ON requests,
+unplanned OFF during a flame request, automatic mode recovery, additional
+evidence requests through Additional step 6, and repeated progress callbacks
+that must not increment the count. The earlier full-suite result above predates
+this presentation-counter refinement.
 
 Extended remote learning must pause when thermostat or SMART mode is detected,
 resume automatically when the remote returns to manual mode, and tolerate room
@@ -9,7 +118,7 @@ temperature, setpoint, and unit changes throughout learning. The Home Assistant
 flow and the standalone rtl_433 Learning ID helper must use the same protocol
 policy. No additional temperature captures are required to implement this behavior.
 
-## Evidence and current failures
+## Original evidence and failures before the beta5 fix
 
 The [reported transition sequence](https://github.com/jeffgregx2/HACS-Proflame2/issues/32#issuecomment-6566081499)
 shows thermostat ON, SMART, and manual frames with W4 low bits `10`, `11`, and
@@ -18,13 +127,13 @@ state. The remote reportedly repeats each command once after approximately
 15 seconds, unless another press supersedes it. These observations support
 automatic resumption without requiring a confirmation click.
 
-Currently, guided learning accepts thermostat packets as completed actions but
+Before the fix, guided learning accepted thermostat packets as completed actions but
 profile derivation requires manual evidence. The flow therefore continues asking
 for commands without explaining the missing requirement. HA and LilyGO can show
 different descriptions of that apparent progress.
 
-Profile derivation already validates extended checksums against the received
-bytes. It replaces W7 with `0xC8`, but requires W8 to remain constant and copies
+Profile derivation already validated extended checksums against the received
+bytes. It replaced W7 with `0xC8`, but required W8 to remain constant and copied
 it into the output template. A changing temperature can therefore produce a
 false template conflict. The standalone Learning ID helper also compares profiles
 derived from individual packets, so the fix must cover that comparison too.
