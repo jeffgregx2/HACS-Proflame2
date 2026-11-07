@@ -52,6 +52,12 @@ from .const import (
 )
 from .control import StateValidationError, build_requested_state, build_staged_state, flame_for_power_on
 from .control_intent import ControlIntent, ControllerArbiter, controller_arbiter
+from .display_sync import (
+    DISPLAY_SYNC_INTERVAL_SECONDS,
+    DISPLAY_SYNC_RECONCILE_SECONDS,
+    DisplaySyncOutcome,
+    DisplaySyncRecovery,
+)
 from .packet_debug import get_packet_debug_logger
 from .protocol.encoder import encode_packet
 from .refresh import (
@@ -61,6 +67,7 @@ from .refresh import (
     record_received_activity,
 )
 from .rf.esphome.contract import ESPHomeDisplayState
+from .rf.esphome_api import is_display_connection_error
 from .rf.waveform import build_transmission_plan
 from .runtime import (
     Proflame2RuntimeEntry,
@@ -714,36 +721,77 @@ async def async_start_display_sync_listener(hass: HomeAssistant, runtime_entry: 
 async def _async_display_sync_loop(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
     """Keep the LilyGO display state converged after reconnects and HA option changes."""
 
-    reconcile_interval_seconds = 300.0
+    recovery = DisplaySyncRecovery(_LOGGER, runtime_entry.config_entry_id)
+    generation = getattr(runtime_entry.backend, "display_sync_generation", None)
     try:
         while (
             not runtime_entry.shutting_down
             and runtime_entry.backend_type == BACKEND_ESPHOME
             and runtime_entry.backend is not None
         ):
-            await asyncio.sleep(15.0)
+            await asyncio.sleep(DISPLAY_SYNC_INTERVAL_SECONDS)
             if runtime_entry.shutting_down:
                 break
             try:
-                loop_time = asyncio.get_running_loop().time()
-                last_sync = runtime_entry.last_display_sync_monotonic
-                force = last_sync is None or (loop_time - last_sync) >= reconcile_interval_seconds
-                await async_sync_runtime_display_state(hass, runtime_entry, force=force)
-            except RuntimeError as exc:
-                _LOGGER.debug(
-                    "Proflame2 periodic display sync skipped config_entry_id=%s: %s",
-                    runtime_entry.config_entry_id,
-                    exc,
-                )
-            except Exception:
-                _LOGGER.exception(
-                    "Proflame2 periodic display sync failed config_entry_id=%s",
-                    runtime_entry.config_entry_id,
+                backend = runtime_entry.backend
+                if backend is None:
+                    break
+                now = asyncio.get_running_loop().time()
+                if getattr(backend, "controller_available", None) is False:
+                    invalidate = getattr(backend, "invalidate_display_connection", None)
+                    if callable(invalidate):
+                        invalidate()
+                    recovery.failure(now, "Linked ESPHome controller is offline")
+                    continue
+                current_generation = getattr(backend, "display_sync_generation", None)
+                if generation and current_generation != generation:
+                    recovery.failure(now, "ESPHome connection binding changed")
+                generation = current_generation
+                arbiter = _control_arbiter(hass, runtime_entry)
+                if (
+                    arbiter.lock.locked()
+                    or arbiter.learning_owner is not None
+                    or (arbiter.readiness_unknown and arbiter.uncertain_request_id is not None)
+                    or _display_sync_deferred(runtime_entry)
+                ):
+                    continue
+                # Background rebinding/policy updates cannot race a user TX.
+                async with arbiter.lock:
+                    if runtime_entry.shutting_down or _display_sync_deferred(runtime_entry):
+                        continue
+                    last_sync = runtime_entry.last_display_sync_monotonic
+                    force = (
+                        recovery.resync_pending
+                        or recovery.confirmation_due(now)
+                        or last_sync is None
+                        or now - last_sync >= DISPLAY_SYNC_RECONCILE_SECONDS
+                    )
+                    recovery.attempting()
+                    outcome = await async_sync_runtime_display_state(hass, runtime_entry, force=force)
+                    completed = asyncio.get_running_loop().time()
+                    current_generation = getattr(backend, "display_sync_generation", None)
+                    if generation and current_generation != generation:
+                        recovery.failure(completed, "ESPHome connection binding changed")
+                    generation = current_generation
+                    if outcome is DisplaySyncOutcome.APPLIED:
+                        recovery.applied(completed)
+            except Exception as exc:
+                expected = is_display_connection_error(exc)
+                if expected:
+                    invalidate = getattr(runtime_entry.backend, "invalidate_display_connection", None)
+                    if callable(invalidate):
+                        invalidate()
+                recovery.failure(
+                    asyncio.get_running_loop().time(),
+                    f"{type(exc).__name__}: {exc}",
+                    error=exc,
+                    expected=expected,
                 )
     except asyncio.CancelledError:
         raise
     finally:
-        runtime_entry.display_sync_task = None
+        if runtime_entry.display_sync_task is asyncio.current_task():
+            runtime_entry.display_sync_task = None
 
 
 async def _async_active_listener_loop(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
@@ -1058,22 +1106,37 @@ async def async_execute_display_state_update(
     await update_display_state(display_state)
 
 
+def _display_sync_deferred(runtime_entry: Proflame2RuntimeEntry) -> bool:
+    """Learning and user intent take precedence over background convergence."""
+    return (
+        runtime_entry.learning_in_progress
+        or runtime_entry.desired_state is not None
+        or runtime_entry.sending_in_progress
+    )
+
+
 async def async_sync_runtime_display_state(
     hass: HomeAssistant,
     runtime_entry: Proflame2RuntimeEntry,
     *,
     action_label: str | None = None,
     force: bool = False,
-) -> None:
+) -> DisplaySyncOutcome:
     """Push the current known HA/runtime state to the ESPHome display endpoint."""
 
     backend = runtime_entry.backend
-    if backend is None or runtime_entry.learning_in_progress:
-        return
+    if backend is None or _display_sync_deferred(runtime_entry):
+        return DisplaySyncOutcome.DEFERRED
+    prepare = getattr(backend, "prepare_display_sync", None)
+    if callable(prepare):
+        force = await prepare() or force
+    # User intent can arrive while connection setup yields to the event loop.
+    if _display_sync_deferred(runtime_entry):
+        return DisplaySyncOutcome.DEFERRED
     await async_sync_runtime_rx_policy(runtime_entry)
     if runtime_entry.active_listening_enabled:
         await async_start_active_listener(hass, runtime_entry)
-    await _async_push_runtime_display_state(
+    return await _async_push_runtime_display_state(
         runtime_entry,
         action_label=action_label,
         force=force,
@@ -1085,23 +1148,23 @@ async def _async_push_runtime_display_state(
     *,
     action_label: str | None = None,
     force: bool = False,
-) -> None:
+) -> DisplaySyncOutcome:
     """Push current runtime state without changing receive policy."""
 
     # Existing firmware treats changed display settings as grounds to cancel a
     # repeat. HA-only intent must not suppress the last accepted command's retry.
-    if runtime_entry.desired_state is not None:
-        return
+    if _display_sync_deferred(runtime_entry):
+        return DisplaySyncOutcome.DEFERRED
     backend = runtime_entry.backend
     if backend is None:
-        return
+        return DisplaySyncOutcome.DEFERRED
     update_display_state = getattr(backend, "update_display_state", None)
     if not callable(update_display_state):
-        return
+        return DisplaySyncOutcome.DEFERRED
 
     state = runtime_current_state(runtime_entry)
     if state is None:
-        return
+        return DisplaySyncOutcome.DEFERRED
 
     signature = (
         state.power,
@@ -1114,7 +1177,7 @@ async def _async_push_runtime_display_state(
         runtime_entry.display_short_name,
     )
     if not force and action_label is None and runtime_entry.last_display_sync_signature == signature:
-        return
+        return DisplaySyncOutcome.UNCHANGED
 
     display_state = ESPHomeDisplayState(
         power=state.power,
@@ -1131,6 +1194,7 @@ async def _async_push_runtime_display_state(
     await update_display_state(display_state)
     runtime_entry.last_display_sync_signature = signature
     runtime_entry.last_display_sync_monotonic = asyncio.get_running_loop().time()
+    return DisplaySyncOutcome.APPLIED
 
 
 async def async_sync_runtime_rx_policy(runtime_entry: Proflame2RuntimeEntry) -> None:

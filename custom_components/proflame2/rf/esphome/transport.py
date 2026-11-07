@@ -215,6 +215,10 @@ class _TelemetrySnapshot:
     rx_last_rejection_snapshot: str | None = None
 
 
+class ESPHomeControllerUnavailableError(RuntimeError):
+    """The current linked ESPHome runtime is absent or explicitly offline."""
+
+
 class HomeAssistantESPHomeTransport:
     """Transport that reuses a linked Home Assistant ESPHome config entry."""
 
@@ -260,6 +264,29 @@ class HomeAssistantESPHomeTransport:
         self._linked_controller_device_id: str | None = None
         self._rx_event_transport_ready = False
         self.can_receive = False
+
+    def _current_runtime(self) -> Any | None:
+        """Resolve fresh state; a cached runtime may outlive an ESPHome reload."""
+        entry = self.hass.config_entries.async_get_entry(self.linked_entry_id)
+        if entry is None or entry.domain != "esphome":
+            return None
+        return getattr(entry, "runtime_data", None)
+
+    @property
+    def device_available(self) -> bool:
+        runtime = self._current_runtime()
+        return runtime is not None and bool(getattr(runtime, "available", False))
+
+    @property
+    def connection_is_current(self) -> bool:
+        runtime = self._current_runtime()
+        return (
+            self.connected
+            and self.configured
+            and runtime is not None
+            and runtime is self._runtime_data
+            and bool(getattr(runtime, "available", False))
+        )
 
     async def connect(self) -> None:
         self._log_debug(

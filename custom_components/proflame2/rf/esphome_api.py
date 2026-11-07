@@ -29,7 +29,7 @@ from .esphome.contract import (
     ESPHomeTXRequest,
     ESPHomeTXResponse,
 )
-from .esphome.transport import ESPHomeTransport
+from .esphome.transport import ESPHomeControllerUnavailableError, ESPHomeTransport
 from .pulse import find_proflame_pcm_candidates
 
 ESPHOME_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -61,6 +61,27 @@ def _is_esphome_api_connection_error(error: Exception) -> bool:
 
     error_type = type(error)
     return error_type.__name__ == "APIConnectionError" and error_type.__module__.startswith("aioesphomeapi")
+
+
+def is_display_connection_error(error: Exception) -> bool:
+    """Classify known disconnects even when an existing wrapper preserves a cause."""
+    current: BaseException | None = error
+    for _ in range(8):
+        if current is None:
+            break
+        api_connection_error = any(
+            cls.__name__ == "APIConnectionError" and cls.__module__.startswith("aioesphomeapi")
+            for cls in type(current).__mro__
+        )
+        if (
+            isinstance(current, (ESPHomeControllerUnavailableError, TimeoutError, ConnectionError))
+            or api_connection_error
+        ):
+            return True
+        # Only explicit wrappers preserve classification. An unrelated exception
+        # raised during cleanup must not be hidden by an older network context.
+        current = current.__cause__
+    return False
 
 
 @dataclass(slots=True)
@@ -109,6 +130,7 @@ class ESPHomeAPIBackend(RFBackend):
         self.active_listening_profile = remote_profile
         self.debug_logging_enabled = debug_logging_enabled
         self.connected = False
+        self.display_sync_generation = 0
         self.last_endpoint_status: ESPHomeEndpointStatusReport | None = None
         self.last_tx_response: ESPHomeTXResponse | None = None
         self.active_listening_enabled = False
@@ -123,6 +145,29 @@ class ESPHomeAPIBackend(RFBackend):
         observe_pcm = getattr(transport, "set_pcm_event_logger", None)
         if callable(observe_pcm):
             observe_pcm(self._log_rx_pcm)
+
+    @property
+    def controller_available(self) -> bool | None:
+        """Live reachability, or unknown for transports without this signal."""
+        if self.transport is None:
+            return False
+        return getattr(self.transport, "device_available", None)
+
+    def invalidate_display_connection(self) -> None:
+        """Require ordinary setup on return, including same-object reconnects."""
+        self.connected = False
+
+    async def prepare_display_sync(self) -> bool:
+        """Rebind before policy/display actions without depending on receive()."""
+        if self.controller_available is False:
+            self.invalidate_display_connection()
+            raise ESPHomeControllerUnavailableError("Linked ESPHome controller is offline")
+        current = getattr(self.transport, "connection_is_current", True)
+        reconnect = not self.connected or not current
+        if reconnect:
+            self.invalidate_display_connection()
+            await self.connect()
+        return reconnect
 
     async def connect(self) -> None:
         """Open/configure the ESPHome transport boundary."""
@@ -159,6 +204,7 @@ class ESPHomeAPIBackend(RFBackend):
             self.connected = False
             raise RuntimeError(f"ESPHome backend is unavailable: {exc}") from exc
         self.connected = True
+        self.display_sync_generation += 1
         self._log_debug(
             "connect complete controller_id=%s endpoint_status=%s",
             self.name,
@@ -286,8 +332,7 @@ class ESPHomeAPIBackend(RFBackend):
     async def update_display_state(self, display_state: ESPHomeDisplayState) -> None:
         """Push display-only state to the ESPHome endpoint without transmitting RF."""
 
-        if not self.connected:
-            await self.connect()
+        await self.prepare_display_sync()
         assert self.transport is not None
         try:
             await asyncio.wait_for(

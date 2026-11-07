@@ -212,6 +212,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entry or recreate it using a different controller. No profiles have been deleted."
         )
 
+    from .rf.esphome.transport import ESPHomeControllerUnavailableError
     from .runtime import (
         async_refresh_runtime_device_link,
         async_retry_runtime_device_link,
@@ -255,7 +256,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_sync_runtime_display_state(hass, runtime_entry, action_label="Startup sync")
     except RuntimeError as exc:
         message = str(exc)
-        if "Linked ESPHome entry is not loaded or has no runtime_data" in message:
+        if (
+            isinstance(exc, ESPHomeControllerUnavailableError)
+            or "Linked ESPHome entry is not loaded or has no runtime_data" in message
+        ):
             _LOGGER.warning(
                 "Proflame2 startup display sync deferred for config_entry_id=%s because linked ESPHome entry is not ready yet: %s",
                 entry.entry_id,
@@ -272,7 +276,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         await async_sync_runtime_display_state(hass, runtime_entry, action_label="Startup sync")
                     except RuntimeError as retry_exc:
                         retry_message = str(retry_exc)
-                        if "Linked ESPHome entry is not loaded or has no runtime_data" in retry_message:
+                        if (
+                            isinstance(retry_exc, ESPHomeControllerUnavailableError)
+                            or "Linked ESPHome entry is not loaded or has no runtime_data" in retry_message
+                        ):
                             _LOGGER.debug(
                                 "Proflame2 startup display sync still waiting for linked ESPHome entry config_entry_id=%s delay=%ss reason=%s",
                                 entry.entry_id,

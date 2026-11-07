@@ -1,7 +1,7 @@
 # v0.8.0: technical debt and post-v0.7.0 maintenance
 
-Status: planned maintenance release. No new user-facing features are currently
-planned. This document inventories deferred work; it does not authorize all
+Status: planned maintenance release, with the explicitly approved controller
+shutdown exception below. This document inventories deferred work; it does not authorize all
 items to be implemented at once.
 
 ## Release purpose and boundaries
@@ -48,6 +48,19 @@ before planning additional changes rather than repeating completed work.
   categories. Check existing automations and mixed firmware/integration upgrades.
 
 ## Firmware maintainability and validation
+
+### Approved deferral: manual LilyGO shutdown
+
+The owner moved the [controller shutdown feature](controller_shutdown_design.md)
+from v0.7.0 to v0.8.0 on 2026-11-06. Preserve the four-second prompt/ten-second
+hold, battery-only PMIC cutoff, OTA-confirmation correction and HA notification
+with its half-second interval as one feature. The local branch and outstanding
+build/hardware checks are recorded in that design. This is the specific approved
+exception to the original no-new-features boundary, not authorization for other
+new capabilities. The HA-only #34 recovery fix and already released #33 fix
+remain with v0.7.0.
+
+### Existing cleanup work
 
 The [firmware cleanup backlog](firmware_cleanup_backlog.md) contains the
 technical detail. Its items are included in v0.8.0 planning:
@@ -99,6 +112,8 @@ before committing compact capture-backed vectors or publishing support details.
 
 | Item | Boundary |
 | --- | --- |
+| [#33: flame OFF while power ON](https://github.com/jeffgregx2/HACS-Proflame2/issues/33) | Keep the fix and its existing user-facing behavior in v0.7.0; it first shipped in beta6. The deferred controller shutdown work must not change it. |
+| [#34: offline logging and display recovery](issue_34_offline_display_sync_design.md) | Keep the bounded HA-only recovery fix in v0.7.0. It requires no new LilyGO firmware; optional firmware shutdown/test support is deferred above. |
 | [#20: ESPHome image/fallback AP warnings](https://github.com/jeffgregx2/HACS-Proflame2/issues/20) | Previously required before v0.7.0 GA. Do not silently defer to this release. The image removal deadline is ESPHome 2027.1.0. |
 | [Startup/API recovery](startup_api_recovery_design.md) | Before GA, ensure ordinary delayed ESPHome readiness, missing action metadata during startup, and temporary disconnections cannot permanently terminate active listening. A broad #22 transport rewrite is not required to fix a bounded lifecycle defect. |
 | Version information in debug captures | [Implemented locally and tested](debug_version_logging_design.md); include in v0.7.0 rather than treating it as future firmware cleanup. |
