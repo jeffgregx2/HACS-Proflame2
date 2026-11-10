@@ -1413,6 +1413,50 @@ async def test_post_tx_confirmation_ignores_mismatched_state_echo(hass, caplog) 
     assert "post-TX confirmation ignored mismatched state observed=Off expected=On" in caplog.text
 
 
+@pytest.mark.parametrize("action", ["entity", "service"])
+async def test_successful_send_with_active_listening_is_ready_until_remote_observation(hass, action):
+    """Local TX completion is ready/requested; RX independently establishes observed state."""
+
+    from custom_components.proflame2.protocol.encoder import encode_packet
+
+    hass.data.setdefault(DOMAIN, {})[DATA_ACTIVE_LISTENING] = True
+    hass.data[DOMAIN][DATA_CONTROL_DEBOUNCE_SECONDS] = 0.001
+    hass.data[DOMAIN][DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS] = 0.01
+    entry = _add_entry(hass, remote_id=0x123456)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    backend = runtime.backend
+    assert isinstance(backend, FakeRFBackend)
+    if action == "entity":
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 3}, blocking=True
+        )
+    else:
+        await hass.services.async_call(DOMAIN, "set_state", {"power": True, "flame": 3}, blocking=True)
+    async with asyncio.timeout(2):
+        while len(backend.sent_packets) != 1 or runtime.control_task is not None:
+            await asyncio.sleep(0.001)
+    await hass.async_block_till_done()
+    primary = hass.states.get(_sensor_entity_id(entry.title))
+    assert primary.attributes["operational_status"] == "ready"
+    assert primary.attributes["state_confidence"] == STATE_CONFIDENCE_REQUESTED
+    assert runtime.confirmation_task is None
+    listener = runtime.active_listener_task
+    assert listener is not None and not listener.done()
+    observed_state = FireplaceState(True, flame=5)
+    backend.queue_packets(encode_packet(observed_state, runtime.remote_profile, source="observed_packet"))
+    async with asyncio.timeout(2):
+        while runtime.state_confidence != STATE_CONFIDENCE_OBSERVED:
+            await asyncio.sleep(0.001)
+    await hass.async_block_till_done()
+    primary = hass.states.get(_sensor_entity_id(entry.title))
+    assert runtime_current_state(runtime) == observed_state
+    assert primary.attributes["state_confidence"] == STATE_CONFIDENCE_OBSERVED
+    assert primary.attributes["operational_status"] == "ready"
+    assert runtime.active_listener_task is listener and not listener.done()
+    assert len(backend.sent_packets) == 1
+
+
 async def test_active_listening_updates_current_state_when_forced_in_tests(hass) -> None:
     """The hidden active-listening mode should update current state from observed packets."""
 

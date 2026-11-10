@@ -350,6 +350,33 @@ power interruption; it records that fault separately from cold-boot coverage.
    the required window and confirmation succeeds, expect one recovery message.
    Brief outages entirely between polling checks need not be observed.
 
+## Follow-up: Ready after successful transmission
+
+The 2026-11-10 follow-up identified a separate status defect: after a successful
+send with active listening enabled, the integration entered `confirming` without
+a finite confirmation task. A quiet remote could leave that status indefinitely.
+
+Successful transmission here means the backend returned success. For LilyGO,
+that requires HA to receive request-matched controller telemetry confirming that
+the local RF transmission routine completed successfully. It does not establish
+that the fireplace received or acted on the command. Queue admission, timeout,
+or missing controller confirmation is not successful completion.
+
+The narrow v0.7.0 correction sets `ready` after successful completion when active
+listening is enabled and no newer request is pending, then continues listening.
+It does not promote state confidence from `requested` to `observed`; a valid
+received remote packet still supplies observation evidence. Pending requests,
+failed/unconfirmed sends, retries, the listening-disabled confirmation policy,
+and firmware/RF timing remain unchanged.
+
+Regression coverage exercises both entity and service commands: with no remote
+packet, successful completion leaves Ready/Requested with a live listener and
+no confirmation task. A later valid remote packet updates the state to Observed
+without another transmission. Both regressions reproduced the original defect
+and pass after the fix. The full default suite passed: **2,220 passed, 34 skipped,
+one deselected**; Python lint, formatting and source preflight passed. The fix is
+local on dev, uncommitted and unreleased. No additional hardware test is required.
+
 ## References
 
 - [Existing active-listener recovery design](startup_api_recovery_design.md)
