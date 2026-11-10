@@ -530,6 +530,7 @@ def _normalize_backend_diagnostics(result, *, worker_diagnostics: dict[str, Any]
             "cmd2": f"{sample.cmd2:02x}",
             "err1": f"{sample.err1:02x}",
             "err2": f"{sample.err2:02x}",
+            **sample.protocol_fields,
         }
     return YardStickDiagnosticResult(
         capture_complete=result.capture_complete,

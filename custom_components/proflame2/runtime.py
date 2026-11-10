@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -21,6 +21,7 @@ from .const import (
     BACKEND_FAKE,
     BACKEND_YARDSTICK,
     CONF_ACTIVE_LISTENING,
+    CONF_ALLOW_FLAME_OFF_WHEN_ON,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -42,7 +43,9 @@ from .const import (
     CONF_LIGHT,
     CONF_PROFILES,
     CONF_PROTOCOL_VARIANT,
+    CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
+    CONF_RF_BAND,
     DATA_ACTIVE_LISTENING,
     DATA_ESPHOME_TRANSPORT_FACTORY,
     DATA_RUNTIME_ENTRIES,
@@ -55,13 +58,16 @@ from .const import (
     STATE_CONFIDENCE_RESTORED,
     STATE_CONFIDENCE_UNKNOWN,
 )
+from .control_intent import ControlIntents
 from .identity import fireplace_device_identifiers
 from .packet_debug import (
     async_disable_packet_debug_logging,
     async_enable_packet_debug_logging,
 )
-from .profile import normalize_profiles, sanitize_fireplace_short_name
+from .profile import normalize_profiles, sanitize_fireplace_short_name, validate_refresh_period
 from .protocol.encoder import encode_packet
+from .protocol.learning_id import encode_learning_id
+from .protocol.manual_profile import canonical_manual_profile
 from .protocol.models import (
     PROTOCOL_VARIANT_EXTENDED_10_WORD,
     ECCProfile,
@@ -71,6 +77,8 @@ from .protocol.models import (
     RemoteProfile,
 )
 from .protocol.packet import ProflameFrame, ProflamePacket
+from .refresh import RefreshSchedule
+from .rf.band import DEFAULT_RF_BAND, yardstick_band
 from .rf.base import RFBackend, SendResult
 from .rf.esphome.transport import ESPHomeTransport, HomeAssistantESPHomeTransport
 from .rf.esphome_api import ESPHomeAPIBackend
@@ -78,7 +86,6 @@ from .rf.fake import FakeRFBackend
 from .rf.registry import normalize_controller_id
 from .rf.waveform import ProflameTransmissionPlan
 from .rf.yardstick import (
-    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
     YARDSTICK_RX_LEARNING_PACKET_BYTES,
     YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
     YardStickBackend,
@@ -105,29 +112,40 @@ class Proflame2RuntimeEntry:
     device_id: str
     fireplace_id: str
     controller_id: str
+    rf_band: str | None = None
+    radio_configuration_in_progress: bool = False
+    radio_configuration_error: str | None = None
     controller_device_id: str | None = None
     controller_device_identifier: tuple[str, str] | None = None
     display_short_name: str = DEFAULT_FIREPLACE_SHORT_NAME
     learning_in_progress: bool = False
     sending_in_progress: bool = False
     last_packet: ProflamePacket | None = None
+    last_observed_packet: ProflamePacket | None = None
     last_send_result: SendResult | None = None
     last_error: str | None = None
     last_applied_profile_id: str | None = None
     last_applied_profile_name: str | None = None
     saved_profiles: dict[str, dict[str, Any]] | None = None
     desired_state: FireplaceState | None = None
+    control_intents: ControlIntents = field(default_factory=ControlIntents)
+    control_task: asyncio.Task[None] | None = None
+    control_disconnect_unsub: Callable[[], None] | None = None
     operational_status: str = OPERATIONAL_STATUS_READY
     state_confidence: str = STATE_CONFIDENCE_UNKNOWN
     active_profile_state: FireplaceState | None = None
     active_listening_enabled: bool = False
+    allow_flame_off_when_on: bool = False
     debug_logging_enabled: bool = False
+    learning_id: str | None = None
     debounce_task: asyncio.Task[None] | None = None
     debounce_cancel_reason: str | None = None
     active_send_task: asyncio.Task[None] | None = None
     confirmation_task: asyncio.Task[None] | None = None
     active_listener_task: asyncio.Task[None] | None = None
     display_sync_task: asyncio.Task[None] | None = None
+    refresh_schedule: RefreshSchedule = field(default_factory=RefreshSchedule)
+    refresh_task: asyncio.Task[None] | None = None
     last_display_sync_signature: tuple[Any, ...] | None = None
     last_display_sync_monotonic: float | None = None
     shutting_down: bool = False
@@ -203,6 +221,7 @@ async def async_set_runtime_current_state(
         state,
         runtime_entry.remote_profile,
         source=source,
+        allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
     )
     if runtime_entry.last_packet.source is None:
         runtime_entry.last_packet.source = source
@@ -263,6 +282,8 @@ async def async_restore_runtime_state(hass: HomeAssistant, runtime_entry: Profla
             restored_state,
             runtime_entry.remote_profile,
             source="restored_state",
+            # Reconstruct stored observations; this is not a transmit path.
+            allow_flame_off_when_on=True,
         )
     runtime_entry.state_confidence = str(restored.get("state_confidence", STATE_CONFIDENCE_RESTORED))
     runtime_entry.last_applied_profile_id = restored.get("last_applied_profile_id")
@@ -306,6 +327,13 @@ async def async_bootstrap_runtime_state_from_entry_data(
     )
 
 
+def _initial_cpi(profile: RemoteProfile) -> bool:
+    """Seed extended Pilot mode from its template only before state is known."""
+
+    template = profile.extended_template
+    return template is not None and bool(template.w4_base & 0x80)
+
+
 async def async_initialize_safe_default_runtime_state(
     hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry
 ) -> None:
@@ -321,7 +349,7 @@ async def async_initialize_safe_default_runtime_state(
         light=0,
         front=False,
         aux=False,
-        cpi=False,
+        cpi=_initial_cpi(runtime_entry.remote_profile),
     )
     runtime_entry.last_packet = encode_packet(
         safe_state,
@@ -513,17 +541,19 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
             w7=int(entry.data[CONF_EXTENDED_W7]),
             w8=int(entry.data[CONF_EXTENDED_W8]),
         )
-    remote_profile = RemoteProfile(
-        serial_id=int(entry.data[CONF_REMOTE_ID]),
-        ecc=ECCProfile(
-            c1=int(entry.data.get(CONF_C1, 0)),
-            d1=int(entry.data.get(CONF_D1, 0)),
-            c2=int(entry.data.get(CONF_C2, 0)),
-            d2=int(entry.data.get(CONF_D2, 0)),
-        ),
-        features=features,
-        protocol_variant=protocol_variant,
-        extended_template=extended_template,
+    remote_profile = canonical_manual_profile(
+        RemoteProfile(
+            serial_id=int(entry.data[CONF_REMOTE_ID]),
+            ecc=ECCProfile(
+                c1=int(entry.data.get(CONF_C1, 0)),
+                d1=int(entry.data.get(CONF_D1, 0)),
+                c2=int(entry.data.get(CONF_C2, 0)),
+                d2=int(entry.data.get(CONF_D2, 0)),
+            ),
+            features=features,
+            protocol_variant=protocol_variant,
+            extended_template=extended_template,
+        )
     )
 
     backend_type = normalize_controller_id(entry.data[CONF_BACKEND_TYPE])
@@ -562,15 +592,18 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
             debug_logging_enabled=debug_logging_enabled,
         )
     elif backend_type == BACKEND_YARDSTICK:
+        band = yardstick_band(entry.data.get(CONF_RF_BAND, DEFAULT_RF_BAND))
         backend = YardStickBackend(
             hass=hass,
-            frequency_hz=YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
+            frequency_hz=band.rx_frequency_hz,
+            tx_frequency_hz=band.tx_frequency_hz,
             packet_length_bytes=YARDSTICK_RX_LEARNING_PACKET_BYTES,
             sweep_enabled=YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
         )
     else:
         raise ValueError(f"Unsupported backend type: {backend_type}")
 
+    active_listening_enabled = active_listening_enabled and backend.supports_active_listening
     set_active_listening_enabled = getattr(backend, "set_active_listening_enabled", None)
     if callable(set_active_listening_enabled):
         maybe_awaitable = set_active_listening_enabled(
@@ -590,6 +623,7 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
         device_id=device.id,
         fireplace_id=fireplace_id,
         controller_id=controller_id,
+        rf_band=entry.data.get(CONF_RF_BAND, DEFAULT_RF_BAND) if backend_type == BACKEND_YARDSTICK else None,
         controller_device_id=controller_device_id,
         controller_device_identifier=controller_device_identifier,
         display_short_name=sanitize_fireplace_short_name(
@@ -598,10 +632,20 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
         saved_profiles=normalize_profiles(
             entry.options.get(CONF_PROFILES, {}),
             features=features,
+            allow_flame_off_when_on=bool(entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)),
+        ),
+        refresh_schedule=RefreshSchedule(
+            period_seconds=60 * validate_refresh_period(entry.options.get(CONF_REFRESH_PERIOD_MINUTES, 0))
         ),
         active_listening_enabled=active_listening_enabled,
+        allow_flame_off_when_on=bool(entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)),
         debug_logging_enabled=debug_logging_enabled,
     )
+    try:
+        runtime_entry.learning_id = encode_learning_id(remote_profile)
+    except ValueError:
+        # A diagnostic export failure must not disable an otherwise usable fireplace.
+        _LOGGER.warning("Unable to generate Learning ID from the loaded remote profile.")
     if controller_device_id is not None:
         device_registry = dr.async_get(hass)
         device_registry.async_update_device(
@@ -625,7 +669,7 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
                 light=0,
                 front=False,
                 aux=False,
-                cpi=False,
+                cpi=_initial_cpi(remote_profile),
             ),
             remote_profile,
             source="fake_default",
@@ -637,6 +681,9 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     if runtime_entry.last_packet is None:
         await async_initialize_safe_default_runtime_state(hass, runtime_entry)
     async_get_runtime_entries(hass)[entry.entry_id] = runtime_entry
+    from .services import async_observe_controller_connection
+
+    async_observe_controller_connection(hass, runtime_entry)
     return runtime_entry
 
 
@@ -674,25 +721,32 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
     runtime_entry = async_get_runtime_entries(hass).pop(entry.entry_id, None)
     if runtime_entry:
         runtime_entry.shutting_down = True
+        if runtime_entry.control_disconnect_unsub is not None:
+            runtime_entry.control_disconnect_unsub()
+            runtime_entry.control_disconnect_unsub = None
         runtime_entry.shutdown_reason = "config_entry_unload"
         runtime_entry.active_listening_enabled = False
         for task in (
+            runtime_entry.control_task,
             runtime_entry.debounce_task,
             runtime_entry.active_send_task,
             runtime_entry.confirmation_task,
             runtime_entry.active_listener_task,
             runtime_entry.display_sync_task,
+            runtime_entry.refresh_task,
         ):
             if task is not None:
                 task.cancel()
         pending_tasks = [
             task
             for task in (
+                runtime_entry.control_task,
                 runtime_entry.debounce_task,
                 runtime_entry.active_send_task,
                 runtime_entry.confirmation_task,
                 runtime_entry.active_listener_task,
                 runtime_entry.display_sync_task,
+                runtime_entry.refresh_task,
             )
             if task is not None
         ]
@@ -719,25 +773,32 @@ async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
     runtime_entries = list(async_get_runtime_entries(hass).values())
     for runtime_entry in runtime_entries:
         runtime_entry.shutting_down = True
+        if runtime_entry.control_disconnect_unsub is not None:
+            runtime_entry.control_disconnect_unsub()
+            runtime_entry.control_disconnect_unsub = None
         runtime_entry.shutdown_reason = "ha_shutdown"
         runtime_entry.active_listening_enabled = False
         for task in (
+            runtime_entry.control_task,
             runtime_entry.debounce_task,
             runtime_entry.active_send_task,
             runtime_entry.confirmation_task,
             runtime_entry.active_listener_task,
             runtime_entry.display_sync_task,
+            runtime_entry.refresh_task,
         ):
             if task is not None:
                 task.cancel()
         pending_tasks = [
             task
             for task in (
+                runtime_entry.control_task,
                 runtime_entry.debounce_task,
                 runtime_entry.active_send_task,
                 runtime_entry.confirmation_task,
                 runtime_entry.active_listener_task,
                 runtime_entry.display_sync_task,
+                runtime_entry.refresh_task,
             )
             if task is not None
         ]
@@ -784,6 +845,9 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "device_id": runtime_entry.device_id,
         "fireplace_id": runtime_entry.fireplace_id,
         "controller_id": runtime_entry.controller_id,
+        "rf_band": runtime_entry.rf_band,
+        "radio_configuration_in_progress": runtime_entry.radio_configuration_in_progress,
+        "radio_configuration_error": runtime_entry.radio_configuration_error,
         "controller_device_id": runtime_entry.controller_device_id,
         "controller_device_identifier": runtime_entry.controller_device_identifier,
         "display_short_name": runtime_entry.display_short_name,
@@ -794,6 +858,20 @@ def serialize_runtime_entry(runtime_entry: Proflame2RuntimeEntry) -> dict[str, A
         "shutting_down": runtime_entry.shutting_down,
         "shutdown_reason": runtime_entry.shutdown_reason,
         "desired_state": (asdict(runtime_entry.desired_state) if runtime_entry.desired_state is not None else None),
+        "control_intents": {
+            "revision": runtime_entry.control_intents.revision,
+            "epoch": runtime_entry.control_intents.epoch,
+            "pending_state": (
+                asdict(runtime_entry.control_intents.pending.state)
+                if runtime_entry.control_intents.pending is not None
+                else None
+            ),
+            "in_flight_state": (
+                asdict(runtime_entry.control_intents.in_flight.state)
+                if runtime_entry.control_intents.in_flight is not None
+                else None
+            ),
+        },
         "remote_profile": {
             "serial_id": runtime_entry.remote_profile.serial_id,
             "ecc": asdict(runtime_entry.remote_profile.ecc),

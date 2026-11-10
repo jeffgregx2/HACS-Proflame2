@@ -108,7 +108,7 @@ def _add_entry(
 async def test_extended_profile_control_emits_ten_word_frame(hass) -> None:
     """A learned extended profile must traverse the normal HA control path."""
 
-    w9, w10 = build_extended_integrity_words(0x81, 0x04, 0x15, 0xC8, 0x00)
+    w9, w10 = build_extended_integrity_words(0x08E905, 0x81, 0x04, 0x15, 0xC8, 0x00)
     entry = _add_entry(
         hass,
         remote_id=0x08E905,
@@ -132,6 +132,7 @@ async def test_extended_profile_control_emits_ten_word_frame(hass) -> None:
     runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
     assert runtime_entry.last_packet is not None
     assert runtime_entry.last_packet.frame.is_extended
+    assert entry.data[CONF_INITIAL_FRAME]["err1"] == 0x15  # Stored original observation is unchanged.
 
     await hass.services.async_call(
         DOMAIN,
@@ -145,7 +146,7 @@ async def test_extended_profile_control_emits_ten_word_frame(hass) -> None:
     assert runtime_entry.last_packet is not None
     assert runtime_entry.last_packet.frame.is_extended
     frame = backend.sent_packets[-1].frame
-    assert frame.wire_words[:8] == (0x08, 0xE9, 0x05, 0x81, 0x05, 0x15, 0xC8, 0x00)
+    assert frame.wire_words[:8] == (0x08, 0xE9, 0x05, 0x81, 0x05, 0x14, 0xC8, 0x00)
     assert frame.is_extended
     assert backend.sent_packets[-1].transmission_plan.air_payload_bit_length == 260
 
@@ -338,6 +339,94 @@ async def test_controls_show_desired_state_during_debounce_and_active_send_witho
     assert primary.state == "On · Flame 3 · Fan 6"
     assert primary.attributes["pending_state"] is None
     assert primary.attributes["operational_status"] == "ready"
+
+
+async def _wait_for_control(predicate) -> None:
+    async with asyncio.timeout(2):
+        while not predicate():
+            await asyncio.sleep(0)
+
+
+async def test_edits_during_tx_preserve_one_latest_full_state(hass, monkeypatch) -> None:
+    """A completion must not erase newer intent or permit overlapping sends."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0
+    hass.data[DOMAIN][DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    active = 0
+    maximum_active = 0
+
+    async def blocked_send(self, packet):
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        self.sent_packets.append(packet)
+        try:
+            if len(self.sent_packets) == 1:
+                started.set()
+                await finish.wait()
+            return SendResult(packet=packet, backend_name=self.name)
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(FakeRFBackend, "send", blocked_send)
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    from custom_components.proflame2.services import async_stage_control_change
+
+    try:
+        await async_stage_control_change(hass, runtime, {CONF_FLAME: 2})
+        await started.wait()
+        await async_stage_control_change(hass, runtime, {CONF_LIGHT: 4})
+        await async_stage_control_change(hass, runtime, {CONF_LIGHT: 6, CONF_FAN: 5})
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert len(runtime.backend.sent_packets) == 1
+        assert runtime.desired_state.light == 6
+        finish.set()
+        await _wait_for_control(lambda: runtime.desired_state is None)
+        assert maximum_active == 1
+        assert len(runtime.backend.sent_packets) == 2
+        final = runtime.backend.sent_packets[-1].state
+        assert (final.flame, final.light, final.fan) == (2, 6, 5)
+        assert runtime_current_state(runtime) == final
+    finally:
+        finish.set()
+
+
+async def test_return_to_baseline_during_tx_sends_corrective_state(hass, monkeypatch) -> None:
+    """Returning to the accepted value is not a no-op while another value sends."""
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0
+    hass.data[DOMAIN][DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def blocked_send(self, packet):
+        self.sent_packets.append(packet)
+        if len(self.sent_packets) == 1:
+            started.set()
+            await finish.wait()
+        return SendResult(packet=packet, backend_name=self.name)
+
+    monkeypatch.setattr(FakeRFBackend, "send", blocked_send)
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    from custom_components.proflame2.services import async_stage_control_change
+
+    try:
+        await async_stage_control_change(hass, runtime, {CONF_FLAME: 3})
+        await started.wait()
+        await async_stage_control_change(hass, runtime, {CONF_FLAME: 1})
+        finish.set()
+        await _wait_for_control(lambda: runtime.active_send_task is None and runtime.debounce_task is None)
+        assert [packet.state.flame for packet in runtime.backend.sent_packets] == [3, 1]
+        assert runtime_current_state(runtime).flame == 1
+    finally:
+        finish.set()
 
 
 async def test_flame_control_forces_power_on(hass) -> None:
@@ -1036,7 +1125,7 @@ async def test_restarting_pre_send_debounce_logs_timer_cancel_without_terminal_c
     entry = _add_entry(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
 
-    caplog.set_level(logging.INFO, logger="custom_components.proflame2.services")
+    caplog.set_level(logging.DEBUG, logger="custom_components.proflame2.services")
 
     await hass.services.async_call(
         "number",
@@ -1432,3 +1521,328 @@ async def test_startup_restores_last_known_state_without_transmitting(hass) -> N
     assert primary.state == "On · Flame 4 · Fan 1"
     assert primary.attributes["state_confidence"] == STATE_CONFIDENCE_RESTORED
     assert primary.attributes["operational_status"] == "ready"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_observed_flame_zero_is_honest_in_number_ui_and_survives_reload(hass, enabled):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+    from custom_components.proflame2.protocol.encoder import encode_packet
+    from custom_components.proflame2.services import async_apply_observed_packet
+
+    entry = _add_entry(hass, options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: enabled})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    packet = encode_packet(
+        FireplaceState(True, flame=0, fan=3, light=2), runtime.remote_profile, allow_flame_off_when_on=True
+    )
+    await async_apply_observed_packet(hass, runtime, packet)
+    await hass.async_block_till_done()
+    number = hass.states.get(_number_entity_id(entry.title, "Flame"))
+    assert float(number.state) == 0
+    assert number.attributes["min"] == 0
+    assert runtime.backend.sent_packets == []
+    if not enabled:
+        with pytest.raises(HomeAssistantError, match="flame"):
+            await hass.services.async_call(
+                "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Light"), "value": 4}, blocking=True
+            )
+        assert runtime.backend.sent_packets == []
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    restored = async_get_runtime_entries(hass)[entry.entry_id]
+    assert runtime_current_state(restored) == packet.state
+    assert restored.allow_flame_off_when_on is enabled
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 0
+    assert restored.backend.sent_packets == []
+
+
+@pytest.mark.parametrize("extended", [False, True])
+async def test_flame_zero_service_entity_profile_and_coalescing(hass, extended):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON, CONF_PROFILES
+    from custom_components.proflame2.protocol.decoder import decode_state
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data[DOMAIN][DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    data = (
+        {
+            CONF_PROTOCOL_VARIANT: PROTOCOL_VARIANT_EXTENDED_10_WORD,
+            CONF_EXTENDED_W4_BASE: 0x80,
+            CONF_EXTENDED_W6: 20,
+            CONF_EXTENDED_W7: 200,
+            CONF_EXTENDED_W8: 0,
+        }
+        if extended
+        else {}
+    )
+    entry = _add_entry(
+        hass,
+        profile_data=data,
+        options={
+            CONF_FAN: True,
+            CONF_LIGHT: True,
+            CONF_AUX: True,
+            CONF_FRONT: True,
+            CONF_CPI: not extended,
+            CONF_ALLOW_FLAME_OFF_WHEN_ON: True,
+            CONF_PROFILES: {
+                "lights": {
+                    "name": "Lights",
+                    CONF_POWER: True,
+                    CONF_FLAME: 0,
+                    CONF_FAN: 3,
+                    CONF_LIGHT: 2,
+                    CONF_AUX: True,
+                }
+            },
+        },
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    await hass.services.async_call(
+        DOMAIN,
+        "set_state",
+        {CONF_POWER: True, CONF_FLAME: 0, CONF_FAN: 3, CONF_LIGHT: 6, CONF_AUX: True},
+        blocking=True,
+    )
+    zero = runtime_current_state(runtime)
+    assert zero == FireplaceState(True, flame=0, fan=3, light=6, aux=True, cpi=extended)
+    assert runtime.backend.sent_packets[-1].frame.cmd1 & 1
+    assert runtime.backend.sent_packets[-1].frame.cmd2 & 7 == 0
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Light"), "value": 2}, blocking=True
+    )
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Fan"), "value": 6}, blocking=True
+    )
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _switch_entity_id(entry.title, "Power")}, blocking=True
+    )
+    await asyncio.sleep(0.05)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=0, fan=6, light=2, aux=True, cpi=extended)
+    for packet in runtime.backend.sent_packets:
+        assert packet.state.flame == 0 and packet.state.power
+        assert decode_state(packet.frame, runtime.remote_profile) == packet.state
+    await hass.services.async_call(DOMAIN, "apply_profile", {"profile_id": "lights"}, blocking=True)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=0, fan=3, light=2, aux=True, cpi=extended)
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 4}, blocking=True
+    )
+    await asyncio.sleep(0.05)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=4, fan=3, light=2, aux=True, cpi=extended)
+
+
+@pytest.mark.parametrize("value", [-1, 7, 0.5, "0.5", True])
+async def test_flame_zero_service_rejects_invalid_levels_before_tx(hass, value):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+
+    entry = _add_entry(hass, options={CONF_ALLOW_FLAME_OFF_WHEN_ON: True})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    with pytest.raises((HomeAssistantError, ValueError)):
+        await hass.services.async_call(DOMAIN, "set_state", {CONF_POWER: True, CONF_FLAME: value}, blocking=True)
+    assert runtime.backend.sent_packets == []
+
+
+async def test_flame_zero_confirmation_retains_zero_and_accessory_state(hass):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+    from custom_components.proflame2.protocol.encoder import encode_packet
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0.05
+    hass.data[DOMAIN][DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS] = 0.01
+    entry = _add_entry(hass, options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: True})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    zero = FireplaceState(True, flame=0, fan=3, light=2)
+    runtime.backend.queue_packets(encode_packet(zero, runtime.remote_profile, allow_flame_off_when_on=True))
+    await hass.services.async_call(
+        DOMAIN, "set_state", {CONF_POWER: True, CONF_FLAME: 0, CONF_FAN: 3, CONF_LIGHT: 2}, blocking=True
+    )
+    await asyncio.sleep(0.07)
+    await hass.async_block_till_done()
+    assert runtime_current_state(runtime) == zero
+    assert runtime.state_confidence == STATE_CONFIDENCE_OBSERVED
+    assert len(runtime.backend.sent_packets) == 1
+    assert runtime.backend.sent_packets[0].state == zero
+
+
+@pytest.mark.parametrize("extended", [False, True])
+async def test_restart_off_light_edit_and_zero_flame_power_on_match_entity_states(hass, extended):
+    """Reproduce the reported sequence through HA's standard entity services."""
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data[DOMAIN][DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    data = (
+        {
+            CONF_PROTOCOL_VARIANT: PROTOCOL_VARIANT_EXTENDED_10_WORD,
+            CONF_EXTENDED_W4_BASE: 0x80,
+            CONF_EXTENDED_W6: 20,
+            CONF_EXTENDED_W7: 200,
+            CONF_EXTENDED_W8: 0,
+        }
+        if extended
+        else {}
+    )
+    entry = _add_entry(
+        hass, profile_data=data, options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: True}
+    )
+    await _runtime_store(hass).async_save(
+        {
+            entry.entry_id: {
+                "state": {"power": False, "flame": 0, "fan": 0, "light": 2},
+                "state_confidence": STATE_CONFIDENCE_RESTORED,
+            }
+        }
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    assert not runtime_current_state(runtime).power
+    assert runtime.backend.sent_packets == []
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 0
+
+    async def set_number(name, value):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": _number_entity_id(entry.title, name), "value": value}, blocking=True
+        )
+        await asyncio.sleep(0.03)
+        await hass.async_block_till_done()
+
+    await set_number("Light", 0)
+    assert runtime.backend.sent_packets == []
+    assert runtime_current_state(runtime).flame == 0
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 0
+    assert float(hass.states.get(_number_entity_id(entry.title, "Light")).state) == 0
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _switch_entity_id(entry.title, "Power")}, blocking=True
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+    assert runtime.backend.sent_packets[-1].state == FireplaceState(True, flame=1, fan=0, light=0)
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 1
+    assert float(hass.states.get(_number_entity_id(entry.title, "Fan")).state) == 0
+
+    await set_number("Light", 6)
+    assert runtime.backend.sent_packets[-1].state == FireplaceState(True, flame=1, fan=0, light=6)
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 1
+    await set_number("Flame", 0)
+    assert runtime.backend.sent_packets[-1].state == FireplaceState(True, flame=0, fan=0, light=6)
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 0
+
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": _switch_entity_id(entry.title, "Power")}, blocking=True
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+    assert runtime.backend.sent_packets[-1].state == FireplaceState(False, flame=0, fan=0, light=6)
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 0
+    count = len(runtime.backend.sent_packets)
+    await set_number("Light", 2)
+    assert len(runtime.backend.sent_packets) == count
+    assert runtime_current_state(runtime) == FireplaceState(False, flame=0, fan=0, light=2)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize(
+    "power,flame,explicit",
+    [(False, 0, None), (False, 4, None), (True, 0, None), (True, 3, None), (False, 0, 0), (False, 0, 4)],
+)
+async def test_service_power_on_only_ignites_for_implicit_off_zero(hass, enabled, power, flame, explicit):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+    from custom_components.proflame2.protocol.encoder import encode_packet
+
+    entry = _add_entry(hass, options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: enabled})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    state = FireplaceState(power, flame=flame, fan=3, light=2)
+    packet = encode_packet(state, runtime.remote_profile, allow_flame_off_when_on=True, allow_power_off_flame=True)
+    await async_set_runtime_current_state(
+        hass, runtime, state, packet=packet, source="observed_packet", confidence=STATE_CONFIDENCE_OBSERVED
+    )
+    data = {CONF_POWER: True}
+    if explicit is not None:
+        data.update({CONF_FLAME: explicit, CONF_FAN: 3, CONF_LIGHT: 2})
+    expected = explicit if explicit is not None else (1 if not power and flame == 0 else flame)
+    if expected == 0 and not enabled:
+        with pytest.raises(HomeAssistantError, match="flame"):
+            await hass.services.async_call(DOMAIN, "set_state", data, blocking=True)
+        assert runtime.backend.sent_packets == []
+        assert runtime_current_state(runtime) == state
+    else:
+        await hass.services.async_call(DOMAIN, "set_state", data, blocking=True)
+        await hass.async_block_till_done()
+        expected_state = FireplaceState(True, flame=expected, fan=3, light=2)
+        assert runtime.backend.sent_packets[-1].state == expected_state
+        assert runtime_current_state(runtime) == expected_state
+        assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == expected
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_off_zero_accessory_edit_keeps_actual_flame_and_ui_zero(hass, enabled):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+
+    entry = _add_entry(hass, options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: enabled})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    await async_set_runtime_current_state(
+        hass,
+        runtime,
+        FireplaceState(False, flame=0, light=2),
+        source="observed_packet",
+        confidence=STATE_CONFIDENCE_OBSERVED,
+    )
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Light"), "value": 0}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert runtime_current_state(runtime) == FireplaceState(False, flame=0, light=0)
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == 0
+    assert runtime.backend.sent_packets == []
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("flame", [0, 4])
+async def test_power_off_service_without_flame_preserves_current_settings(hass, enabled, flame):
+    from custom_components.proflame2.const import CONF_ALLOW_FLAME_OFF_WHEN_ON
+    from custom_components.proflame2.protocol.encoder import encode_packet
+
+    entry = _add_entry(hass, options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: enabled})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    state = FireplaceState(True, flame=flame, fan=3, light=2)
+    packet = encode_packet(state, runtime.remote_profile, allow_flame_off_when_on=True)
+    await async_set_runtime_current_state(
+        hass, runtime, state, packet=packet, source="observed_packet", confidence=STATE_CONFIDENCE_OBSERVED
+    )
+    await hass.services.async_call(DOMAIN, "set_state", {CONF_POWER: False}, blocking=True)
+    await hass.async_block_till_done()
+    expected = FireplaceState(False, flame=flame, fan=3, light=2)
+    assert runtime.backend.sent_packets[-1].state == expected
+    assert runtime_current_state(runtime) == expected
+    assert float(hass.states.get(_number_entity_id(entry.title, "Flame")).state) == flame
+
+
+async def test_unsupported_backend_cannot_start_active_listening_from_saved_option(hass, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from custom_components.proflame2.const import CONF_ACTIVE_LISTENING
+    from custom_components.proflame2.services import async_start_active_listener, async_sync_runtime_rx_policy
+
+    # Retain the in-memory backend to prove the guard without touching hardware.
+    monkeypatch.setattr(FakeRFBackend, "supports_active_listening", False)
+    entry = _add_entry(hass, options={CONF_ACTIVE_LISTENING: True})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    assert runtime.active_listening_enabled is False
+    assert runtime.active_listener_task is None
+    runtime.backend.set_active_listening_enabled = AsyncMock()
+    runtime.active_listening_enabled = True
+    await async_sync_runtime_rx_policy(runtime)
+    runtime.backend.set_active_listening_enabled.assert_not_called()
+    assert runtime.active_listening_enabled is False
+    runtime.active_listening_enabled = True  # Also protect a direct start request.
+    await async_start_active_listener(hass, runtime)
+    assert runtime.active_listening_enabled is False
+    assert runtime.active_listener_task is None
+    assert runtime.backend.connected
+    assert (await runtime.backend.capabilities()).can_receive

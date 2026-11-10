@@ -417,7 +417,28 @@
           warnings.push('Added payload bit-length override "0" for automatic legacy/extended frame lengths.');
         }
 
-        function ensureArduinoFramework(lines, doc, warnings) {
+        function ensureRfBand(lines, warnings) {
+          const block = findBlock(lines, "substitutions");
+          if (!block) {
+            throw new Error("substitutions: block was not created.");
+          }
+
+          const bandPattern = /^(\s*)proflame2_rf_band\s*:/;
+          for (let i = block.start + 1; i < block.end; i += 1) {
+            if (bandPattern.test(lines[i])) {
+              if (!/proflame2_rf_band\s*:\s*"(?:315|433)"\s*(?:#.*)?$/.test(lines[i])) {
+                lines[i] = lines[i].replace(/^\s*proflame2_rf_band\s*:.*$/, '  proflame2_rf_band: "315"');
+                warnings.push('Updated RF band to the default "315". Supported values are "315" and "433".');
+              }
+              return;
+            }
+          }
+
+          insertLines(lines, block.start + 1, ['  proflame2_rf_band: "315"']);
+          warnings.push('Added RF band default "315".');
+        }
+
+        function ensureEspIdfFramework(lines, doc, warnings) {
           const block = findBlock(lines, "esp32");
           if (!block) {
             throw new Error("Missing required esp32: block. Create the ESPHome device first, then run this helper.");
@@ -450,8 +471,8 @@
                 break;
               }
             }
-            insertLines(lines, insertAt, ["  framework:", "    type: arduino"]);
-            warnings.push("Added esp32.framework.type = arduino.");
+            insertLines(lines, insertAt, ["  framework:", "    type: esp-idf"]);
+            warnings.push("Added esp32.framework.type = esp-idf.");
             return;
           }
 
@@ -467,15 +488,15 @@
           }
 
           if (typeLine === -1) {
-            insertLines(lines, frameworkLine + 1, ["    type: arduino"]);
-            warnings.push("Added esp32.framework.type = arduino.");
+            insertLines(lines, frameworkLine + 1, ["    type: esp-idf"]);
+            warnings.push("Added esp32.framework.type = esp-idf.");
             return;
           }
 
-          if (!/^ {4}type\s*:\s*arduino\s*(?:#.*)?$/i.test(lines[typeLine])) {
+          if (!/^ {4}type\s*:\s*esp-idf\s*(?:#.*)?$/i.test(lines[typeLine])) {
             const prior = lines[typeLine].replace(/^ {4}type\s*:\s*/, "").replace(/\s*#.*$/, "").trim();
-            lines[typeLine] = "    type: arduino";
-            warnings.push(`Changed ESP32 framework from ${prior || "unknown"} to arduino because the current LilyGO firmware is validated on Arduino.`);
+            lines[typeLine] = "    type: esp-idf";
+            warnings.push(`Changed ESP32 framework from ${prior || "unknown"} to esp-idf to support retained crash reporting.`);
           }
         }
 
@@ -621,8 +642,11 @@
           if (!isMapping(doc.substitutions) || doc.substitutions.proflame2_package_ref !== "main") {
             throw new Error("Generated YAML is missing substitutions.proflame2_package_ref.");
           }
-          if (!isMapping(doc.esp32) || !isMapping(doc.esp32.framework) || doc.esp32.framework.type !== "arduino") {
-            throw new Error("Generated YAML is missing esp32.framework.type: arduino.");
+          if (!isMapping(doc.substitutions) || !["315", "433"].includes(String(doc.substitutions.proflame2_rf_band))) {
+            throw new Error("Generated YAML is missing a valid substitutions.proflame2_rf_band.");
+          }
+          if (!isMapping(doc.esp32) || !isMapping(doc.esp32.framework) || doc.esp32.framework.type !== "esp-idf") {
+            throw new Error("Generated YAML is missing esp32.framework.type: esp-idf.");
           }
           if (!isMapping(doc.packages)) {
             throw new Error("Generated YAML is missing packages:.");
@@ -661,8 +685,9 @@
             const lines = text.split(/\r?\n/);
 
             ensureSubstitution(lines, warnings);
+            ensureRfBand(lines, warnings);
             ensurePayloadBitLengthOverride(lines, warnings);
-            ensureArduinoFramework(lines, originalDoc, warnings);
+            ensureEspIdfFramework(lines, originalDoc, warnings);
 
             const afterFrameworkDoc = parseYaml(lines.join(newline));
             validateInput(afterFrameworkDoc);

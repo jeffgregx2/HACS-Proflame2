@@ -115,8 +115,17 @@ The production overlay targets the LilyGO T-Embed CC1101:
 esp32:
   board: esp32-s3-devkitc-1
   framework:
-    type: arduino
+    type: esp-idf
 ```
+
+ESP-IDF is the framework for current LilyGO firmware and enables ESPHome's
+retained crash reporting on supported builds. When migrating an older Arduino
+configuration, change the framework type in the device YAML explicitly, then
+rebuild and install the firmware. Changing the package reference alone does not
+change the framework; neither does selecting a prerelease automatically update
+the public YAML helper, which follows stable `main`. See the
+[manual setup guide](../docs/lilygo_cc1101_manual_yaml.md) for crash-reporting
+limitations and preservation of the matching `firmware.elf` during debugging.
 
 Known board facts:
 
@@ -165,11 +174,24 @@ RX flow:
 TX always has priority over RX. If active listening is enabled, TX pauses RX and
 the firmware restores the previous RX state after transmit.
 
-## Validated RF Settings
+## RF Band Configuration
+
+The base package selects the 315 MHz band by default:
+
+```yaml
+substitutions:
+  proflame2_rf_band: "315"
+```
+
+For a remote labeled 433.92 MHz, set `proflame2_rf_band` to `"433"` before
+building. The firmware selects the matching CC1101 frequency and T-Embed RF
+switch path for both TX and RX. One LilyGO can operate on only one band at a
+time.
+
+## Validated 315 MHz RF Settings
 
 Validated TX defaults:
 
-- `tx_frequency_hz: 314973000`
 - `data_rate_bps: 2400`
 - `tx_repeat_count: 5`
 - `tx_mode: proflame_native_groups`
@@ -181,7 +203,6 @@ Validated TX defaults:
 
 Validated RX defaults:
 
-- `rx_frequency_hz: 314973000`
 - `data_rate_bps: 2400`
 - `Active Listener RX Path: rmt_pulse`
 - RMT resolution: `1000000` Hz

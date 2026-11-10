@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..const import PROTOCOL_VARIANT_EXTENDED_10_WORD, PROTOCOL_VARIANT_LEGACY_7_WORD
+from .variants import PROTOCOL_VARIANT_EXTENDED_10_WORD, PROTOCOL_VARIANT_LEGACY_7_WORD
+
+# Stored W4 flags include units (bit 2), unknown bit 3, and initial Pilot (bit 7).
+# The encoder retains bits 2/3 but takes Pilot from current command state.
+# New learning uses a separate identity mask and canonical Celsius fields.
+EXTENDED_W4_FIXED_MASK = 0x8C
 
 
 @dataclass(frozen=True)
@@ -89,8 +94,13 @@ class FireplaceState:
         *,
         allow_thermostat: bool = False,
         allow_power_off_flame: bool = False,
+        allow_flame_off_when_on: bool = False,
     ) -> None:
         """Validate a user-requested state for transmit/service use."""
+        for name in ("flame", "fan", "light"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{name} must be a whole-number level.")
         if not self.power:
             if self.flame != 0 and not allow_power_off_flame:
                 raise ValueError("Flame must be 0 when power is off.")
@@ -99,8 +109,9 @@ class FireplaceState:
         elif self.thermostat and allow_thermostat:
             if not 0 <= self.flame <= 6:
                 raise ValueError("Thermostat flame must be between 0 and 6.")
-        elif not 1 <= self.flame <= 6:
-            raise ValueError("Flame must be between 1 and 6 when power is on.")
+        elif not (0 if allow_flame_off_when_on else 1) <= self.flame <= 6:
+            minimum = 0 if allow_flame_off_when_on else 1
+            raise ValueError(f"Flame must be between {minimum} and 6 when power is on.")
 
         if not 0 <= self.fan <= 6:
             raise ValueError("Fan must be between 0 and 6.")
@@ -111,15 +122,15 @@ class FireplaceState:
         if self.thermostat and not allow_thermostat:
             raise ValueError("Native thermostat mode is disabled for v1.")
 
-    def validate_observed(self, *, allow_thermostat: bool = False) -> None:
+    def validate_observed(self, *, allow_thermostat: bool = False, allow_flame_off: bool = False) -> None:
         """Validate a received/observed state decoded from protocol bytes."""
 
         if not self.power:
             if not 0 <= self.flame <= 6:
                 raise ValueError("Observed flame must be between 0 and 6 when power is off.")
-        elif self.thermostat and allow_thermostat:
+        elif allow_flame_off or (self.thermostat and allow_thermostat):
             if not 0 <= self.flame <= 6:
-                raise ValueError("Thermostat flame must be between 0 and 6.")
+                raise ValueError("Observed flame must be between 0 and 6.")
         elif not 1 <= self.flame <= 6:
             raise ValueError("Flame must be between 1 and 6 when power is on.")
 
@@ -137,10 +148,12 @@ class FireplaceState:
         *,
         allow_thermostat: bool = False,
         allow_power_off_flame: bool = False,
+        allow_flame_off_when_on: bool = False,
     ) -> None:
         """Backward-compatible transmit validation entry point."""
 
         self.validate_transmit(
             allow_thermostat=allow_thermostat,
             allow_power_off_flame=allow_power_off_flame,
+            allow_flame_off_when_on=allow_flame_off_when_on,
         )

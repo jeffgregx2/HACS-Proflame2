@@ -4,6 +4,18 @@ This document records reproducible observations for the Issue #15 SIT TMFSLA
 extended-frame investigation. It is not a protocol specification. Claims not
 backed by a committed fixture or cited source remain hypotheses.
 
+Issue #26 subsequently supplied a second extended remote identifier. The
+historical `0x23/0x65` formulas below remain correct for Alex's captures but
+are not universal constants. The current serial-inclusive implementation and
+cross-remote regressions are documented in
+[Issue #26 extended integrity](issue_26_extended_integrity.md).
+
+Later pilot-mode evidence is defined in the
+[current Pilot reference](issue_15_extended_protocol_design.md#pilot-mode-ipi-and-cpi):
+Issue #32's labeled IPI/CPI captures 25/26 change W4 from `0x14` to `0x94`,
+establishing bit 7 as 0 = IPI, 1 = CPI. The original fixture correlations below
+remain a dated evidence record rather than the complete current specification.
+
 ## Baseline
 
 | Field | Value |

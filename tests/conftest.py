@@ -5,12 +5,23 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
 from custom_components.proflame2.protocol.models import ECCProfile, FireplaceFeatures, RemoteProfile
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "rtl433_samples.json"
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    """Own and clean our test workspace without pruning other projects' runs."""
+
+    if config.option.basetemp is None:
+        workspace = TemporaryDirectory(prefix="proflame2-pytest.")
+        config.option.basetemp = str(Path(workspace.name) / "tests")
+        config.add_cleanup(workspace.cleanup)
 
 
 @pytest.fixture(autouse=True)

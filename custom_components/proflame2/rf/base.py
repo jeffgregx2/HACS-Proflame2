@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from ..protocol.models import FireplaceState
 from ..protocol.packet import ProflameFrame, ProflamePacket
@@ -80,6 +81,29 @@ class ReceiveStatus:
 
 class RFBackend(ABC):
     """Transport abstraction used by the Home Assistant coordinator layer."""
+
+    # Continuous idle listening is separate from receive/learning support and
+    # does not change when a capable controller temporarily disconnects.
+    supports_active_listening: ClassVar[bool] = False
+    pcm_logging_enabled = False
+
+    def set_pcm_logging_enabled(self, enabled: bool) -> None:
+        """Enable payload-only diagnostics independently of verbose debugging."""
+        self.pcm_logging_enabled = enabled
+        if enabled:
+            logging.getLogger("custom_components.proflame2.pcm").setLevel(logging.INFO)
+
+    def log_pcm(self, direction: str, payload: bytes, *, bit_length: int | None = None, context: str = "") -> None:
+        """Log the complete backend payload, not a reconstructed RF waveform."""
+        if self.pcm_logging_enabled:
+            logging.getLogger("custom_components.proflame2.pcm").info(
+                "direction=%s backend=%s bits=%s %s pcm_hex=%s",
+                direction,
+                self.name,
+                bit_length if bit_length is not None else len(payload) * 8,
+                context,
+                payload.hex(),
+            )
 
     @abstractmethod
     async def connect(self) -> None:

@@ -14,14 +14,13 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
-    TextSelector,
-    TextSelectorConfig,
 )
 
 from .const import (
     BACKEND_ESPHOME,
     BACKEND_YARDSTICK,
     CONF_ACTIVE_LISTENING,
+    CONF_ALLOW_FLAME_OFF_WHEN_ON,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -37,34 +36,37 @@ from .const import (
     CONF_FRONT,
     CONF_INITIAL_FRAME,
     CONF_INITIAL_PACKET_SOURCE,
+    CONF_LEARNING_ID,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
-    CONF_RTL433_SAMPLES,
+    CONF_RF_BAND,
     DATA_LEARNING_DEBUG_LOGGING,
     DATA_LEARNING_RECEIVE_TIMEOUT,
     DATA_LEARNING_TIMEOUT,
     DEFAULT_DEBUG_LOGGING,
     DEFAULT_FEATURE_OPTIONS,
     DEFAULT_FIREPLACE_SHORT_NAME,
+    DEFAULT_REFRESH_PERIOD_MINUTES,
     DOMAIN,
     available_backend_labels,
     available_backend_types,
     available_learning_backend_labels,
     available_learning_backend_types,
 )
-from .docs_urls import lilygo_controller_url, rtl433_manual_learning_url
+from .controller_assignment import controller_assignments
+from .docs_urls import learning_ids_url, lilygo_controller_url
 from .learning import (
     DEFAULT_LEARN_TIMEOUT_SECONDS,
     DEFAULT_RECEIVE_TIMEOUT_SECONDS,
     ERROR_BACKEND_UNAVAILABLE,
     ERROR_CONTRADICTORY_PROFILE,
-    MIN_UNIQUE_CMD1_SAMPLES,
-    MIN_UNIQUE_CMD2_SAMPLES,
-    MIN_VALID_PACKETS,
+    MANUAL_MODE_INSTRUCTION,
+    LearningModeTransition,
     LearnResult,
     LearnSession,
     async_capture_next_learning_packet,
@@ -78,27 +80,25 @@ from .profile import (
     DuplicateProfileIdError,
     InvalidNibbleError,
     InvalidProfileNameError,
+    InvalidRefreshPeriodError,
     InvalidRemoteIdError,
-    InvalidRtl433SamplesError,
     InvalidSavedProfileError,
-    Rtl433ProfileDerivationError,
-    Rtl433RemoteIdMismatchError,
-    Rtl433Sample,
+    ManualProfileInput,
     default_feature_options,
     fireplace_features_from_options,
     normalize_entry_options,
     normalize_feature_options,
     normalize_manual_profile_input,
-    normalize_manual_rtl433_profile_samples,
     normalize_saved_profile_input,
     parse_remote_id,
-    parse_rtl433_samples,
     remote_id_as_hex,
     sanitize_fireplace_short_name,
 )
-from .protocol.packet import ProflameFrame, ProflamePacket
+from .protocol.packet import ProflamePacket
+from .rf.band import DEFAULT_RF_BAND, YARDSTICK_BANDS, yardstick_band
 from .rf.registry import get_backend_definition, normalize_controller_id
 from .rf.yardstick import YardStickBackendUnavailableError
+from .rtl433_learning import InvalidLearningIdError, normalize_learning_id_profile_input
 
 LILYGO_ESPHOME_LINK_HELP = (
     "Select the ESPHome device that runs the LilyGO T-Embed CC1101 Proflame2 firmware.\n\n"
@@ -140,7 +140,20 @@ def _learning_backend_selector() -> SelectSelector:
 
 
 def _manual_profile_schema() -> vol.Schema:
-    """Build the manual-entry schema for the active build."""
+    """Build the default Learning ID import form."""
+
+    return vol.Schema(
+        {
+            vol.Required(CONF_NAME): str,
+            vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
+            vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _backend_selector(),
+            vol.Required(CONF_LEARNING_ID): str,
+        }
+    )
+
+
+def _manual_legacy_profile_schema() -> vol.Schema:
+    """Build the retained legacy remote ID and C/D entry form."""
 
     return vol.Schema(
         {
@@ -152,38 +165,8 @@ def _manual_profile_schema() -> vol.Schema:
             vol.Required(CONF_D1): str,
             vol.Required(CONF_C2): str,
             vol.Required(CONF_D2): str,
-            vol.Required(CONF_FAN, default=DEFAULT_FEATURE_OPTIONS[CONF_FAN]): bool,
-            vol.Required(CONF_LIGHT, default=DEFAULT_FEATURE_OPTIONS[CONF_LIGHT]): bool,
-            vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
-            vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
-            vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
         }
     )
-
-
-def _manual_rtl433_profile_schema() -> vol.Schema:
-    """Build the rtl_433-assisted manual-learning setup schema."""
-
-    return vol.Schema(
-        {
-            vol.Required(CONF_NAME): str,
-            vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
-            vol.Required(CONF_BACKEND_TYPE, default=BACKEND_YARDSTICK): _backend_selector(),
-        }
-    )
-
-
-def _manual_rtl433_prompt_schema() -> vol.Schema:
-    """Build the per-prompt rtl_433 sample paste schema."""
-
-    return vol.Schema(
-        {
-            vol.Required(CONF_RTL433_SAMPLES): TextSelector(TextSelectorConfig(multiline=True)),
-        }
-    )
-
-
-MANUAL_RTL433_POWER_OFF_SCHEMA = vol.Schema({})
 
 
 def _learn_setup_schema() -> vol.Schema:
@@ -205,11 +188,35 @@ FEATURE_SELECTION_SCHEMA = vol.Schema(
         vol.Required(CONF_FRONT, default=DEFAULT_FEATURE_OPTIONS[CONF_FRONT]): bool,
         vol.Required(CONF_AUX, default=DEFAULT_FEATURE_OPTIONS[CONF_AUX]): bool,
         vol.Required(CONF_CPI, default=DEFAULT_FEATURE_OPTIONS[CONF_CPI]): bool,
-        vol.Required(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): bool,
-        vol.Required(CONF_ACTIVE_LISTENING, default=False): bool,
-        vol.Required(CONF_FIREPLACE_SHORT_NAME, default=DEFAULT_FIREPLACE_SHORT_NAME): str,
     }
 )
+
+
+def _optional_settings_schema(
+    *, edit_short_name: bool = False, defaults: dict[str, Any] | None = None, supports_active_listening: bool = False
+) -> vol.Schema:
+    """Keep behavior settings separate from installed fireplace features."""
+    defaults = defaults or {}
+    fields = {
+        vol.Required(CONF_ALLOW_FLAME_OFF_WHEN_ON, default=defaults.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)): bool,
+    }
+    if supports_active_listening:
+        fields[vol.Required(CONF_ACTIVE_LISTENING, default=defaults.get(CONF_ACTIVE_LISTENING, False))] = bool
+    fields[vol.Required(CONF_DEBUG_LOGGING, default=defaults.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))] = bool
+    if edit_short_name:
+        fields[
+            vol.Required(
+                CONF_FIREPLACE_SHORT_NAME, default=defaults.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
+            )
+        ] = str
+    fields[
+        vol.Required(
+            CONF_REFRESH_PERIOD_MINUTES,
+            default=defaults.get(CONF_REFRESH_PERIOD_MINUTES, DEFAULT_REFRESH_PERIOD_MINUTES),
+        )
+    ] = vol.All(int, vol.Range(min=0))
+    return vol.Schema(fields)
+
 
 LEARN_PROMPTS: tuple[tuple[str, str], ...] = (
     (
@@ -236,16 +243,6 @@ EXTENDED_DIAGNOSTIC_PROMPTS: tuple[tuple[str, str], ...] = (
     ),
 )
 
-RTL433_MANUAL_PROMPTS: tuple[tuple[str, str], ...] = (
-    ("power_on", "Press **Power** once, then paste the rtl_433 decoded line for that press."),
-    ("temp_down", "Press **Temp Down** once, then paste the rtl_433 decoded line for that press."),
-    ("temp_up", "Press **Temp Up** once, then paste the rtl_433 decoded line for that press."),
-    ("temp_down_again", "Press **Temp Down** once more, then paste the rtl_433 decoded line for that press."),
-    ("temp_up_again", "Press **Temp Up** once more, then paste the rtl_433 decoded line for that press."),
-)
-RTL433_MANUAL_COMMAND = "rtl_433 -f 315M -R 207 -M level -F json"
-RTL433_MANUAL_LEARNING_GUIDE = f"[rtl_433-assisted manual learning guide]({rtl433_manual_learning_url()})"
-
 
 class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Proflame2."""
@@ -254,22 +251,17 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     _learn_input: dict[str, Any] | None = None
     _learn_result: LearnResult | None = None
-    _learn_task: asyncio.Task[ProflamePacket | LearnResult] | None = None
+    _learn_task: asyncio.Task[ProflamePacket | LearnResult | LearningModeTransition] | None = None
     _learn_session: LearnSession | None = None
     _learn_prompt_index: int = 0
+    _learn_action_number: int = 0
     _extended_diagnostic_active: bool = False
     _extended_diagnostic_log_path: str | None = None
     _extended_diagnostic_task: asyncio.Task[str | None] | None = None
-    _manual_pending_data: dict[str, Any] | None = None
-    _manual_pending_options: dict[str, Any] | None = None
-    _manual_rtl433_input: dict[str, Any] | None = None
-    _manual_rtl433_samples: list[Rtl433Sample]
-    _manual_rtl433_prompt_index: int = 0
-
-    def __init__(self) -> None:
-        """Initialize per-flow manual learning state."""
-
-        self._manual_rtl433_samples = []
+    _pending_entry_data: dict[str, Any] | None = None
+    _pending_entry_options: dict[str, Any] | None = None
+    _manual_learning_id_import: bool = False
+    _yardstick_setup_mode: str = "manual"
 
     @staticmethod
     @callback
@@ -304,163 +296,188 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_menu(
             step_id="user",
-            menu_options=["learn", "manual_rtl433", "manual"],
+            menu_options=["learn", "manual", "manual_legacy"],
         )
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None):
-        """Handle manual fireplace profile entry."""
+        """Import either protocol from a Learning ID; default manual setup path."""
 
+        # Retain programmatic callers that submit the original manual schema.
+        if user_input is not None and CONF_LEARNING_ID not in user_input and CONF_REMOTE_ID in user_input:
+            return await self.async_step_manual_legacy(user_input)
+        self._manual_learning_id_import = True
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                normalized = normalize_learning_id_profile_input(user_input)
+            except InvalidLearningIdError:
+                errors[CONF_LEARNING_ID] = "invalid_learning_id"
+            except InvalidRefreshPeriodError:
+                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
+            else:
+                return await self._async_finish_manual_profile(normalized, user_input)
+        return self.async_show_form(
+            step_id="manual",
+            data_schema=self.add_suggested_values_to_schema(
+                _manual_profile_schema(), user_input or self._manual_suggested_values()
+            ),
+            errors=errors,
+            description_placeholders={
+                "learning_ids_url": learning_ids_url(),
+            },
+        )
+
+    async def async_step_manual_legacy(self, user_input: dict[str, Any] | None = None):
+        """Retain manual entry of remote ID and legacy C/D constants."""
+
+        self._manual_learning_id_import = False
         errors: dict[str, str] = {}
 
         if user_input is not None:
             try:
                 normalized = normalize_manual_profile_input(user_input)
+            except InvalidRefreshPeriodError:
+                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
             except InvalidRemoteIdError:
                 errors[CONF_REMOTE_ID] = "invalid_remote_id"
             except InvalidNibbleError as exc:
                 error_key = _extract_invalid_nibble_key(user_input, exc)
                 errors[error_key] = "invalid_nibble"
             else:
-                if self._backend_requires_esphome_entry(normalized.data[CONF_BACKEND_TYPE]):
-                    linked_entry_id = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
-                    if linked_entry_id:
-                        normalized.data[CONF_ESPHOME_ENTRY_ID] = linked_entry_id
-                    esphome_entry_error = self._validate_manual_esphome_link(normalized.data)
-                    if esphome_entry_error is not None:
-                        self._manual_pending_data = normalized.data
-                        self._manual_pending_options = normalized.options
-                        return await self.async_step_manual_esphome()
-                return await self._async_create_profile_entry(
-                    title=normalized.data[CONF_NAME],
-                    data=normalized.data,
-                    options=normalized.options,
-                )
+                return await self._async_finish_manual_profile(normalized, user_input)
 
         suggested_values = self._manual_suggested_values()
         return self.async_show_form(
-            step_id="manual",
-            data_schema=self.add_suggested_values_to_schema(_manual_profile_schema(), user_input or suggested_values),
-            errors=errors,
-        )
-
-    async def async_step_manual_rtl433(self, user_input: dict[str, Any] | None = None):
-        """Collect setup details for rtl_433-assisted manual learning."""
-
-        if user_input is None:
-            suggested_values = self._manual_rtl433_suggested_values()
-            return self.async_show_form(
-                step_id="manual_rtl433",
-                data_schema=self.add_suggested_values_to_schema(
-                    _manual_rtl433_profile_schema(),
-                    suggested_values,
-                ),
-            )
-
-        self._manual_rtl433_input = {
-            CONF_NAME: str(user_input[CONF_NAME]).strip(),
-            CONF_BACKEND_TYPE: normalize_controller_id(user_input[CONF_BACKEND_TYPE]),
-            CONF_FIREPLACE_SHORT_NAME: sanitize_fireplace_short_name(
-                user_input.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME)
+            step_id="manual_legacy",
+            data_schema=self.add_suggested_values_to_schema(
+                _manual_legacy_profile_schema(), user_input or suggested_values
             ),
-        }
-        self._manual_rtl433_samples = []
-        self._manual_rtl433_prompt_index = 0
-        if self._backend_requires_esphome_entry(self._manual_rtl433_input[CONF_BACKEND_TYPE]):
-            return await self.async_step_manual_rtl433_esphome()
-        return await self.async_step_manual_rtl433_prompt()
-
-    async def async_step_manual_rtl433_esphome(self, user_input: dict[str, Any] | None = None):
-        """Collect the ESPHome device link for rtl_433-assisted LilyGO setup."""
-
-        if self._manual_rtl433_input is None:
-            return await self.async_step_manual_rtl433()
-
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            self._manual_rtl433_input[CONF_ESPHOME_ENTRY_ID] = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
-            esphome_entry_error = self._validate_manual_esphome_link(self._manual_rtl433_input)
-            if esphome_entry_error is None:
-                return await self.async_step_manual_rtl433_prompt()
-            errors[CONF_ESPHOME_ENTRY_ID] = esphome_entry_error
-
-        return self.async_show_form(
-            step_id="manual_rtl433_esphome",
-            data_schema=self._esphome_link_schema(),
             errors=errors,
-            description_placeholders={"setup_text": LILYGO_ESPHOME_LINK_HELP},
         )
 
-    async def async_step_manual_rtl433_prompt(self, user_input: dict[str, Any] | None = None):
-        """Collect one prompted rtl_433 decoded sample batch."""
+    async def _async_finish_manual_profile(self, normalized: ManualProfileInput, user_input: dict[str, Any]):
+        """Share controller linking and duplicate protection between import paths."""
 
-        if self._manual_rtl433_input is None:
-            return await self.async_step_manual_rtl433()
+        if self._backend_requires_esphome_entry(normalized.data[CONF_BACKEND_TYPE]):
+            linked_entry_id = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
+            if linked_entry_id:
+                normalized.data[CONF_ESPHOME_ENTRY_ID] = linked_entry_id
+            if self._validate_manual_esphome_link(normalized.data) is not None:
+                self._pending_entry_data = normalized.data
+                self._pending_entry_options = normalized.options
+                return await self.async_step_manual_esphome()
+        self._pending_entry_data = normalized.data
+        self._pending_entry_options = normalized.options
+        return await self._async_finish_manual_setup()
 
-        errors: dict[str, str] = {}
+    async def _async_finish_manual_setup(self):
+        """Imported remote data needs local feature selection before entry creation."""
+
+        data, options = self._pending_entry_data, self._pending_entry_options
+        assert data is not None and options is not None
+        if not self._manual_learning_id_import and self._entry_exists_for_controller_and_remote(
+            controller_id=data[CONF_BACKEND_TYPE],
+            remote_id=data[CONF_REMOTE_ID],
+            linked_esphome_entry_id=data.get(CONF_ESPHOME_ENTRY_ID),
+        ):
+            return self.async_abort(reason="already_configured")
+        if controller_assignments(self.hass, data, options):
+            return self.async_abort(reason="controller_in_use")
+        if data[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK and CONF_RF_BAND not in data:
+            self._yardstick_setup_mode = "manual"
+            return await self.async_step_yardstick_band()
+        return await self.async_step_manual_features()
+
+    async def async_step_yardstick_band(self, user_input: dict[str, Any] | None = None):
+        """Collect controller band before opening a YardStick for learning or control."""
+        data = self._learn_input if self._yardstick_setup_mode == "learn" else self._pending_entry_data
+        if data is None:
+            return await self.async_step_user()
+        if controller_assignments(self.hass, data, {}):
+            return self.async_abort(reason="controller_in_use")
+        errors = {}
         if user_input is not None:
             try:
-                parsed_samples = parse_rtl433_samples(user_input[CONF_RTL433_SAMPLES])
-                updated_samples = [*self._manual_rtl433_samples, *parsed_samples]
-                self._validate_manual_rtl433_samples(updated_samples)
-            except InvalidRtl433SamplesError:
-                errors[CONF_RTL433_SAMPLES] = "invalid_rtl433_samples"
-            except Rtl433RemoteIdMismatchError:
-                errors[CONF_RTL433_SAMPLES] = "rtl433_remote_id_mismatch"
-            except Rtl433ProfileDerivationError:
-                errors[CONF_RTL433_SAMPLES] = "rtl433_profile_derivation_failed"
+                band = user_input[CONF_RF_BAND]
+                yardstick_band(band)
+            except (KeyError, ValueError):
+                errors[CONF_RF_BAND] = "invalid_rf_band"
             else:
-                self._manual_rtl433_samples = updated_samples
-                maybe_result = self._try_build_manual_rtl433_learn_result()
-                if maybe_result is not None:
-                    self._learn_result = maybe_result
-                    return await self.async_step_manual_rtl433_power_off()
-                self._manual_rtl433_prompt_index += 1
-
-        prompt_label, instruction = self._current_manual_rtl433_prompt()
+                data[CONF_RF_BAND] = band
+                if self._yardstick_setup_mode == "learn":
+                    return await self._async_begin_learning_from_current_input()
+                return await self._async_finish_manual_setup()
         return self.async_show_form(
-            step_id="manual_rtl433_prompt",
-            data_schema=self.add_suggested_values_to_schema(
-                _manual_rtl433_prompt_schema(),
-                {CONF_RTL433_SAMPLES: ""},
+            step_id="yardstick_band",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_RF_BAND, default=DEFAULT_RF_BAND): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[{"value": band, "label": f"{band} MHz"} for band in YARDSTICK_BANDS],
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
             ),
             errors=errors,
-            description_placeholders={
-                "instruction": instruction,
-                "prompt_label": prompt_label,
-                "rtl433_command": RTL433_MANUAL_COMMAND,
-                "rtl433_manual_learning_guide": RTL433_MANUAL_LEARNING_GUIDE,
-                "sample_count": str(len(self._manual_rtl433_samples)),
-            },
         )
 
-    async def async_step_manual_rtl433_power_off(self, user_input: dict[str, Any] | None = None):
-        """Confirm manual rtl_433 learning is complete."""
+    async def async_step_manual_features(self, user_input: dict[str, Any] | None = None):
+        """Choose fireplace features locally, independently of the Learning ID."""
 
-        if self._learn_result is None or not self._learn_result.success:
-            return await self.async_step_manual_rtl433_prompt()
+        data, options = self._pending_entry_data, self._pending_entry_options
+        if data is None or options is None:
+            return await self.async_step_manual()
         if user_input is not None:
-            return await self.async_step_learn_features()
+            self._pending_entry_options = {**options, **normalize_feature_options(user_input)}
+            return await self.async_step_optional_settings()
         return self.async_show_form(
-            step_id="manual_rtl433_power_off",
-            data_schema=MANUAL_RTL433_POWER_OFF_SCHEMA,
+            step_id="manual_features",
+            last_step=False,
+            data_schema=self.add_suggested_values_to_schema(FEATURE_SELECTION_SCHEMA, options),
+        )
+
+    async def async_step_optional_settings(self, user_input: dict[str, Any] | None = None):
+        """Commit setup only after the final behavior-settings page succeeds."""
+        data, options = self._pending_entry_data, self._pending_entry_options
+        if data is None or options is None:
+            return await self.async_step_user()
+        supports_listening = get_backend_definition(data[CONF_BACKEND_TYPE]).supports_active_listening
+        errors = {}
+        if user_input is not None:
+            self._pending_entry_options = {**options, **user_input}
+            try:
+                updated = normalize_entry_options(self._pending_entry_options)
+                if not supports_listening:
+                    updated[CONF_ACTIVE_LISTENING] = False
+            except InvalidRefreshPeriodError:
+                errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
+            else:
+                return await self._async_create_profile_entry(title=data[CONF_NAME], data=data, options=updated)
+        return self.async_show_form(
+            step_id="optional_settings",
+            last_step=True,
+            data_schema=self.add_suggested_values_to_schema(
+                _optional_settings_schema(
+                    defaults=self._pending_entry_options, supports_active_listening=supports_listening
+                ),
+                self._pending_entry_options,
+            ),
+            errors=errors,
         )
 
     async def async_step_manual_esphome(self, user_input: dict[str, Any] | None = None):
         """Collect the ESPHome device link only for manual LilyGO setup."""
 
-        if self._manual_pending_data is None or self._manual_pending_options is None:
+        if self._pending_entry_data is None or self._pending_entry_options is None:
             return await self.async_step_manual()
 
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._manual_pending_data[CONF_ESPHOME_ENTRY_ID] = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
-            esphome_entry_error = self._validate_manual_esphome_link(self._manual_pending_data)
+            self._pending_entry_data[CONF_ESPHOME_ENTRY_ID] = str(user_input.get(CONF_ESPHOME_ENTRY_ID, "")).strip()
+            esphome_entry_error = self._validate_manual_esphome_link(self._pending_entry_data)
             if esphome_entry_error is None:
-                return await self._async_create_profile_entry(
-                    title=self._manual_pending_data[CONF_NAME],
-                    data=self._manual_pending_data,
-                    options=self._manual_pending_options,
-                )
+                return await self._async_finish_manual_setup()
             errors[CONF_ESPHOME_ENTRY_ID] = esphome_entry_error
 
         return self.async_show_form(
@@ -524,6 +541,11 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if self._learn_input is None:
             return await self.async_step_learn()
+        if controller_assignments(self.hass, self._learn_input, {}):
+            return self.async_abort(reason="controller_in_use")
+        if self._learn_input[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK and CONF_RF_BAND not in self._learn_input:
+            self._yardstick_setup_mode = "learn"
+            return await self.async_step_yardstick_band()
         self._learn_result = None
         await self._async_dispose_learning_session()
         learn_session = await self._async_start_learning_session_or_fail()
@@ -531,6 +553,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_learn_failed()
         self._learn_session = learn_session
         self._learn_prompt_index = 0
+        self._learn_action_number = 0
         self._extended_diagnostic_active = False
         self._extended_diagnostic_log_path = None
         self._extended_diagnostic_task = None
@@ -548,10 +571,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_progress(
                 step_id="learn_progress",
                 progress_action="learn_remote",
-                description_placeholders={
-                    "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
-                    "instruction": self._current_learn_instruction(),
-                },
+                description_placeholders=self._learn_progress_placeholders(),
                 progress_task=self._learn_task,
             )
 
@@ -559,9 +579,14 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._extended_diagnostic_log_path = await self._extended_diagnostic_task
             self._extended_diagnostic_task = None
 
-        self._learn_session.prompt_index = self._learn_prompt_index
+        if not self._extended_diagnostic_active:
+            self._learn_action_number += 1
+        self._learn_session.prompt_index = (
+            self._learn_prompt_index if self._extended_diagnostic_active else self._learn_action_number - 1
+        )
         self._learn_session.prompt_label = self._current_learn_prompt_label()
         self._learn_session.prompt_instruction = self._current_learn_instruction()
+        self._learn_session.diagnostic_capture = self._extended_diagnostic_active
         if self._learn_session.packet_debug_logging_enabled:
             get_packet_debug_logger().info(
                 "config_flow: prompt_index=%s instruction=%s",
@@ -572,10 +597,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_progress(
             step_id="learn_progress",
             progress_action="learn_remote",
-            description_placeholders={
-                "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
-                "instruction": self._current_learn_instruction(),
-            },
+            description_placeholders=self._learn_progress_placeholders(),
             progress_task=self._learn_task,
         )
 
@@ -589,15 +611,15 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_progress(
                 step_id="learn_progress",
                 progress_action="learn_remote",
-                description_placeholders={
-                    "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
-                    "instruction": self._current_learn_instruction(),
-                },
+                description_placeholders=self._learn_progress_placeholders(),
                 progress_task=self._learn_task,
             )
 
         capture_result = await self._learn_task
         self._learn_task = None
+
+        if isinstance(capture_result, LearningModeTransition):
+            return self.async_show_progress_done(next_step_id="learn_prompt")
 
         if isinstance(capture_result, LearnResult):
             self._learn_result = capture_result
@@ -606,7 +628,14 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 next_step_id="learn_features" if capture_result.success else "learn_failed"
             )
 
-        self._learn_prompt_index += 1
+        corrective_action = (
+            not self._extended_diagnostic_active
+            and self._learn_prompt_index >= 3
+            and (self._learn_session.prompt_label == "ensure_power_on" or not capture_result.state.power)
+        )
+        # Corrective packets remain derivation evidence, but don't complete a flame step.
+        if not corrective_action:
+            self._learn_prompt_index += 1
         if self._extended_diagnostic_active:
             if self._learn_prompt_index < len(EXTENDED_DIAGNOSTIC_PROMPTS):
                 return self.async_show_progress_done(next_step_id="learn_prompt")
@@ -652,32 +681,31 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_BACKEND_TYPE: self._learn_input[CONF_BACKEND_TYPE],
                 **self._learn_result.data,
             }
+            if self._learn_input[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK:
+                data[CONF_RF_BAND] = self._learn_input.get(CONF_RF_BAND, DEFAULT_RF_BAND)
             if self._backend_requires_esphome_entry(self._learn_input[CONF_BACKEND_TYPE]):
                 data[CONF_ESPHOME_ENTRY_ID] = self._learn_input[CONF_ESPHOME_ENTRY_ID]
             if self._learn_result.final_packet is not None:
                 data[CONF_INITIAL_FRAME] = asdict(self._learn_result.final_packet.frame)
                 data[CONF_INITIAL_PACKET_SOURCE] = self._learn_result.final_packet.source or "observed_packet"
-            return await self._async_create_profile_entry(
-                title=data[CONF_NAME],
-                data=data,
-                options=normalize_entry_options(user_input),
-            )
+            self._pending_entry_data = data
+            self._pending_entry_options = {
+                **normalize_feature_options(user_input),
+                CONF_FIREPLACE_SHORT_NAME: self._learn_input.get(
+                    CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME
+                ),
+                CONF_DEBUG_LOGGING: self._learn_input.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING),
+                CONF_ACTIVE_LISTENING: self._learn_input[CONF_BACKEND_TYPE] == BACKEND_ESPHOME,
+            }
+            return await self.async_step_optional_settings()
 
         suggested_values = default_feature_options()
-        suggested_values[CONF_FIREPLACE_SHORT_NAME] = self._learn_input.get(
-            CONF_FIREPLACE_SHORT_NAME,
-            DEFAULT_FIREPLACE_SHORT_NAME,
-        )
-        suggested_values[CONF_DEBUG_LOGGING] = self._learn_input.get(
-            CONF_DEBUG_LOGGING,
-            DEFAULT_DEBUG_LOGGING,
-        )
-        suggested_values[CONF_ACTIVE_LISTENING] = self._learn_input[CONF_BACKEND_TYPE] == BACKEND_ESPHOME
         return self.async_show_form(
             step_id="learn_features",
+            last_step=False,
             data_schema=self.add_suggested_values_to_schema(
                 FEATURE_SELECTION_SCHEMA,
-                suggested_values,
+                user_input or suggested_values,
             ),
         )
 
@@ -693,7 +721,7 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         return self.async_show_menu(
             step_id="learn_failed",
-            menu_options=["retry_learn", "manual_rtl433", "manual"],
+            menu_options=["retry_learn", "manual", "manual_legacy"],
             description_placeholders=description_placeholders,
         )
 
@@ -702,6 +730,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if self._learn_input is None:
             return await self.async_step_learn()
+        if controller_assignments(self.hass, self._learn_input, {}):
+            return self.async_abort(reason="controller_in_use")
 
         self._learn_result = None
         await self._async_dispose_learning_session()
@@ -730,6 +760,8 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             linked_esphome_entry_id=data.get(CONF_ESPHOME_ENTRY_ID),
         ):
             return self.async_abort(reason="already_configured")
+        if controller_assignments(self.hass, data, options):
+            return self.async_abort(reason="controller_in_use")
         return self.async_create_entry(
             title=title,
             data=data,
@@ -762,80 +794,6 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             suggested[CONF_REMOTE_ID] = remote_id_as_hex(self._learn_result.remote_id)
 
         return suggested
-
-    def _manual_rtl433_suggested_values(self) -> dict[str, Any]:
-        """Build suggested values for rtl_433-assisted manual learning."""
-
-        suggested = self._manual_suggested_values()
-        suggested[CONF_RTL433_SAMPLES] = ""
-        for key in (CONF_REMOTE_ID, CONF_C1, CONF_D1, CONF_C2, CONF_D2):
-            suggested.pop(key, None)
-        return suggested
-
-    def _current_manual_rtl433_prompt(self) -> tuple[str, str]:
-        """Return the current manual rtl_433 prompt, cycling as needed."""
-
-        return RTL433_MANUAL_PROMPTS[self._manual_rtl433_prompt_index % len(RTL433_MANUAL_PROMPTS)]
-
-    def _validate_manual_rtl433_samples(self, samples: list[Rtl433Sample]) -> None:
-        """Validate accumulated rtl_433 evidence without requiring success yet."""
-
-        if self._manual_rtl433_input is None:
-            raise InvalidRtl433SamplesError("Manual rtl_433 setup has not started.")
-        normalize_manual_rtl433_profile_samples(
-            self._manual_rtl433_input,
-            tuple(samples),
-        )
-
-    def _try_build_manual_rtl433_learn_result(self) -> LearnResult | None:
-        """Return a learned profile once pasted rtl_433 rows prove enough evidence."""
-
-        if self._manual_rtl433_input is None:
-            return None
-        samples = tuple(self._manual_rtl433_samples)
-        if len(samples) < MIN_VALID_PACKETS:
-            return None
-
-        cmd1_samples = {(sample.cmd1, sample.err1) for sample in samples}
-        cmd2_samples = {(sample.cmd2, sample.err2) for sample in samples}
-        if len(cmd1_samples) < MIN_UNIQUE_CMD1_SAMPLES or len(cmd2_samples) < MIN_UNIQUE_CMD2_SAMPLES:
-            return None
-
-        normalized = normalize_manual_rtl433_profile_samples(self._manual_rtl433_input, samples)
-        self._learn_input = {
-            CONF_NAME: normalized.profile.data[CONF_NAME],
-            CONF_BACKEND_TYPE: normalized.profile.data[CONF_BACKEND_TYPE],
-            CONF_FIREPLACE_SHORT_NAME: normalized.profile.options.get(
-                CONF_FIREPLACE_SHORT_NAME,
-                DEFAULT_FIREPLACE_SHORT_NAME,
-            ),
-            CONF_DEBUG_LOGGING: normalized.profile.options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING),
-        }
-        if CONF_ESPHOME_ENTRY_ID in normalized.profile.data:
-            self._learn_input[CONF_ESPHOME_ENTRY_ID] = normalized.profile.data[CONF_ESPHOME_ENTRY_ID]
-
-        final_sample = samples[-1]
-        final_packet = ProflamePacket.from_frame(
-            ProflameFrame(
-                serial_id=final_sample.remote_id,
-                cmd1=final_sample.cmd1,
-                err1=final_sample.err1,
-                cmd2=final_sample.cmd2,
-                err2=final_sample.err2,
-            ),
-            source="rtl433_manual",
-        )
-        return LearnResult(
-            success=True,
-            remote_id=normalized.profile.data[CONF_REMOTE_ID],
-            c1=normalized.profile.data[CONF_C1],
-            d1=normalized.profile.data[CONF_D1],
-            c2=normalized.profile.data[CONF_C2],
-            d2=normalized.profile.data[CONF_D2],
-            packets_seen=len(samples),
-            valid_packets=len(samples),
-            final_packet=final_packet,
-        )
 
     def _esphome_link_schema(self) -> vol.Schema:
         """Build an explicit ESPHome entry dropdown for LilyGO setup."""
@@ -913,19 +871,62 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _current_learn_instruction(self) -> str:
         """Return the current guided-learning prompt."""
 
-        if self._extended_diagnostic_active:
-            return EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][1]
-        if self._learn_prompt_index < len(LEARN_PROMPTS):
+        if self._learn_session is not None and self._learn_session.waiting_for_manual:
+            instruction = MANUAL_MODE_INSTRUCTION
+        elif self._extended_diagnostic_active:
+            instruction = EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][1]
+        elif self._flame_learning_needs_power_on():
+            instruction = "The fireplace is OFF. Press the Power button to turn it ON before adjusting the flame."
+        elif self._learn_prompt_index >= 3 and self._learn_session is not None:
+            packet = self._learn_session.last_observed_packet
+            if packet is not None:
+                direction = "Up" if packet.state.flame <= 1 else "Down"
+                instruction = f"Press the Flame {direction} button once."
+            else:
+                instruction = LEARN_PROMPTS[3][1] if self._learn_prompt_index == 3 else EXTRA_LEARN_PROMPT[1]
+        elif self._learn_prompt_index < len(LEARN_PROMPTS):
             instruction = LEARN_PROMPTS[self._learn_prompt_index][1]
         else:
             instruction = EXTRA_LEARN_PROMPT[1]
         return instruction
+
+    def _flame_learning_needs_power_on(self) -> bool:
+        """Require a received ON state before asking for a flame adjustment."""
+
+        return (
+            not self._extended_diagnostic_active
+            and self._learn_prompt_index >= 3
+            and self._learn_session is not None
+            and self._learn_session.last_observed_packet is not None
+            and not self._learn_session.last_observed_packet.state.power
+        )
+
+    def _learn_progress_placeholders(self) -> dict[str, str]:
+        """Separate HA's progress header from the action without changing capture state."""
+
+        instruction = self._current_learn_instruction()
+        if self._learn_session is not None and self._learn_session.waiting_for_manual:
+            header, _, instruction = instruction.partition("\n")
+            header = header.strip()
+        elif self._extended_diagnostic_active:
+            header = f"Diagnostic step {self._learn_prompt_index + 1} of {len(EXTENDED_DIAGNOSTIC_PROMPTS)}"
+        elif self._learn_action_number <= len(LEARN_PROMPTS):
+            header = f"Step {max(1, self._learn_action_number)} of {len(LEARN_PROMPTS)}"
+        else:
+            header = f"Additional step {self._learn_action_number}"
+        return {
+            "backend_name": available_backend_labels()[self._learn_input[CONF_BACKEND_TYPE]],
+            "header": header,
+            "instruction": instruction,
+        }
 
     def _current_learn_prompt_label(self) -> str:
         """Return the short label for the current guided-learning prompt."""
 
         if self._extended_diagnostic_active:
             return EXTENDED_DIAGNOSTIC_PROMPTS[self._learn_prompt_index][0]
+        if self._flame_learning_needs_power_on():
+            return "ensure_power_on"
         if self._learn_prompt_index < len(LEARN_PROMPTS):
             return LEARN_PROMPTS[self._learn_prompt_index][0]
         return EXTRA_LEARN_PROMPT[0]
@@ -961,8 +962,13 @@ class Proflame2ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 ),
                 esphome_entry_id=self._learn_input.get(CONF_ESPHOME_ENTRY_ID),
+                **(
+                    {"rf_band": self._learn_input.get(CONF_RF_BAND, DEFAULT_RF_BAND)}
+                    if self._learn_input[CONF_BACKEND_TYPE] == BACKEND_YARDSTICK
+                    else {}
+                ),
             )
-        except YardStickBackendUnavailableError as exc:
+        except (YardStickBackendUnavailableError, ValueError) as exc:
             self._learn_result = LearnResult(
                 success=False,
                 warnings=[],
@@ -989,30 +995,67 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
         """Manage editable feature flag options."""
 
         if user_input is not None:
-            updated = normalize_entry_options({**self.config_entry.options, **user_input})
-            updated.update(normalize_feature_options(user_input))
-            updated[CONF_DEBUG_LOGGING] = bool(
-                user_input.get(
-                    CONF_DEBUG_LOGGING,
-                    updated.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING),
-                )
-            )
-            updated[CONF_ACTIVE_LISTENING] = bool(
-                user_input.get(CONF_ACTIVE_LISTENING, updated.get(CONF_ACTIVE_LISTENING, False))
-            )
-            updated[CONF_FIREPLACE_SHORT_NAME] = sanitize_fireplace_short_name(
-                user_input.get(
-                    CONF_FIREPLACE_SHORT_NAME,
-                    updated.get(CONF_FIREPLACE_SHORT_NAME, DEFAULT_FIREPLACE_SHORT_NAME),
-                )
-            )
-            return self.async_create_entry(data=updated)
-
-        suggested_values = default_feature_options()
-        suggested_values.update(normalize_entry_options(self.config_entry.options))
+            self._pending_options = {**self.config_entry.options, **normalize_feature_options(user_input)}
+            return await self.async_step_optional_settings()
         return self.async_show_form(
             step_id="features",
-            data_schema=self.add_suggested_values_to_schema(FEATURE_SELECTION_SCHEMA, suggested_values),
+            last_step=False,
+            data_schema=self.add_suggested_values_to_schema(FEATURE_SELECTION_SCHEMA, self.config_entry.options),
+        )
+
+    async def async_step_optional_settings(self, user_input: dict[str, Any] | None = None):
+        """Validate pending settings and save atomically, without changing state."""
+        supports_listening = get_backend_definition(self.config_entry.data[CONF_BACKEND_TYPE]).supports_active_listening
+        pending = getattr(self, "_pending_options", dict(self.config_entry.options))
+        errors = {}
+        if user_input is not None:
+            pending = {**pending, **user_input}
+            self._pending_options = pending
+            if (
+                self.config_entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)
+                and not pending.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)
+                and self._has_flame_zero_conflict(pending)
+            ):
+                errors[CONF_ALLOW_FLAME_OFF_WHEN_ON] = "flame_zero_conflict"
+            else:
+                try:
+                    updated = {**pending, **normalize_entry_options(pending)}
+                    if not supports_listening:
+                        updated[CONF_ACTIVE_LISTENING] = False
+                except InvalidRefreshPeriodError:
+                    errors[CONF_REFRESH_PERIOD_MINUTES] = "invalid_refresh_period"
+                else:
+                    return self.async_create_entry(data=updated)
+        suggested = {**normalize_entry_options(self.config_entry.options), **pending}
+        return self.async_show_form(
+            step_id="optional_settings",
+            last_step=True,
+            data_schema=self.add_suggested_values_to_schema(
+                _optional_settings_schema(
+                    edit_short_name=True, defaults=suggested, supports_active_listening=supports_listening
+                ),
+                suggested,
+            ),
+            errors=errors,
+        )
+
+    def _has_flame_zero_conflict(self, options: dict[str, Any]) -> bool:
+        from .runtime import async_get_runtime_entries, runtime_current_state
+
+        runtime = async_get_runtime_entries(self.hass).get(self.config_entry.entry_id)
+        states = []
+        if runtime is not None:
+            states = [runtime_current_state(runtime), runtime.desired_state]
+            states += [
+                intent.state
+                for intent in (runtime.control_intents.pending, runtime.control_intents.in_flight)
+                if intent is not None
+            ]
+        if any(state is not None and state.power and state.flame == 0 for state in states):
+            return True
+        return any(
+            profile.get(CONF_POWER) and profile.get(CONF_FLAME) == 0
+            for profile in options.get(CONF_PROFILES, {}).values()
         )
 
     async def async_step_profiles(self, user_input: dict[str, Any] | None = None):
@@ -1073,6 +1116,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
                 profile = normalize_saved_profile_input(
                     user_input,
                     features=self._features,
+                    allow_flame_off_when_on=bool(self.config_entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)),
                 )
                 if profile[CONF_PROFILE_ID] in self._profiles:
                     raise DuplicateProfileIdError(profile[CONF_PROFILE_ID])
@@ -1083,7 +1127,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
             except DuplicateProfileIdError:
                 errors[CONF_NAME] = "duplicate_profile_id"
             else:
-                updated = normalize_entry_options(self.config_entry.options)
+                updated = {**self.config_entry.options, **normalize_entry_options(self.config_entry.options)}
                 updated[CONF_PROFILES][profile[CONF_PROFILE_ID]] = profile
                 return self.async_create_entry(data=updated)
 
@@ -1110,6 +1154,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
                 profile = normalize_saved_profile_input(
                     user_input,
                     features=self._features,
+                    allow_flame_off_when_on=bool(self.config_entry.options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False)),
                     profile_id=profile_id,
                 )
             except InvalidProfileNameError:
@@ -1117,7 +1162,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
             except InvalidSavedProfileError as exc:
                 errors[_extract_invalid_profile_field(user_input, str(exc))] = "invalid_profile"
             else:
-                updated = normalize_entry_options(self.config_entry.options)
+                updated = {**self.config_entry.options, **normalize_entry_options(self.config_entry.options)}
                 updated[CONF_PROFILES][profile_id] = profile
                 return self.async_create_entry(data=updated)
 
@@ -1141,7 +1186,7 @@ class Proflame2OptionsFlow(OptionsFlowWithReload):
 
         existing = self._profiles[profile_id]
         if user_input is not None and user_input.get("confirm"):
-            updated = normalize_entry_options(self.config_entry.options)
+            updated = {**self.config_entry.options, **normalize_entry_options(self.config_entry.options)}
             updated[CONF_PROFILES].pop(profile_id, None)
             return self.async_create_entry(data=updated)
 
@@ -1173,7 +1218,7 @@ def _profile_schema(features) -> vol.Schema:
     schema: dict[Any, Any] = {
         vol.Required(CONF_NAME): str,
         vol.Required(CONF_POWER, default=True): bool,
-        vol.Required(CONF_FLAME, default=1): vol.Coerce(int),
+        vol.Required(CONF_FLAME, default=1): vol.Any(int, float),
     }
     if features.fan:
         schema[vol.Optional(CONF_FAN, default=0)] = vol.Coerce(int)

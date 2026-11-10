@@ -16,6 +16,10 @@ The acquisition strategy is also informed by rtl_433's Proflame2 decoder
 - each word begins with sync/start ``1110``
 - 5 repeated transmissions separated by 12 low bits
 
+Extended FIFO candidates use ten bounded words and both serial-inclusive
+integrity lanes. They retain complete original fields and are grouped by the
+entire frame, independently of the normalized learning command key.
+
 rtl_433 does not assume the protocol begins at byte offset zero inside raw SDR
 data; it first acquires candidate pulse rows, then validates structure. Our
 Yard Stick receive path mirrors that principle by scanning candidate bit and
@@ -26,11 +30,13 @@ first byte returned by ``rflib`` is already aligned to a valid Proflame2 word.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from ..protocol.ecc import extended_frame_integrity_matches
 from ..protocol.packet import ProflameFrame, ProflamePacket
+from .pulse import EXTENDED_WORD_BITS, EXTENDED_WORD_COUNT, MIN_REPEAT_GAP_BITS, decode_pcm_words
 from .waveform import (
     AIR_PACKET_BYTES,
     BITS_TO_SYMBOL,
@@ -56,6 +62,7 @@ REASON_BAD_TRAILING_ZERO_GUARD = "bad_trailing_zero_guard"
 REASON_INVALID_COMMAND_LAYOUT = "invalid_command_layout"
 REASON_WORD_COUNT_MISMATCH = "word_count_mismatch"
 REASON_UNKNOWN_DECODE_FAILURE = "unknown_decode_failure"
+REASON_EXTENDED_INTEGRITY = "extended_integrity_mismatch"
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,24 @@ class CaptureSample:
     symbols: str
     extension_words: tuple[int, ...] = ()
     frame_format: str = "standard_7_word"
+
+    @property
+    def protocol_fields(self) -> dict[str, object]:
+        """Additive original-frame metadata shared by diagnostics and collectors."""
+        frame = self.as_frame()
+        result: dict[str, object] = {
+            "protocol_variant": "extended_10_word" if frame.is_extended else "legacy_7_word",
+            "frame_format": self.frame_format,
+            "word_count": len(frame.wire_words),
+            "raw_words": bytes(frame.wire_words).hex(),
+            "extension_words": list(self.extension_words),
+            "extended_integrity_valid": (
+                extended_frame_integrity_matches(frame.wire_words) if frame.is_extended else None
+            ),
+        }
+        if frame.is_extended:
+            result.update(dict(zip(("w6", "w7", "w8", "w9", "w10"), frame.wire_words[5:], strict=True)))
+        return result
 
     @property
     def cmd1_tuple(self) -> tuple[int, int]:
@@ -166,6 +191,7 @@ class DecodeCandidate:
     trailing_guard_warning: str | None = None
     validation_notes: tuple[str, ...] = ()
     occurrence_offsets: tuple[tuple[int, int], ...] = ()
+    repeat_gap_bits: int = 0
 
 
 @dataclass(frozen=True)
@@ -177,6 +203,7 @@ class DecodeAcceptance:
     trailing_guard_observed: str
     trailing_guard_warning: str | None
     validation_notes: tuple[str, ...]
+    repeat_gap_bits: int = 0
 
 
 def frames_from_fixture_rows(rows: Iterable[dict]) -> list[ProflameFrame]:
@@ -271,7 +298,7 @@ def find_proflame_candidates(raw_payload: bytes) -> list[DecodeCandidate]:
         return []
 
     occurrences: dict[
-        tuple[int, int, int, int, int],
+        tuple[int, ...],
         list[tuple[int, int, int, DecodeAcceptance]],
     ] = {}
     for bit_offset in range(min(8, len(bit_stream))):
@@ -288,19 +315,23 @@ def find_proflame_candidates(raw_payload: bytes) -> list[DecodeCandidate]:
             if acceptance is None:
                 continue
             sample = acceptance.sample
-            key = (
-                sample.remote_id,
-                sample.cmd1,
-                sample.err1,
-                sample.cmd2,
-                sample.err2,
-            )
+            key = sample.as_frame().wire_words
             occurrences.setdefault(key, []).append(
                 (bit_offset, symbol_offset, bit_offset + (symbol_offset * 2), acceptance)
             )
 
+    for absolute_bit_offset, acceptance, _failure in _extended_fifo_windows(raw_payload, bit_stream):
+        if acceptance is not None:
+            occurrences.setdefault(acceptance.sample.as_frame().wire_words, []).append(
+                (absolute_bit_offset % 8, absolute_bit_offset // 8 * 4, absolute_bit_offset, acceptance)
+            )
+
     candidates: list[DecodeCandidate] = []
     for hits in occurrences.values():
+        # Alignment scans can discover the same physical location more than
+        # once. That is one observation, not additional RF corroboration.
+        hits = list({hit[2]: hit for hit in reversed(hits)}.values())
+        hits.sort(key=lambda hit: hit[2])
         bit_offset, symbol_offset, absolute_bit_offset, acceptance = hits[0]
         sample = acceptance.sample
         frame = sample.as_frame()
@@ -308,7 +339,7 @@ def find_proflame_candidates(raw_payload: bytes) -> list[DecodeCandidate]:
         raw_slice = _payload_slice_for_bit_range(
             raw_payload,
             absolute_bit_offset,
-            TOTAL_SYMBOLS * 2,
+            len(sample.symbols) * 2,
         )
         validation_notes = list(acceptance.validation_notes)
         if repeat_count > 1:
@@ -341,6 +372,7 @@ def find_proflame_candidates(raw_payload: bytes) -> list[DecodeCandidate]:
                 trailing_guard_warning=acceptance.trailing_guard_warning,
                 validation_notes=tuple(validation_notes),
                 occurrence_offsets=tuple((hit[0], hit[1]) for hit in hits),
+                repeat_gap_bits=acceptance.repeat_gap_bits,
             )
         )
 
@@ -405,6 +437,7 @@ def diagnose_air_payload(raw_payload: bytes) -> DecodeDiagnostics:
             if acceptance is None and failure is not None:
                 failures.append(failure)
 
+    failures.extend(failure for _, _, failure in _extended_fifo_windows(raw_payload, bit_stream) if failure is not None)
     candidates = tuple(find_proflame_candidates(raw_payload))
     symbols = tolerant_symbols_from_bit_stream(bit_stream, bit_offset=0) if bit_stream else None
     reason_counts = dict(Counter(failure.reason for failure in failures))
@@ -427,6 +460,57 @@ def diagnose_air_payload(raw_payload: bytes) -> DecodeDiagnostics:
         reason_counts=reason_counts,
         best_failure=best_failure,
     )
+
+
+def _extended_fifo_windows(
+    raw_payload: bytes, bit_stream: str
+) -> Iterator[tuple[int, DecodeAcceptance | None, DecodeFailure | None]]:
+    """Yield each complete extended FIFO occurrence or integrity rejection.
+
+    Unlike RMT rows, FIFO buffers never receive an invented terminal guard bit.
+    Byte packing may leave at most seven low bits after a complete final frame.
+    """
+    for start in range(len(bit_stream) - EXTENDED_WORD_BITS + 1):
+        if bit_stream[start : start + 4] != "1110":
+            continue
+        words = decode_pcm_words(bit_stream, start, EXTENDED_WORD_COUNT, allow_truncated_end_guard=False)
+        if words is None:
+            continue
+        end = start + EXTENDED_WORD_BITS
+        tail = bit_stream[end:]
+        gap = len(tail) - len(tail.lstrip("0"))
+        if gap < MIN_REPEAT_GAP_BITS and not (len(tail) <= 7 and not tail.strip("0")):
+            continue
+        symbols = tolerant_symbols_from_bit_stream(bit_stream[start:end], bit_offset=0)
+        if not extended_frame_integrity_matches(words):
+            yield start, None, DecodeFailure(
+                reason=REASON_EXTENDED_INTEGRITY,
+                detail="Complete ten-word frame failed its original extended integrity lanes.",
+                stage_score=6,
+                bit_offset=start % 8,
+                symbol_offset=start // 8 * 4,
+                symbol_window=symbols,
+            )
+            continue
+        sample = CaptureSample(
+            remote_id=(words[0] << 16) | (words[1] << 8) | words[2],
+            cmd1=words[3],
+            cmd2=words[4],
+            err1=words[5],
+            err2=words[6],
+            extension_words=tuple(words[7:]),
+            frame_format="extended_10_word",
+            raw_payload=raw_payload,
+            symbols=symbols,
+        )
+        yield start, DecodeAcceptance(
+            sample=sample,
+            trailing_guard_valid=True,
+            trailing_guard_observed=tail[:gap],
+            trailing_guard_warning=None,
+            validation_notes=("frame_format=extended_10_word", "per_word_parity_valid", "extended_integrity_valid"),
+            repeat_gap_bits=gap,
+        ), None
 
 
 def _sample_from_symbol_window(
@@ -593,6 +677,7 @@ def _sample_from_symbol_window(
                 "command_layout_valid",
                 "trailing_guard_valid" if trailing_guard_valid else "trailing_guard_partial",
             ),
+            repeat_gap_bits=(len(trailer) - len(trailer.lstrip("Z"))) * 2,
         ),
         None,
     )

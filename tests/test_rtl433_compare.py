@@ -25,15 +25,30 @@ def _rtl433_source_root() -> Path:
     configured = os.environ.get("PROFLAME2_RTL433_SOURCE")
     candidates = [
         Path(configured).expanduser() if configured else None,
+        Path("/srv/Tools/rtl_433"),
         Path.home() / "Tools" / "rtl_433",
-        REPO_ROOT / "rtl_433",
     ]
     for candidate in candidates:
         if candidate is not None and (candidate / "src" / "pulse_slicer.c").is_file():
             return candidate
     raise AssertionError(
-        "rtl_433 source tree not found. Set PROFLAME2_RTL433_SOURCE or clone it under ~/Tools/rtl_433."
+        "rtl_433 source tree not found. Set PROFLAME2_RTL433_SOURCE to the external instrumented checkout."
     )
+
+
+def test_rtl433_source_override_has_precedence(tmp_path, monkeypatch) -> None:
+    checkout = tmp_path / "decoder"
+    (checkout / "src").mkdir(parents=True)
+    (checkout / "src/pulse_slicer.c").touch()
+    monkeypatch.setenv("PROFLAME2_RTL433_SOURCE", str(checkout))
+    assert _rtl433_source_root() == checkout
+
+
+def test_rtl433_source_uses_external_checkout(monkeypatch) -> None:
+    monkeypatch.delenv("PROFLAME2_RTL433_SOURCE", raising=False)
+    external = Path("/srv/Tools/rtl_433")
+    monkeypatch.setattr(Path, "is_file", lambda path: path == external / "src/pulse_slicer.c")
+    assert _rtl433_source_root() == external
 
 
 MODEL_CAPTURE = """
@@ -154,6 +169,16 @@ def test_parse_model_decoded_capture() -> None:
     ]
     assert result.repeated_times == 5
     assert result.missing_sections == []
+
+
+def test_extended_fields_are_preserved_and_compared() -> None:
+    text = "model : Proflame2-Remote\nVariant : extended_10_word\nW6 : 15\nW10 : 6e\nRaw words : 123456812015c800216e\n"
+    baseline = MODULE.parse_capture_text(text)
+    changed = MODULE.parse_capture_text(text.replace("W6 : 15", "W6 : 16"))
+    assert baseline.decoded_fields["Variant"] == "extended_10_word"
+    assert baseline.decoded_fields["Raw words"] == "123456812015c800216e"
+    assert "W6" in MODULE._normalized_diff_line(changed, baseline)
+    assert "extended_10_word" in MODULE._capture_summary_line(baseline, baseline)
 
 
 def test_parse_analyzer_only_capture_without_model_decode() -> None:

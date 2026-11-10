@@ -30,6 +30,9 @@ def default_manual_state() -> FireplaceState:
 def build_requested_state(
     features: FireplaceFeatures,
     data: Mapping[str, Any],
+    *,
+    allow_flame_off_when_on: bool = False,
+    allow_power_off_flame: bool = False,
 ) -> tuple[FireplaceState, tuple[str, ...]]:
     """Validate service or profile input and build a full semantic state.
 
@@ -46,13 +49,17 @@ def build_requested_state(
     if power:
         if flame_value is None:
             raise StateValidationError("flame is required when power is true.")
-        flame = int(flame_value)
-        if not 1 <= flame <= 6:
-            raise StateValidationError("flame must be between 1 and 6 when power is true.")
+        flame = _whole_level(flame_value, CONF_FLAME)
+        minimum = 0 if allow_flame_off_when_on else 1
+        if not minimum <= flame <= 6:
+            raise StateValidationError(f"flame must be between {minimum} and 6 when power is true.")
     else:
-        if flame_value is not None and int(flame_value) not in (0,):
+        flame = 0 if flame_value is None else _whole_level(flame_value, CONF_FLAME)
+        if allow_power_off_flame:
+            if not 0 <= flame <= 6:
+                raise StateValidationError("flame must be between 0 and 6.")
+        elif flame != 0:
             raise StateValidationError("flame must be omitted or 0 when power is false.")
-        flame = 0
 
     warnings: list[str] = []
     fan = _validate_feature_number(features, data, CONF_FAN, 0, 6, warnings)
@@ -79,12 +86,14 @@ def build_staged_state(
     features: FireplaceFeatures,
     base_state: FireplaceState | None,
     changes: Mapping[str, Any],
+    *,
+    allow_flame_off_when_on: bool = False,
 ) -> FireplaceState:
     """Merge a partial control edit into a full desired fireplace state."""
 
     state = base_state or default_manual_state()
     power = state.power
-    flame = state.flame if state.flame > 0 else 1
+    flame = state.flame
     fan = state.fan if features.fan else 0
     light = state.light if features.light else 0
     front = state.front if features.front else False
@@ -93,15 +102,19 @@ def build_staged_state(
 
     if CONF_POWER in changes:
         power = bool(changes[CONF_POWER])
+        if power and CONF_FLAME not in changes:
+            flame = flame_for_power_on(state)
     if CONF_FLAME in changes and changes[CONF_FLAME] is not None:
-        flame = int(changes[CONF_FLAME])
+        flame = _whole_level(changes[CONF_FLAME], CONF_FLAME)
+        if not 0 <= flame <= 6:
+            raise StateValidationError("flame must be between 0 and 6.")
         if flame > 0:
             power = True
 
     if CONF_FAN in changes and features.fan:
-        fan = int(changes[CONF_FAN])
+        fan = _whole_level(changes[CONF_FAN], CONF_FAN)
     if CONF_LIGHT in changes and features.light:
-        light = int(changes[CONF_LIGHT])
+        light = _whole_level(changes[CONF_LIGHT], CONF_LIGHT)
     if CONF_FRONT in changes and features.front:
         front = bool(changes[CONF_FRONT])
     if CONF_AUX in changes and features.aux:
@@ -121,6 +134,7 @@ def build_staged_state(
                 CONF_AUX: aux,
                 CONF_CPI: cpi,
             },
+            allow_flame_off_when_on=allow_flame_off_when_on,
         )
         return requested_state
 
@@ -136,6 +150,15 @@ def build_staged_state(
     return requested_state
 
 
+def flame_for_power_on(state: FireplaceState) -> int:
+    """Ignite at level 1 only for an implicit HA OFF-to-ON request.
+
+    Explicit flame values, observations and redundant ON requests never use
+    this as a zero-to-one normalization rule.
+    """
+    return 1 if not state.power and state.flame == 0 else state.flame
+
+
 def _validate_feature_number(
     features: FireplaceFeatures,
     data: Mapping[str, Any],
@@ -149,7 +172,7 @@ def _validate_feature_number(
     if key not in data:
         return 0
 
-    value = int(data[key])
+    value = _whole_level(data[key], key)
     if not minimum <= value <= maximum:
         raise StateValidationError(f"{key} must be between {minimum} and {maximum}.")
 
@@ -176,3 +199,14 @@ def _validate_feature_bool(
         warnings.append(f"Ignored {key} because it is disabled for this fireplace.")
         return False
     return value
+
+
+def _whole_level(value: Any, key: str) -> int:
+    """Accept integral input without silently truncating a requested level."""
+    try:
+        level = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise StateValidationError(f"{key} must be a whole-number level.") from exc
+    if isinstance(value, bool) or (not isinstance(value, str) and level != value):
+        raise StateValidationError(f"{key} must be a whole-number level.")
+    return level

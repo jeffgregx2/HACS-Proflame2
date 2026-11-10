@@ -19,6 +19,17 @@ class ProflameDecodedFields(TypedDict, total=False):
     cmd2: str
     err1: str
     err2: str
+    protocol_variant: str
+    frame_format: str
+    word_count: int
+    raw_words: str
+    extension_words: list[int]
+    extended_integrity_valid: bool | None
+    w6: int
+    w7: int
+    w8: int
+    w9: int
+    w10: int
 
 
 class SemanticArtifact(TypedDict, total=False):

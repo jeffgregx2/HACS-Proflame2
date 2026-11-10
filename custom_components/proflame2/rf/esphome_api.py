@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from itertools import count
 from typing import Any, cast
+from uuid import uuid4
 
 from ..const import BACKEND_ESPHOME
 from ..packet_debug import get_packet_debug_logger
@@ -21,13 +22,14 @@ from .base import BackendCapabilities, CaptureResult, RFBackend, SendResult
 from .capture import CaptureSample, DecodeCandidate, find_proflame_candidates
 from .esphome.contract import (
     ESPHomeDisplayState,
+    ESPHomeEndpointStatus,
     ESPHomeEndpointStatusReport,
     ESPHomeRadioConfig,
     ESPHomeRXEvent,
     ESPHomeTXRequest,
     ESPHomeTXResponse,
 )
-from .esphome.transport import ESPHomeTransport
+from .esphome.transport import ESPHomeControllerUnavailableError, ESPHomeTransport
 from .pulse import find_proflame_pcm_candidates
 
 ESPHOME_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -45,6 +47,41 @@ _FIFO_RX_EVENT_KINDS = {"fifo_capture", "pulse_capture", "rx_packet"}
 
 _LOGGER = logging.getLogger(__name__)
 _LearningReceiveEvent = Callable[..., Awaitable[ESPHomeRXEvent | None]]
+
+
+def _is_esphome_api_connection_error(error: Exception) -> bool:
+    """Return whether an ESPHome native-API call lost its live connection.
+
+    ``aioesphomeapi`` is supplied by Home Assistant rather than this
+    integration's standalone development environment, so avoid importing its
+    private exception type directly. The fully-qualified class identity is
+    stable at this integration boundary and lets ordinary service failures
+    continue to surface normally.
+    """
+
+    error_type = type(error)
+    return error_type.__name__ == "APIConnectionError" and error_type.__module__.startswith("aioesphomeapi")
+
+
+def is_display_connection_error(error: Exception) -> bool:
+    """Classify known disconnects even when an existing wrapper preserves a cause."""
+    current: BaseException | None = error
+    for _ in range(8):
+        if current is None:
+            break
+        api_connection_error = any(
+            cls.__name__ == "APIConnectionError" and cls.__module__.startswith("aioesphomeapi")
+            for cls in type(current).__mro__
+        )
+        if (
+            isinstance(current, (ESPHomeControllerUnavailableError, TimeoutError, ConnectionError))
+            or api_connection_error
+        ):
+            return True
+        # Only explicit wrappers preserve classification. An unrelated exception
+        # raised during cleanup must not be hidden by an older network context.
+        current = current.__cause__
+    return False
 
 
 @dataclass(slots=True)
@@ -73,6 +110,7 @@ class FifoLearningAccumulator:
 class ESPHomeAPIBackend(RFBackend):
     """Backend adapter for a future ESPHome/T-Embed CC1101 endpoint."""
 
+    supports_active_listening = True
     name = BACKEND_ESPHOME
 
     def __init__(
@@ -92,15 +130,44 @@ class ESPHomeAPIBackend(RFBackend):
         self.active_listening_profile = remote_profile
         self.debug_logging_enabled = debug_logging_enabled
         self.connected = False
+        self.display_sync_generation = 0
         self.last_endpoint_status: ESPHomeEndpointStatusReport | None = None
         self.last_tx_response: ESPHomeTXResponse | None = None
         self.active_listening_enabled = False
         self.last_fifo_semantic_artifact: LilyGoFifoSemanticArtifact | None = None
         self.last_fifo_debug_failure: FifoDebugFailure | None = None
         self._request_counter = count(1)
+        self._request_session = uuid4().hex[:12]
+        self.latest_request_id: str | None = None
         self._connect_timeout_seconds = connect_timeout_seconds
         self._send_timeout_seconds = send_timeout_seconds
         self._close_timeout_seconds = close_timeout_seconds
+        observe_pcm = getattr(transport, "set_pcm_event_logger", None)
+        if callable(observe_pcm):
+            observe_pcm(self._log_rx_pcm)
+
+    @property
+    def controller_available(self) -> bool | None:
+        """Live reachability, or unknown for transports without this signal."""
+        if self.transport is None:
+            return False
+        return getattr(self.transport, "device_available", None)
+
+    def invalidate_display_connection(self) -> None:
+        """Require ordinary setup on return, including same-object reconnects."""
+        self.connected = False
+
+    async def prepare_display_sync(self) -> bool:
+        """Rebind before policy/display actions without depending on receive()."""
+        if self.controller_available is False:
+            self.invalidate_display_connection()
+            raise ESPHomeControllerUnavailableError("Linked ESPHome controller is offline")
+        current = getattr(self.transport, "connection_is_current", True)
+        reconnect = not self.connected or not current
+        if reconnect:
+            self.invalidate_display_connection()
+            await self.connect()
+        return reconnect
 
     async def connect(self) -> None:
         """Open/configure the ESPHome transport boundary."""
@@ -137,6 +204,7 @@ class ESPHomeAPIBackend(RFBackend):
             self.connected = False
             raise RuntimeError(f"ESPHome backend is unavailable: {exc}") from exc
         self.connected = True
+        self.display_sync_generation += 1
         self._log_debug(
             "connect complete controller_id=%s endpoint_status=%s",
             self.name,
@@ -175,6 +243,7 @@ class ESPHomeAPIBackend(RFBackend):
             request_id=self._next_request_id(),
             display_state=getattr(packet, "display_state", None),
         )
+        self.latest_request_id = request.request_id
         if request.repeat_count is None:
             request = ESPHomeTXRequest(
                 request_id=request.request_id,
@@ -198,10 +267,18 @@ class ESPHomeAPIBackend(RFBackend):
         )
         response = None
         try:
+            self.log_pcm(
+                "TX",
+                request.air_payload,
+                bit_length=request.air_payload_bit_length,
+                context=f"stage=request request_id={request.request_id}",
+            )
             response = await asyncio.wait_for(
                 self.transport.send_tx(request),
                 timeout=self._send_timeout_seconds,
             )
+        except TimeoutError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"ESPHome backend send failed: {exc}") from exc
         finally:
@@ -255,8 +332,7 @@ class ESPHomeAPIBackend(RFBackend):
     async def update_display_state(self, display_state: ESPHomeDisplayState) -> None:
         """Push display-only state to the ESPHome endpoint without transmitting RF."""
 
-        if not self.connected:
-            await self.connect()
+        await self.prepare_display_sync()
         assert self.transport is not None
         try:
             await asyncio.wait_for(
@@ -396,10 +472,20 @@ class ESPHomeAPIBackend(RFBackend):
             return
         # Firmware strict filtering understands only the legacy C/D profile.
         # Extended RMT frames are validated by this HA-side decoder instead.
-        await asyncio.wait_for(
-            set_active_listening(enabled, self._firmware_active_listening_profile()),
-            timeout=self._send_timeout_seconds,
-        )
+        try:
+            await asyncio.wait_for(
+                set_active_listening(enabled, self._firmware_active_listening_profile()),
+                timeout=self._send_timeout_seconds,
+            )
+        except Exception as exc:
+            if not _is_esphome_api_connection_error(exc):
+                raise
+            self._log_debug(
+                "active listening policy deferred because ESPHome disconnected controller_id=%s enabled=%s",
+                self.name,
+                enabled,
+            )
+            return
         transport_diagnostics = (
             self.transport.serialize_diagnostics() if hasattr(self.transport, "serialize_diagnostics") else None
         )
@@ -649,7 +735,20 @@ class ESPHomeAPIBackend(RFBackend):
     def _next_request_id(self) -> str:
         """Return a local correlation id for HA/transport/debug logs."""
 
-        return f"proflame2-{next(self._request_counter)}"
+        return f"proflame2-{self._request_session}-{next(self._request_counter)}"
+
+    async def recover_send_readiness(self, request_id: str | None = None) -> bool:
+        """Require endpoint readiness before a new command follows uncertain TX."""
+        if self.transport is None:
+            return False
+        await self.connect()
+        recover = getattr(self.transport, "recover_send_readiness", None)
+        if callable(recover):
+            # None requests current readiness only, for idle reconnects or an
+            # expired recovery window. Never substitute a historical request.
+            return await asyncio.wait_for(recover(request_id), timeout=self._connect_timeout_seconds)
+        status = await self.transport.get_status()
+        return status.status in (ESPHomeEndpointStatus.READY, ESPHomeEndpointStatus.RX_ACTIVE)
 
     def serialize_diagnostics(self) -> dict[str, Any]:
         """Return diagnostics for the HA-side ESPHome backend adapter."""
@@ -698,6 +797,8 @@ class ESPHomeAPIBackend(RFBackend):
         strict_packet_policy: bool,
     ) -> bool:
         metadata = event.capture_metadata or {}
+        if not callable(getattr(self.transport, "set_pcm_event_logger", None)):
+            self._log_rx_pcm(event)
         event_kind = metadata.get("event_kind")
         accepted = metadata.get("accepted")
         qualifier = metadata.get("qualifier")
@@ -754,6 +855,15 @@ class ESPHomeAPIBackend(RFBackend):
                 )
                 return False
         return True
+
+    def _log_rx_pcm(self, event: ESPHomeRXEvent) -> None:
+        metadata = event.capture_metadata or {}
+        self.log_pcm(
+            "RX",
+            event.raw_payload,
+            bit_length=_parse_decimal_event_int(metadata.get("pcm_bit_length")),
+            context=f"event_id={event.event_id} event_kind={metadata.get('event_kind')}",
+        )
 
     def _scan_fifo_event(self, event: ESPHomeRXEvent) -> tuple[DecodeCandidate, ...]:
         if event.capture_metadata.get("event_kind") == "pulse_capture":

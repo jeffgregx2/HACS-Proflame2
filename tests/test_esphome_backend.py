@@ -29,6 +29,7 @@ from custom_components.proflame2.rf.esphome.transport import MockESPHomeTranspor
 from custom_components.proflame2.rf.esphome_api import (
     ESPHOME_FIFO_MAX_SCAN_PAYLOAD_BYTES,
     ESPHomeAPIBackend,
+    _is_esphome_api_connection_error,
     _stringify_enum_values,
 )
 from custom_components.proflame2.rf.waveform import build_transmission_plan
@@ -94,6 +95,28 @@ async def test_backend_send_consumes_exact_prepared_air_payload(
     assert transport.tx_requests[-1].display_state.power is True
     assert transport.tx_requests[-1].display_state.flame == 3
     assert transport.tx_requests[-1].display_state.fan == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extended", [False, True])
+async def test_payload_only_logging_preserves_requested_legacy_and_extended_pcm(remote_profile, caplog, extended):
+    if extended:
+        remote_profile = RemoteProfile(
+            serial_id=0x123456,
+            ecc=ECCProfile(c1=0, d1=0, c2=0, d2=0),
+            protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
+            extended_template=ExtendedFrameTemplate(w4_base=0x80, w6=0x15, w7=0xC8, w8=0),
+        )
+    packet = _prepared_packet(remote_profile)
+    backend = ESPHomeAPIBackend(transport=MockESPHomeTransport())
+    backend.set_pcm_logging_enabled(True)
+    await backend.send(packet)
+    lines = [record.getMessage() for record in caplog.records if record.name == "custom_components.proflame2.pcm"]
+    assert len(lines) == 1
+    assert f"pcm_hex={packet.transmission_plan.air_payload.hex()}" in lines[0]
+    assert f"bits={260 if extended else 182}" in lines[0]
+    assert "direction=TX" in lines[0]
+    assert "stage=request" in lines[0]
 
 
 @pytest.mark.asyncio
@@ -184,6 +207,30 @@ async def test_backend_active_listening_policy_and_stop_are_explicit() -> None:
 
     assert transport.active_listening_updates == [False, True, False]
     assert transport.rx_stop_count == 1
+
+
+@pytest.mark.asyncio
+async def test_backend_defers_active_listener_policy_when_native_api_disconnects() -> None:
+    """A boot/reconnect race must not fail periodic display synchronization."""
+
+    class APIConnectionError(Exception):
+        pass
+
+    APIConnectionError.__module__ = "aioesphomeapi.core"
+
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport)
+    await backend.connect()
+
+    async def disconnected_set_active_listening(*_args, **_kwargs) -> None:
+        raise APIConnectionError("Not connected")
+
+    transport.set_active_listening = disconnected_set_active_listening  # type: ignore[method-assign]
+
+    await backend.set_active_listening_enabled(True)
+
+    assert backend.active_listening_enabled is True
+    assert _is_esphome_api_connection_error(APIConnectionError("Not connected"))
 
 
 @pytest.mark.asyncio
@@ -626,6 +673,23 @@ async def test_backend_receive_accepts_firmware_filtered_active_listener_packet(
     assert packet.frame.err2 == 0xEF
     assert packet.source == "esphome_active_listening"
     assert backend.last_fifo_semantic_artifact["provenance"] == "lilygo_cc1101_fifo_firmware_decoder"
+
+
+@pytest.mark.asyncio
+async def test_backend_delivers_separate_unchanged_native_refreshes() -> None:
+    """State equality must not suppress activity before HA's refresh timer."""
+    profile = RemoteProfile(serial_id=0x3B3F02, ecc=ECCProfile(c1=5, d1=7, c2=1, d2=8))
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport, remote_profile=profile)
+    await backend.connect()
+    await backend.set_active_listening_enabled(True, profile)
+    frame = encode_packet(FireplaceState(power=True, flame=3), profile).frame
+    for event_id in ("native-command", "later-native-refresh"):
+        transport.push_rx_event(_fifo_event(event_id, frame))
+        packet = await backend.receive(timeout=0.1)
+        assert packet is not None
+        assert packet.frame == frame
+    await backend.close()
 
 
 @pytest.mark.asyncio

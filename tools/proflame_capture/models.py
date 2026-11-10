@@ -8,6 +8,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from tools.waveform.environment import capture_root
+
 
 class CaptureCommand(StrEnum):
     """Supported operator actions for a capture sample."""
@@ -57,7 +59,7 @@ class CaptureSessionConfig:
     flame_max: int = 6
     fan_min: int = 0
     fan_max: int = 6
-    output_root: Path = Path("analysis/captures")
+    output_root: Path = field(default_factory=lambda: capture_root() / "coordinated")
     source_names: tuple[str, ...] = ("lilygo", "yardstick", "rtl433")
     prearm_timeout_seconds: float = 30.0
     sample_timeout_seconds: float = 6.0

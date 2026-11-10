@@ -10,6 +10,7 @@ from typing import Any
 from .const import (
     BACKEND_ESPHOME,
     CONF_ACTIVE_LISTENING,
+    CONF_ALLOW_FLAME_OFF_WHEN_ON,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -19,6 +20,10 @@ from .const import (
     CONF_D2,
     CONF_DEBUG_LOGGING,
     CONF_ESPHOME_ENTRY_ID,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
@@ -28,18 +33,23 @@ from .const import (
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_PROTOCOL_VARIANT,
+    CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
     CONF_RTL433_SAMPLES,
     DEFAULT_DEBUG_LOGGING,
     DEFAULT_FEATURE_OPTIONS,
     DEFAULT_FIREPLACE_SHORT_NAME,
+    DEFAULT_REFRESH_PERIOD_MINUTES,
     FEATURE_OPTION_KEYS,
     MAX_FIREPLACE_SHORT_NAME_LENGTH,
     available_backend_types,
 )
 from .control import StateValidationError, build_requested_state
-from .protocol.ecc import derive_ecc_profile
+from .protocol.derivation import LearningRequirements, derive_remote_profile
 from .protocol.models import FireplaceFeatures
+from .protocol.packet import ProflameFrame
+from .protocol.rtl433 import MODEL, normalize_rtl433_record
 from .rf.registry import normalize_controller_id
 
 
@@ -96,6 +106,12 @@ class Rtl433Sample:
     err1: int
     cmd2: int
     err2: int
+    extension_words: tuple[int, ...] = ()
+
+    @property
+    def frame(self) -> ProflameFrame:
+        """Preserve all wire words and the variant across the HA adapter."""
+        return ProflameFrame(self.remote_id, self.cmd1, self.err1, self.cmd2, self.err2, self.extension_words)
 
 
 @dataclass(frozen=True)
@@ -159,6 +175,16 @@ def _parse_rtl433_sample_line(line: str) -> Rtl433Sample:
             raise InvalidRtl433SamplesError("Each rtl_433 JSON sample must be an object.")
         payload = {str(key).lower(): value for key, value in decoded.items()}
 
+    if any(key in payload for key in ("protocol_variant", "raw_words", "w6", "w7", "w8", "w9", "w10")):
+        try:
+            normalized = normalize_rtl433_record({"model": MODEL, **payload})
+            if normalized is None:
+                raise ValueError("Not a Proflame2 record.")
+        except ValueError as exc:
+            raise InvalidRtl433SamplesError(str(exc)) from exc
+        frame = normalized.frame
+        return Rtl433Sample(frame.serial_id, frame.cmd1, frame.err1, frame.cmd2, frame.err2, frame.extension_words)
+
     required_fields = ("id", "cmd1", "cmd2", "err1", "err2")
     missing = [field for field in required_fields if field not in payload]
     if missing:
@@ -215,6 +241,17 @@ def default_feature_options() -> dict[str, bool]:
     return dict(DEFAULT_FEATURE_OPTIONS)
 
 
+class InvalidRefreshPeriodError(ValueError):
+    """Raised when a refresh period is not non-negative whole minutes."""
+
+
+def validate_refresh_period(value: Any) -> int:
+    """Require non-negative whole minutes without silently truncating input."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise InvalidRefreshPeriodError("Refresh period must be a non-negative whole number of minutes.")
+    return value
+
+
 def default_entry_options() -> dict[str, Any]:
     """Return default config-entry options including saved profiles."""
 
@@ -222,6 +259,8 @@ def default_entry_options() -> dict[str, Any]:
         **default_feature_options(),
         CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
         CONF_ACTIVE_LISTENING: False,
+        CONF_ALLOW_FLAME_OFF_WHEN_ON: False,
+        CONF_REFRESH_PERIOD_MINUTES: DEFAULT_REFRESH_PERIOD_MINUTES,
         CONF_FIREPLACE_SHORT_NAME: DEFAULT_FIREPLACE_SHORT_NAME,
         CONF_PROFILES: {},
     }
@@ -249,6 +288,10 @@ def normalize_entry_options(
         return normalized
 
     normalized.update(normalize_feature_options(raw_options))
+    normalized[CONF_ALLOW_FLAME_OFF_WHEN_ON] = bool(raw_options.get(CONF_ALLOW_FLAME_OFF_WHEN_ON, False))
+    normalized[CONF_REFRESH_PERIOD_MINUTES] = validate_refresh_period(
+        raw_options.get(CONF_REFRESH_PERIOD_MINUTES, DEFAULT_REFRESH_PERIOD_MINUTES)
+    )
     normalized[CONF_DEBUG_LOGGING] = bool(raw_options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
     if CONF_ACTIVE_LISTENING in raw_options:
         normalized[CONF_ACTIVE_LISTENING] = bool(raw_options[CONF_ACTIVE_LISTENING])
@@ -260,6 +303,7 @@ def normalize_entry_options(
     normalized[CONF_PROFILES] = normalize_profiles(
         raw_options.get(CONF_PROFILES, {}),
         features=features or fireplace_features_from_options(normalized),
+        allow_flame_off_when_on=normalized[CONF_ALLOW_FLAME_OFF_WHEN_ON],
     )
     return normalized
 
@@ -308,14 +352,29 @@ def normalize_manual_rtl433_profile_samples(
     if len(remote_ids) != 1:
         raise Rtl433RemoteIdMismatchError("All rtl_433 samples must have the same remote id.")
 
+    extended = any(sample.frame.is_extended for sample in samples)
     try:
-        ecc = derive_ecc_profile(
-            ((sample.cmd1, sample.err1) for sample in samples),
-            ((sample.cmd2, sample.err2) for sample in samples),
+        result = derive_remote_profile(
+            (sample.frame for sample in samples),
+            fireplace_features_from_options(user_input),
+            requirements=(
+                LearningRequirements()
+                if extended
+                else LearningRequirements(
+                    min_frames=1,
+                    min_commands=1,
+                    min_cmd1=1,
+                    min_cmd2=1,
+                )
+            ),
         )
+        if result.profile is None:
+            raise ValueError("More different manual commands are needed before creating this profile.")
     except ValueError as exc:
         raise Rtl433ProfileDerivationError(str(exc)) from exc
 
+    remote = result.profile
+    ecc = remote.ecc
     derived_input = {
         **user_input,
         CONF_REMOTE_ID: next(iter(remote_ids)),
@@ -324,10 +383,21 @@ def normalize_manual_rtl433_profile_samples(
         CONF_C2: ecc.c2,
         CONF_D2: ecc.d2,
     }
-    return Rtl433ManualProfileInput(
-        profile=normalize_manual_profile_input(derived_input),
-        samples=samples,
-    )
+    normalized = normalize_manual_profile_input(derived_input)
+    if extended:
+        template = remote.extended_template
+        for key in (CONF_C1, CONF_D1, CONF_C2, CONF_D2):
+            normalized.data.pop(key)
+        normalized.data.update(
+            {
+                CONF_PROTOCOL_VARIANT: remote.protocol_variant,
+                CONF_EXTENDED_W4_BASE: template.w4_base,
+                CONF_EXTENDED_W6: template.w6,
+                CONF_EXTENDED_W7: template.w7,
+                CONF_EXTENDED_W8: template.w8,
+            }
+        )
+    return Rtl433ManualProfileInput(profile=normalized, samples=samples)
 
 
 def remote_id_as_hex(remote_id: int) -> str:
@@ -363,6 +433,7 @@ def normalize_profiles(
     raw_profiles: dict[str, Any] | None,
     *,
     features: FireplaceFeatures,
+    allow_flame_off_when_on: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Normalize the saved profile map stored in config-entry options."""
 
@@ -372,6 +443,7 @@ def normalize_profiles(
             payload,
             features=features,
             profile_id=str(profile_id),
+            allow_flame_off_when_on=allow_flame_off_when_on,
         )
         if normalized_profile[CONF_PROFILE_ID] in normalized:
             raise DuplicateProfileIdError(f"Duplicate profile id: {normalized_profile[CONF_PROFILE_ID]}")
@@ -384,6 +456,7 @@ def normalize_saved_profile_input(
     *,
     features: FireplaceFeatures,
     profile_id: str | None = None,
+    allow_flame_off_when_on: bool = False,
 ) -> dict[str, Any]:
     """Normalize one saved profile into a complete desired fireplace state."""
 
@@ -394,7 +467,7 @@ def normalize_saved_profile_input(
     normalized_profile_id = profile_id or build_profile_id(name)
 
     try:
-        state, _warnings = build_requested_state(features, user_input)
+        state, _warnings = build_requested_state(features, user_input, allow_flame_off_when_on=allow_flame_off_when_on)
     except StateValidationError as exc:
         raise InvalidSavedProfileError(str(exc)) from exc
 

@@ -1,20 +1,61 @@
 #include <cassert>
+#include <limits>
 #include <string>
 
 #include "tx_controller.h"
 #include "tx_payload_layout.h"
+#include "rf_band.h"
 
 using esphome::proflame2_tembed::NativePayloadLayout;
 using esphome::proflame2_tembed::PROFLAME_EXTENDED_WORD_COUNT;
 using esphome::proflame2_tembed::PROFLAME_LEGACY_WORD_COUNT;
 using esphome::proflame2_tembed::PROFLAME_MAX_TRAILER_SYMBOLS;
 using esphome::proflame2_tembed::PROFLAME_SYMBOLS_PER_WORD;
+using esphome::proflame2_tembed::RFBand;
+using esphome::proflame2_tembed::RFBandConfiguration;
 using esphome::proflame2_tembed::TxController;
 using esphome::proflame2_tembed::TxValidationConfig;
 using esphome::proflame2_tembed::TxValidationRejectReason;
 using esphome::proflame2_tembed::derive_native_payload_layout;
+using esphome::proflame2_tembed::resolve_rf_band_configuration;
+using esphome::proflame2_tembed::resolve_tx_frequency;
 
 int main() {
+  RFBandConfiguration rf_band{};
+  assert(resolve_rf_band_configuration(RFBand::BAND_315, rf_band));
+  assert(rf_band.frequency_hz == 314973000U);
+  assert(rf_band.rf_switch_sw1_high);
+  assert(!rf_band.rf_switch_sw0_high);
+  assert(std::string(rf_band.name) == "315 MHz");
+
+  assert(resolve_rf_band_configuration(RFBand::BAND_433, rf_band));
+  assert(rf_band.frequency_hz == 433920000U);
+  assert(rf_band.rf_switch_sw1_high);
+  assert(rf_band.rf_switch_sw0_high);
+  assert(std::string(rf_band.name) == "433.92 MHz");
+
+  assert(!resolve_rf_band_configuration(static_cast<RFBand>(99U), rf_band));
+
+  for (const auto band : {RFBand::BAND_315, RFBand::BAND_433}) {
+    assert(resolve_rf_band_configuration(band, rf_band));
+    const uint32_t original_rx_hz = rf_band.frequency_hz;
+    for (const int32_t offset : {0, 60000, -60000, 100000, -100000}) {
+      uint32_t tx_hz = 0;
+      assert(resolve_tx_frequency(band, offset, tx_hz));
+      assert(static_cast<int64_t>(tx_hz) == static_cast<int64_t>(original_rx_hz) + offset);
+      assert(rf_band.frequency_hz == original_rx_hz);
+    }
+    for (const int32_t offset : {100001, -100001, std::numeric_limits<int32_t>::max(),
+                                  std::numeric_limits<int32_t>::min()}) {
+      uint32_t tx_hz = 123;
+      assert(!resolve_tx_frequency(band, offset, tx_hz));
+      assert(tx_hz == 123);
+    }
+  }
+  uint32_t invalid_band_hz = 123;
+  assert(!resolve_tx_frequency(static_cast<RFBand>(99U), 0, invalid_band_hz));
+  assert(invalid_band_hz == 123);
+
   NativePayloadLayout layout{};
   assert(derive_native_payload_layout(PROFLAME_LEGACY_WORD_COUNT * PROFLAME_SYMBOLS_PER_WORD, layout));
   assert(layout.word_count == PROFLAME_LEGACY_WORD_COUNT);

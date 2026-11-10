@@ -1,6 +1,6 @@
 [run]
 source = custom_components/proflame2
-data_file = /tmp/proflame2.coverage
+data_file = .coverage
 omit =
     custom_components/proflame2/rf/dev/*
 

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from homeassistant.const import Platform
     from homeassistant.core import HomeAssistant
 
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -34,6 +35,7 @@ from .const import (
     DEFAULT_DEBUG_LOGGING,
     DOMAIN,
 )
+from .controller_assignment import controller_assignments
 from .identity import (
     fireplace_device_identifier,
     legacy_fireplace_device_identifier,
@@ -54,7 +56,9 @@ CONFIG_SCHEMA = vol.Schema(
                     vol.Optional(CONF_LEARNING_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): cv.boolean,
                     vol.Optional(CONF_YARDSTICK_LEARNING_FREQUENCY_HZ): vol.All(
                         cv.positive_int,
-                        vol.Range(min=314_000_000, max=316_000_000),
+                        vol.Any(
+                            vol.Range(min=314_000_000, max=316_000_000), vol.Range(min=433_000_000, max=435_000_000)
+                        ),
                     ),
                     vol.Optional(CONF_YARDSTICK_LEARNING_SWEEP_ENABLED): cv.boolean,
                 }
@@ -63,7 +67,7 @@ CONFIG_SCHEMA = vol.Schema(
     },
     extra=vol.ALLOW_EXTRA,
 )
-PLATFORMS: list[Platform] = ["sensor", "switch", "number", "button"]
+PLATFORMS: list[Platform] = ["sensor", "switch", "number", "button", "select"]
 _LOGGER = logging.getLogger(__name__)
 _DISPLAY_SYNC_RETRY_DELAYS_SECONDS: tuple[float, ...] = (5.0, 15.0, 30.0)
 
@@ -196,6 +200,19 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Proflame 2 from a config entry."""
 
+    # Keep the first enabled saved assignment operational; never start a second
+    # backend that would compete for RX policy or control on the same radio.
+    assignments = [
+        other for other in controller_assignments(hass, entry.data, entry.options) if other.disabled_by is None
+    ]
+    if assignments and assignments[0].entry_id != entry.entry_id:
+        raise ConfigEntryError(
+            f"Controller already assigned to fireplace '{assignments[0].title}'. "
+            "Each controller supports one fireplace. Remove the duplicate fireplace "
+            "entry or recreate it using a different controller. No profiles have been deleted."
+        )
+
+    from .rf.esphome.transport import ESPHomeControllerUnavailableError
     from .runtime import (
         async_refresh_runtime_device_link,
         async_retry_runtime_device_link,
@@ -210,6 +227,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await _async_migrate_registry_identity(hass, entry)
     runtime_entry = await async_setup_runtime_entry(hass, entry)
+    from .version_logging import async_register_version_logging
+
+    async_register_version_logging(hass, entry, runtime_entry)
     device_linked = async_refresh_runtime_device_link(hass, runtime_entry, entry)
     if (
         runtime_entry.backend_type == BACKEND_ESPHOME
@@ -236,7 +256,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_sync_runtime_display_state(hass, runtime_entry, action_label="Startup sync")
     except RuntimeError as exc:
         message = str(exc)
-        if "Linked ESPHome entry is not loaded or has no runtime_data" in message:
+        if (
+            isinstance(exc, ESPHomeControllerUnavailableError)
+            or "Linked ESPHome entry is not loaded or has no runtime_data" in message
+        ):
             _LOGGER.warning(
                 "Proflame2 startup display sync deferred for config_entry_id=%s because linked ESPHome entry is not ready yet: %s",
                 entry.entry_id,
@@ -253,7 +276,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         await async_sync_runtime_display_state(hass, runtime_entry, action_label="Startup sync")
                     except RuntimeError as retry_exc:
                         retry_message = str(retry_exc)
-                        if "Linked ESPHome entry is not loaded or has no runtime_data" in retry_message:
+                        if (
+                            isinstance(retry_exc, ESPHomeControllerUnavailableError)
+                            or "Linked ESPHome entry is not loaded or has no runtime_data" in retry_message
+                        ):
                             _LOGGER.debug(
                                 "Proflame2 startup display sync still waiting for linked ESPHome entry config_entry_id=%s delay=%ss reason=%s",
                                 entry.entry_id,
@@ -296,6 +322,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_start_display_sync_listener(hass, runtime_entry)
     await async_start_active_listener(hass, runtime_entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    from .refresh import async_start_refresh
+
+    async_start_refresh(hass, runtime_entry)
     return True
 
 

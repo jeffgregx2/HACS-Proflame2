@@ -6,6 +6,11 @@ runs ESPHome firmware and is intended to be installed near the fireplace.
 Use this guide when you want a permanent controller that can control the
 fireplace and keep Home Assistant updated when the original remote is used.
 
+Each LilyGO controller supports one fireplace in this integration. Home
+Assistant rejects assigning a second fireplace to the same LilyGO. Use a
+separate LilyGO for each fireplace. Its RF band remains configured through
+ESPHome YAML; there is no Home Assistant band selector for LilyGO.
+
 ## Capabilities
 
 | Capability | Supported |
@@ -95,12 +100,117 @@ device YAML configuration file:
 10. Save the YAML in ESPHome Builder.
 
 The helper preserves the ESPHome-generated `api`, `ota`, `wifi`, `logger`, and
-device identity settings. It also updates the ESP32 framework to the current
-validated LilyGO firmware framework, adds the Proflame2 package references, and
+device identity settings. It also sets the ESP32 framework to ESP-IDF to support
+retained crash reporting, adds the Proflame2 package references, and
 adds a restart switch if one is not already present.
+
+## Firmware Framework
+
+Use ESP-IDF for the current LilyGO firmware. In the existing `esp32:` section,
+verify this setting before rebuilding:
+
+```yaml
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+```
+
+Keep the existing board selection and other device settings unless they are
+incorrect. Updating `proflame2_package_ref` alone does not change the framework
+in your device YAML. The public YAML helper follows the stable `main` branch;
+when testing a newer prerelease, check the framework setting even if the helper
+created the YAML. Older helper output may need this manual correction.
+
+ESP-IDF enables retained crash reporting on supported ESPHome builds. See the
+[manual setup guide](lilygo_cc1101_manual_yaml.md) for migration and diagnostic
+details.
+
+## Radio Band
+
+The default LilyGO radio band is 315 MHz. If the label on the original remote
+states 433.92 MHz, add this setting to the top-level `substitutions:` block in
+the device YAML before building the firmware:
+
+```yaml
+substitutions:
+  proflame2_rf_band: "433"
+```
+
+If `substitutions:` already exists, add or update the setting inside that block;
+do not create a second block. Rebuild and install the firmware for the change
+to take effect. To return to the default band, use `"315"` or remove the setting,
+then rebuild and install again.
+
+A LilyGO can use only one radio band at a
+time, so fireplaces on different bands need separate LilyGO controllers.
 
 To manually update your YAML file instead, see
 [manual LilyGO YAML setup](lilygo_cc1101_manual_yaml.md).
+
+## Reliable Transmission
+
+The default settings are intended for normal use; most users should not need to
+adjust them. Starting with v0.7.0-beta4, LilyGO uses these defaults:
+
+| Setting | Default | Where to change it |
+| --- | --- | --- |
+| `proflame2_diagnostic_repeat_count_override` | `10` | ESPHome device YAML, under `substitutions:`; rebuild and install afterward |
+| Delayed Retransmission | OFF | The ESPHome device's configuration controls in Home Assistant |
+
+### Why Commands Are Repeated
+
+One press on a native remote sends several copies of the same command in rapid
+succession. Our captured native remote sends five copies in one burst; later
+duplicate bursts were observed about 15-16 seconds apart. That timing should not
+be assumed for every remote model. Copies within a burst and a later repeat of
+the whole burst are two different things.
+
+Earlier stable LilyGO firmware also sent five copies, but did not send a later
+repeat burst. Extensive repeated testing found that the fireplace occasionally
+ignored a command even when an SDR running rtl_433 decoded it correctly. A
+successful transmission or decode does not confirm that the fireplace received
+and acted on the command.
+
+### Ten Copies Per Command
+
+Increasing the number of copies from five to ten appeared to meaningfully
+improve fireplace reception in testing. This is now the default, so no YAML
+change is needed unless you previously configured a different override.
+
+The tradeoff is roughly twice the transmission time: about 0.8 seconds for a
+legacy remote profile and 1.15 seconds for an extended profile. LilyGO cannot
+listen to the native remote during that burst, and the radio cannot start
+another transmission until the current one finishes. See
+[Using the original remote](#using-the-original-remote) for overlapping changes.
+
+### Optional Delayed Retransmission
+
+When enabled, **Delayed Retransmission** sends the whole command burst again
+about two seconds after the first burst finishes, unless newer activity cancels
+it. This is separate from the ten copies sent within each burst; the two-second
+interval is LilyGO's retry timing, not the native remote timing measured above.
+
+The successful ten-copy tests did not require this extra burst, so the default
+is OFF. It remains available for troubleshooting intermittent reception. The
+switch returns to OFF when the controller reboots. Neither setting guarantees
+reception; controller placement, range, and interference still matter.
+
+## Using The Original Remote
+
+LilyGO cannot listen to the original remote while it is transmitting.
+**Delayed Retransmission** is OFF by default. When enabled, an HA command can produce a second transmit
+burst about two seconds after the first finishes. LilyGO listens between the
+bursts, but a remote command overlapping either burst may be missed or collide
+at the fireplace. A remote command received before the retry cancels that retry;
+a command that LilyGO cannot hear cannot cancel it.
+
+Avoid making conflicting changes through HA and the remote at the same time.
+The fireplace does not acknowledge commands, so HA and the LilyGO display show
+the last commanded or observed state, not independently confirmed fireplace
+state. The ESPHome device's **Delayed Retransmission** switch can disable the
+extra burst for troubleshooting, but the first burst still prevents listening
+while it is being sent.
 
 ## Build And Deploy
 
@@ -158,10 +268,10 @@ After the ESPHome device is available in Home Assistant:
 12. Select the fireplace features your installation supports.
 13. Validate Power, Flame, Fan, and any other enabled controls.
 
-If normal guided learning cannot decode your remote but rtl_433 can, use
-[rtl_433-assisted manual learning](rtl433_manual_learning.md). The LilyGO still
-controls the fireplace and active listening after setup; the SDR and rtl_433 are
-only used to collect learning values.
+If normal guided learning cannot learn your remote, use the
+[rtl_433 Learning ID helper](Using_rtl_433_for_learning.md). The LilyGO still
+controls the fireplace and Active Listening after setup; the SDR and helper
+are only needed to generate the Learning ID.
 
 ## Active Listening
 

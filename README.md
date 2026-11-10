@@ -15,7 +15,7 @@ features you enable during setup.
 - Light level
 - Front burner
 - Aux output
-- CPI / pilot mode
+- [CPI / pilot mode](docs/add_fireplace_profile.md#cpi-and-ipi-pilot-modes)
 - Saved fireplace profiles
 
 ## Supported Controllers
@@ -34,12 +34,18 @@ LilyGO is a full-featured Proflame2 controller with a built-in display that show
 ![LilyGO Controller](docs/images/LilyGO-Display.png)
 
 Note: ESPHome Builder is required in order to configure the LilyGO firmware.
+Current LilyGO firmware uses the ESP-IDF framework. When upgrading an existing
+device, check `esp32.framework.type` in its device YAML; changing the package
+reference alone does not update that setting.
 The LilyGO setup guide includes a browser YAML helper that updates the ESPHome
 Builder generated YAML for Proflame2.
 
 Setup guide: [LilyGO CC1101 controller](docs/lilygo_cc1101_controller.md)
 
 ### YardStick One
+
+YardStick supports learning and control with both legacy seven-word and extended
+ten-word remotes on either the 315 MHz or 433 MHz (433.92 MHz) band.
 
 YardStick One allows full control of the fireplace but does not have a display and does not currently support active listening. It connects directly to Home Assistant via USB, so setup is simpler because ESPHome Builder is not required. Since it remains connected to the computer running Home Assistant by USB, it may be harder to position close enough to the Proflame2 fireplace for reliable communication.
 
@@ -88,7 +94,8 @@ Once the Proflame2 integration is installed in Home Assistant, it is easy to add
 2. Follow the controller setup guide linked above.
 3. Add the `Proflame2` integration in Home Assistant.
 4. Choose a setup option. Most users should choose `Learn from remote`.
-5. For LilyGO, select the matching ESPHome device when prompted.
+5. For LilyGO, select the matching ESPHome device when prompted. For YardStick,
+   choose the fireplace's RF band (315 or 433 MHz).
 6. Start guided learning.
 7. Hold the original remote within about 3 feet of the controller during
    learning.
@@ -96,27 +103,51 @@ Once the Proflame2 integration is installed in Home Assistant, it is easy to add
 9. Select the fireplace features your installation supports.
 10. Validate basic controls from Home Assistant.
 
-During setup, learning mode asks you to press specific buttons on your original fireplace remote.  This is used to learn the proper control codes used to establish communications.   You must have a functioning original remote in order to set up this integration.
+When you choose **Learn from remote**, setup asks you to press specific buttons
+on your original fireplace remote to learn its control codes. A functioning
+original remote is required for this learning method; importing an existing
+Learning ID does not require repeating those button presses.
 
-If normal guided learning cannot decode your remote, you can use
-[rtl_433-assisted manual learning](docs/rtl433_manual_learning.md) with a
-separate SDR receiver. This is an advanced setup path; LilyGO and YardStick
-remain the controllers used after learning.
+If normal guided learning cannot decode your remote, you can instead
+[enter a Learning ID](docs/add_fireplace_profile.md#Using_learning_ids).
+Copy one from an existing configured fireplace or generate one with the
+companion helper. LilyGO and YardStick remain the controllers used after setup.
 
 For more detail on the setup choices, see
 [Add fireplace profile](docs/add_fireplace_profile.md).
 
 ## Remote Compatibility
 
-The following Proflame2 remote part numbers have been tested with this project
+The following Proflame2 remote models have been identified in project testing
 and appear to work:
 
-- `0.584.040`
-- `0.584.043`
-- `0.584.080`
+| Model / part number | Type | Seen as<br>FCC ID | `rf_band` | Notes |
+| --- | --- | --- | --- | --- |
+| `0.584.040` | legacy | `T99058402300` | `"315"` | |
+| `0.584.043` | legacy | TBD | `"315"` | Wall-mounted remote |
+| `0.584.053` | TBD | TBD | `"433"` | CE variant; Australia |
+| `0.584.080` | extended | `T99058402300` | `"315"` | Enviro Q1 |
+| `0.584.090` | extended | `T99058404300` | `"315"` | Mendota |
+
+**Type:** legacy uses the original 7-word protocol; extended uses the newer
+10-word protocol. These are the types identified in project testing; TBD means
+the protocol type has not yet been confirmed. Both types are supported.
+
+315 MHz is the default for most users. Check your remote's label or its
+model-specific documentation before selecting 433 MHz. For LilyGO band changes, see [Radio band setup](docs/lilygo_cc1101_controller.md#radio-band).
+For YardStick, choose the band during setup or change RF band in the fireplace
+device's Configuration section. No separate YardStick device is exposed.
+
+FCC IDs shown are examples reported on these models, not guaranteed identifiers
+for every remote of that model. Use them only as a lookup aid when the model
+number is not legible; they do not guarantee a model match or compatibility.
+For example, `T99058402300` has been observed on both `.040` and `.080` models.
 
 Other Proflame2 remotes may also work. These are simply the remote models for
-which this project has explicit test evidence.
+which this project has identification and test reports.
+
+See [remote identification records](docs/remote_identification.md) for additional
+reported labels, including models still being investigated.
 
 Remember: If you are using a LilyGO controller, you must install it first before adding the fireplace.
 
@@ -130,7 +161,7 @@ Reliable range depends on the controller, its antenna, and how close it can be p
 - YardStick:
   - External antenna, longer range.
   - Best to use within about 20 feet of the fireplace.
-  - Range can improve with an antenna designed for 315 MHz, which is the frequency used by Proflame2 remotes.
+  - Range can improve with an antenna designed for the radio band used by your remote. Many Proflame2 remotes use 315 MHz.
 
 These are practical starting points, not guarantees. Fireplace location, walls, metal, USB placement, Wi-Fi, and local interference can change the reliable range.
 
@@ -145,7 +176,24 @@ There are three different ways you can control your fireplace from within Home A
 
 Each fireplace created by this integration includes controls for the supported fireplace settings, such as Power, Flame, Fan, and Light. When you adjust those controls, the integration briefly waits before sending the update because Proflame2 fireplaces receive a complete fireplace state rather than individual setting changes. This allows several quick adjustments to be combined into one command instead of sending multiple one-second updates to the fireplace.
 
+Some fireplaces allow the burner to turn off while lights or fan operation remain
+available. If your original remote supports this, enable **Allow flame OFF while
+power is ON** under **Edit fireplace settings → Optional settings**. Flame can
+then be set to 0 without turning power OFF. Leave this option disabled for other
+fireplaces. See the [setup guide](docs/add_fireplace_profile.md#optional-settings)
+for details and the LilyGO firmware update requirement.
+
 ### Service Interface
+
+Power OFF preserves the current flame setting. Turning power from OFF to ON
+uses the current level, raising 0 to 1 so the burner lights. A service call
+that explicitly supplies `flame` uses that value instead; ON/flame 0 requires
+**Allow flame OFF while power is ON**. Repeating Power ON while already ON
+does not raise a zero flame.
+
+A `proflame2.set_state` call without `flame` uses the current settings for any
+omitted fields. This supports power-only requests. Calls that specify `flame`
+keep the full-state behavior described below.
 
 Individual dashboard controls briefly wait before sending so multiple setting changes can be combined into one fireplace command. When an automation or script already knows the full desired fireplace state, use the `proflame2.set_state` service to send it immediately. For example:
 
@@ -190,7 +238,31 @@ YardStick does not currently support active listening. It can learn from the ori
 remote during setup and it can control the fireplace, but it will not keep Home
 Assistant synchronized when another remote is used later.
 
-To change the Active Listening settings, open Settings -> Devices & services -> Proflame 2 Fireplace in Home Assistant and select the Gear icon next to your existing fireplace.  Select `Edit supported features` -> `Enable active listening` and change it to the desired value.
+To change the Active Listening settings, open Settings -> Devices & services -> Proflame 2 Fireplace in Home Assistant and select the Gear icon next to your existing fireplace.  Select `Edit fireplace settings`, continue to **Optional settings**, then set `Enable active listening` to the desired value.
+
+## Optional Inactivity Refresh
+
+Some fireplace versions require the original remote to transmit the current
+settings periodically to stay on. A user with a Mendota FV48 and SIT Proflame
+`0.584.090` remote was told by Mendota that the remote sends the settings every
+**10 minutes**. If the fireplace hears nothing for **60 minutes**, it turns
+itself off. This behavior has been reported for that fireplace, but does not
+apply to every Mendota fireplace or every newer remote.
+
+Set **Refresh period in minutes** during setup or under **Edit supported
+features** for an existing fireplace to let Home Assistant send these reminders.
+The default, **0**, turns this feature off. For the fireplace described above,
+choose **10**, not 60. Leave it at 0 if your fireplace does not need reminders.
+
+Home Assistant sends reminders only while it shows the fireplace as **ON**.
+No reminders are sent while Home Assistant shows **OFF**.
+
+**For affected remotes, remove the original remote's batteries when using this
+feature.** The reported remote periodically sends its own displayed settings even
+when it shows OFF. If HA turns the fireplace on, the remote can later turn it
+off again. Leaving the remote OFF is therefore not sufficient. The integration
+and that remote should not both control the fireplace while this feature is in
+use. Disabling Active Listening does not stop the remote from transmitting.
 
 ## Multiple Fireplaces
 
@@ -198,12 +270,40 @@ The Proflame2 integration can support multiple fireplaces.  Each fireplace will 
 
 At this time, one controller can only control one fireplace.
 
+A LilyGO controller can use only one radio band at a time. Use separate
+LilyGO controllers for fireplaces that use different bands, such as 315 MHz
+and 433.92 MHz.
+
+## Developer Tests
+
+Run `make test` for the Python suite or `make firmware-unit-test` for the C++
+unit checks. Each command creates a fresh Python environment in `/tmp`, installs
+`requirements-dev.txt` for the current machine, and removes the environment on
+exit. The shared `.venv` is neither used nor replaced, so ARM and x86_64 machines
+can test the same checkout without carrying native packages between them.
+Dependency installation requires package-index access on each run.
+
+The bootstrap defaults to the current machine's `python3`; select another native
+interpreter with `TEST_BOOTSTRAP_PYTHON=/path/to/python3`. Pass pytest options with
+`PYTEST_ARGS`, for example `make test PYTEST_ARGS="-k learning_id"`.
+
+Build and test the inspectable Learning ID download:
+
+```sh
+make learning-id-package OUTPUT_DIR=/tmp/proflame2-learning-id
+make learning-id-package-test ARCHIVE=/tmp/proflame2-learning-id/proflame2-learning-id.pyz
+```
+
+See [Learning ID packaging](docs/learning_id_packaging.md) for development and
+release automation details.
+
 ## More Information
 
 - [LilyGO CC1101 controller guide](docs/lilygo_cc1101_controller.md)
 - [YardStick controller guide](docs/yardstick_controller.md)
 - [Add fireplace profile](docs/add_fireplace_profile.md)
-- [rtl_433-assisted manual learning](docs/rtl433_manual_learning.md)
+- [Using rtl_433 for learning](docs/Using_rtl_433_for_learning.md)
+- [Learning ID diagnostic sensor and encoding](docs/learning_id_encoding.md)
 
 ## Relationship To SmartFire
 

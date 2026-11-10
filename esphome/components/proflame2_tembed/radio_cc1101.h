@@ -8,10 +8,17 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
+
+#ifndef PROFLAME2_RADIO_TRACE
+#define PROFLAME2_RADIO_TRACE 0
+#endif
+
+#include "radio_trace.h"
 
 #ifndef PROFLAME2_TEMBED_TX_DEBUG
 #define PROFLAME2_TEMBED_TX_DEBUG 1
@@ -251,7 +258,7 @@ public:
                           uint32_t repeat_gap_us, TXMode tx_mode, NativeGroupTimingProfile native_group_timing_profile,
                           NativeGroupRepeatBoundaryMode native_group_repeat_boundary_mode, uint32_t pre_burst_low_us,
                           uint32_t pre_frame_low_us, uint32_t post_frame_idle_gap_us, uint32_t& elapsed_ms,
-                          TXTimingDiagnostics& timing, std::string& error);
+                          TXTimingDiagnostics& timing, std::string& error, uint32_t pre_tx_settle_delay_us = 0);
   /// Emit a diagnostic RF pattern. This is not a Proflame2 command.
   bool transmit_test_pattern_async_ook(TestPatternMode mode, uint32_t duration_ms, uint32_t period_us,
                                        uint32_t& elapsed_ms, TXTimingDiagnostics& timing, std::string& error);
@@ -260,6 +267,17 @@ public:
                                   uint8_t& repeat_index, uint8_t& bit_index) const;
   /// Put the CC1101 into IDLE without changing higher-level component state.
   void set_idle();
+  /// Bounded best-effort readiness waits. Configure before starting the worker.
+  void set_radio_ready_timeout_us(uint32_t value) {
+    this->radio_ready_timeout_us_ = value;
+  }
+  uint32_t get_radio_ready_timeout_us() const {
+    return this->radio_ready_timeout_us_;
+  }
+  /// Borrow the SPI bus MISO pin; never reconfigure it as a GPIO.
+  void set_spi_miso_pin(GPIOPin* pin) {
+    this->spi_miso_pin_ = pin;
+  }
   /// Capture a bounded raw FIFO byte window for diagnostics/manual probing.
   bool rx_fifo_probe(uint32_t frequency_hz, uint32_t data_rate_bps, uint32_t duration_ms, RXFifoProbeResult& result,
                      std::string& error);
@@ -269,6 +287,21 @@ public:
   void log_rf_output_path(GPIOPin* gdo0_pin, GPIOPin* gdo2_pin, TXMode tx_mode, uint32_t payload_length,
                           uint32_t payload_bit_length, uint8_t repeat_count, uint32_t repeat_gap_us);
   void log_runtime_register_snapshot(const char* stage);
+  void set_pre_tx_settle_delay_us(uint32_t value);
+  uint32_t get_pre_tx_settle_delay_us() const {
+    return this->pre_tx_settle_delay_us_.load();
+  }
+#if PROFLAME2_RADIO_TRACE
+  void set_radio_trace_enabled(bool value);
+  bool is_radio_trace_enabled() const {
+    return this->radio_trace_enabled_.load();
+  }
+  RadioTraceRecord capture_radio_registers();
+  void log_radio_registers(const RadioTraceRecord& record, const char* stage, const char* request_id);
+  void trace_radio_registers(const char* stage, const char* request_id);
+#else
+  void trace_radio_registers(const char*, const char*) {}
+#endif
 
   bool is_radio_initialized() const {
     return this->initialized_;
@@ -284,6 +317,17 @@ public:
   }
 
 protected:
+  void begin_ready_transaction_();
+  bool wait_for_marcstate_(uint8_t expected, uint8_t& last_state);
+  uint8_t strobe_unchecked_(uint8_t command);
+  GPIOPin* spi_miso_pin_{nullptr};
+  uint32_t radio_ready_timeout_us_{10000};
+  bool spi_ready_warning_logged_{false};
+  std::atomic<uint32_t> pre_tx_settle_delay_us_{20000};
+#if PROFLAME2_RADIO_TRACE
+  uint32_t radio_trace_sequence_{0};
+  std::atomic<bool> radio_trace_enabled_{false};
+#endif
   bool write_register_(uint8_t address, uint8_t value);
   uint8_t read_register_(uint8_t address);
   uint8_t read_status_register_(uint8_t address);

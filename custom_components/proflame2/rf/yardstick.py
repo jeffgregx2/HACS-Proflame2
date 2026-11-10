@@ -57,6 +57,7 @@ from .capture import (
 )
 from .waveform import NATIVE_REPEAT_SEPARATOR_BITS, ProflameTransmissionPlan, build_repeated_air_payload
 from .yardstick_worker import (
+    COMMAND_CONFIGURE,
     COMMAND_OPEN,
     COMMAND_RECEIVE,
     COMMAND_SEND,
@@ -154,6 +155,7 @@ PROFLAME2_FREQUENCY_HZ = DEFAULT_PROTOCOL_PROFILE.frequency_hz
 PROFLAME2_DATA_RATE = DEFAULT_PROTOCOL_PROFILE.data_rate_bps
 PROFLAME2_PACKET_BYTES = 25
 DIAGNOSTIC_PACKET_BYTES = 255
+DEFAULT_CAPTURE_WINDOW_BYTES = DIAGNOSTIC_PACKET_BYTES
 YARDSTICK_RX_LEARNING_FREQUENCY_HZ = 315_000_000
 YARDSTICK_RX_LEARNING_PACKET_BYTES = DIAGNOSTIC_PACKET_BYTES
 YARDSTICK_RX_LEARNING_SWEEP_ENABLED = False
@@ -432,7 +434,12 @@ def _should_suppress_verbose_failure(raw_payload: bytes, diagnostics) -> bool:
 
 
 class YardStickBackend(RFBackend):
-    """Backend used for development-time RX and learning."""
+    """USB RF transport for fireplace control, diagnostic capture, and learning."""
+
+    @property
+    def physical_controller_id(self) -> str:
+        """Match runtime and learning ownership of the exclusively assigned radio."""
+        return f"yardstick:{self._device_index}"
 
     def __init__(
         self,
@@ -444,7 +451,7 @@ class YardStickBackend(RFBackend):
         tx_frequency_hz: int = PROFLAME2_FREQUENCY_HZ,
         data_rate: int = PROFLAME2_DATA_RATE,
         radio: Any | None = None,
-        packet_length_bytes: int = PROFLAME2_PACKET_BYTES,
+        packet_length_bytes: int = DEFAULT_CAPTURE_WINDOW_BYTES,
         probe_mode: bool = False,
         frequency_scan_hz: tuple[int, ...] | None = None,
         sweep_enabled: bool | None = None,
@@ -494,6 +501,7 @@ class YardStickBackend(RFBackend):
         self._worker_mode = (radio is None) if worker_mode is None else worker_mode
         self._shutdown_requested = False
         self._last_radio_settings: dict[str, Any] | None = None
+        self._frequency_configuration_failed = False
         self._last_worker_rx_settings: dict[str, Any] | None = None
         self._last_worker_open_payload: dict[str, Any] | None = None
         self.last_receive_diagnostics: YardStickReceiveDiagnostics | None = None
@@ -642,6 +650,57 @@ class YardStickBackend(RFBackend):
                 self._debug("connect: modulation load complete value=%s", modulation)
         self._modulation = modulation
 
+    async def configure_frequencies(self, *, rx_frequency_hz: int, tx_frequency_hz: int) -> None:
+        """Apply a controller band without transmitting or starting capture.
+
+        The caller owns HA controller arbitration. The operation lock also
+        excludes worker/direct receive and TX. Failure fences ordinary RF work
+        until an explicit configuration retry succeeds; saved selection belongs
+        to HA and must be committed only after this acknowledgement.
+        """
+        if self._shutdown_requested:
+            raise RuntimeError("Yard Stick unavailable; shutdown in progress.")
+        await self._acquire_operation_lock("configure_frequencies")
+        try:
+            self._frequency_configuration_failed = True
+            self._frequency_hz = rx_frequency_hz
+            self._tx_frequency_hz = tx_frequency_hz
+            self._frequency_scan_hz = self._build_frequency_scan(rx_frequency_hz, None)
+            self._frequency_index = 0
+            # A cancelled await cannot stop a running rfcat executor call. Keep
+            # ownership until it completes, before permitting another retune.
+            applying = asyncio.create_task(self._apply_frequency_configuration())
+            try:
+                await asyncio.shield(applying)
+            except asyncio.CancelledError:
+                await applying
+                raise
+            self._frequency_configuration_failed = False
+        finally:
+            self._release_operation_lock("configure_frequencies")
+
+    async def _apply_frequency_configuration(self) -> None:
+        await self._async_connect_locked()
+        if self._worker_mode:
+            # The supervisor owns its bounded worker timeout and terminates an
+            # unresponsive process. Do not abandon its executor call early.
+            response = await self._async_worker_request(
+                COMMAND_CONFIGURE,
+                {
+                    "frequency_hz": self._frequency_hz,
+                    "data_rate": self._data_rate,
+                    "packet_length_bytes": self._packet_length_bytes,
+                    "probe_mode": self._probe_mode,
+                },
+                timeout=self._connect_timeout_seconds,
+            )
+            if not response.get("success", False):
+                raise RuntimeError(response.get("error") or "YardStick radio configuration was not acknowledged.")
+            self._last_worker_rx_settings = response["payload"]["rx_settings"]
+        else:
+            self._last_radio_settings = await self._async_in_executor(self._configure_radio, self._modulation)
+            await self._async_in_executor(self._radio.setModeIDLE)
+
     async def close(self, *, reason: str | None = None) -> None:
         """Close the backend connection."""
 
@@ -719,6 +778,8 @@ class YardStickBackend(RFBackend):
     async def send(self, packet) -> SendResult:
         """Transmit one prepared Proflame2 packet via Yard Stick One."""
 
+        if self._frequency_configuration_failed:
+            raise RuntimeError("YardStick RF configuration failed; select the controller band again to retry.")
         if self._shutdown_requested:
             raise RuntimeError("Yard Stick unavailable; shutdown in progress.")
         self._debug(
@@ -745,6 +806,12 @@ class YardStickBackend(RFBackend):
             if not self._worker_mode:
                 assert self._radio is not None
 
+            self.log_pcm(
+                "TX",
+                transmit_request.air_payload,
+                bit_length=transmit_request.air_payload_bit_length,
+                context="stage=request",
+            )
             tx_settings = await self._execute_yardstick_transmit_request(transmit_request)
             _LOGGER.info(
                 "Proflame2 Yard Stick TX remote_id=%06x tx_frequency_hz=%s modulation=%s data_rate=%s payload_length_bytes=%s payload_bit_length=%s transmission_mode=%s logical_repeat_count=%s repeat_separator_bits=%s rf_xmit_call_count=%s",
@@ -966,6 +1033,8 @@ class YardStickBackend(RFBackend):
     async def receive_raw_payload(self, timeout: float | None = None) -> bytes | None:
         """Receive one raw RF payload without attempting Proflame2 decode."""
 
+        if self._frequency_configuration_failed:
+            raise RuntimeError("YardStick RF configuration failed; select the controller band again to retry.")
         if self._shutdown_requested:
             raise RuntimeError("Yard Stick unavailable; shutdown in progress.")
         if not self._worker_mode and self._radio is None:
@@ -999,11 +1068,17 @@ class YardStickBackend(RFBackend):
                 if response["kind"] == "NO_PACKET":
                     return None
                 raw_payload_hex = payload.get("raw_payload_hex")
-                return None if raw_payload_hex is None else bytes.fromhex(raw_payload_hex)
+                raw_payload = None if raw_payload_hex is None else bytes.fromhex(raw_payload_hex)
+                if raw_payload is not None:
+                    self.log_pcm("RX", raw_payload, context="event_kind=rfrecv")
+                return raw_payload
             finally:
                 if lock_acquired:
                     self._release_operation_lock("receive")
-        return await self._async_in_executor(self._recv_once, timeout)
+        raw_payload = await self._async_in_executor(self._recv_once, timeout)
+        if raw_payload is not None:
+            self.log_pcm("RX", raw_payload, context="event_kind=rfrecv")
+        return raw_payload
 
     async def receive(self, timeout: float | None = None):
         """Receive and decode one Proflame2 frame when possible."""
@@ -1521,13 +1596,13 @@ class YardStickBackend(RFBackend):
             can_learn=True,
             notes=(
                 "Transmit and receive operations are isolated behind a dedicated Yard Stick worker process.",
-                "Receive path tunes the Yard Stick One for ASK/OOK near 315 MHz.",
+                f"Receive path tunes the Yard Stick One for ASK/OOK at {self._frequency_hz} Hz.",
                 "Successful decodes are normalized into Proflame remote_id/cmd/err samples.",
                 "Undecodable payloads are counted in learn-mode metadata for follow-up decoder work.",
             ),
         )
 
-    def _configure_radio(self, modulation: int) -> None:
+    def _configure_radio(self, modulation: int) -> dict[str, Any]:
         """Apply the radio settings used for Proflame2 receive.
 
         The first three radio settings intentionally mirror SmartFire's known
@@ -1988,6 +2063,7 @@ class YardStickBackend(RFBackend):
             "sweep_enabled": self._sweep_enabled,
             "frequency_scan_hz": self._frequency_scan_hz,
             "worker_mode": self._worker_mode,
+            "extended_body_fits_window": self._packet_length_bytes >= 33,
         }
         if self._last_radio_settings is not None:
             snapshot["radio_settings"] = self._last_radio_settings
@@ -2039,6 +2115,7 @@ class YardStickBackend(RFBackend):
             "err1": decoded.get("err1") or (f"{sample.err1:02x}" if sample is not None else None),
             "cmd2": decoded.get("cmd2") or (f"{sample.cmd2:02x}" if sample is not None else None),
             "err2": decoded.get("err2") or (f"{sample.err2:02x}" if sample is not None else None),
+            **(sample.protocol_fields if sample is not None else {}),
             **state_fields,
             "raw_payload_hex": result.raw_payload_hex,
             "payload_length_bytes": result.payload_length_bytes,
@@ -2155,6 +2232,7 @@ class YardStickBackend(RFBackend):
                 "cmd2": f"{sample.cmd2:02x}",
                 "err1": f"{sample.err1:02x}",
                 "err2": f"{sample.err2:02x}",
+                **sample.protocol_fields,
             }
         best_failure_reason = diagnostics.best_failure.reason if diagnostics.best_failure is not None else None
         candidate_windows = tuple(
@@ -2177,6 +2255,8 @@ class YardStickBackend(RFBackend):
             "bit_stream is the full RFrecv payload bit expansion, not a packet-normalized stream.",
             "symbol_stream is the full RFrecv payload decoded at bit_offset=0, not a selected packet window.",
         ]
+        if self._packet_length_bytes < 33:
+            limitations.append("Configured capture window is too short for a complete 260-bit extended frame.")
         if not diagnostics.candidates:
             limitations.append(
                 "No structurally valid Proflame candidate was found; selected offsets and occurrence offsets are unavailable."
@@ -2265,6 +2345,9 @@ class YardStickBackend(RFBackend):
             },
             "manchester_check": "passed",
             "validation_notes": list(candidate.validation_notes),
+            **candidate.sample.protocol_fields,
+            "frame_bit_length": len(candidate.frame.wire_words) * 26,
+            "repeat_gap_bits": candidate.repeat_gap_bits,
         }
 
     def _serialize_failed_window(
@@ -2302,25 +2385,24 @@ class YardStickBackend(RFBackend):
         symbols = diagnostics.symbols or ""
         if len(symbols) < TOTAL_SYMBOLS:
             return ()
-        scored: list[tuple[int, int, int, str]] = []
-        for symbol_offset in range(0, len(symbols) - TOTAL_SYMBOLS + 1):
-            window = symbols[symbol_offset : symbol_offset + TOTAL_SYMBOLS]
-            guard_score = 0
-            for word_index in range(7):
-                offset = word_index * 13
-                chunk = window[offset : offset + 13]
-                if len(chunk) != 13:
+        scored: list[tuple[int, int, int, str, int]] = []
+        for word_count, window_length in ((7, TOTAL_SYMBOLS), (10, 10 * 13)):
+            for symbol_offset in range(0, len(symbols) - window_length + 1):
+                window = symbols[symbol_offset : symbol_offset + window_length]
+                guard_score = 0
+                for word_index in range(word_count):
+                    offset = word_index * 13
+                    chunk = window[offset : offset + 13]
+                    guard_score += int(chunk[0] == "S")
+                    guard_score += int(chunk[1] == "1")
+                    guard_score += int(chunk[-1] == "1")
+                binary_score = sum(symbol in {"0", "1"} for symbol in window)
+                if guard_score < 10 and binary_score < 20:
                     continue
-                guard_score += int(chunk[0] == "S")
-                guard_score += int(chunk[1] == "1")
-                guard_score += int(chunk[-1] == "1")
-            binary_score = sum(symbol in {"0", "1"} for symbol in window)
-            if guard_score < 10 and binary_score < 20:
-                continue
-            scored.append((guard_score, binary_score, symbol_offset, window))
+                scored.append((guard_score, binary_score, symbol_offset, window, word_count))
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         windows: list[dict[str, Any]] = []
-        for index, (guard_score, binary_score, symbol_offset, window) in enumerate(scored[:5]):
+        for index, (guard_score, binary_score, symbol_offset, window, word_count) in enumerate(scored[:5]):
             absolute_bit_offset = symbol_offset * 2
             windows.append(
                 {
@@ -2347,6 +2429,7 @@ class YardStickBackend(RFBackend):
                     "guard_score": guard_score,
                     "binary_symbol_count": binary_score,
                     "diagnostic_only": True,
+                    "candidate_word_count": word_count,
                 }
             )
         return tuple(windows)

@@ -102,7 +102,27 @@ Compile success is not RF validation. For release or hardware changes, validate:
 - Native remote or YardStick TX is reflected in Home Assistant through LilyGO
   active listening when active listening is enabled.
 
-The repository `make esphome-*` targets stage a copy below
-`/tmp/proflame2-esphome` and overlay its local external component after ESPHome
+The repository `make esphome-*` validation targets stage a unique temporary copy
+under `${TMPDIR:-/tmp}/proflame2-esphome.*` and overlay its local external component after ESPHome
 resolves package metadata. That validation therefore builds the checkout's
 uncommitted C++ source; it does not alter the GitHub-based production package.
+
+Validation and `tools/prepopulate_esphome_deps.sh` remove their owned temporary
+workspace on success, failure, and handled interrupts. Concurrent runs never
+share or delete each other's stage. Dependency caches and virtual environments
+remain outside these stages so subsequent builds can reuse them.
+
+Pytest owns an isolated temporary workspace and does not retain it, even for
+failed tests or keyboard interruption. An explicit `--basetemp` overrides this
+automatic workspace and makes that directory the caller's responsibility.
+Coverage reports are kept in the checkout as ignored `.coverage` and
+`coverage.xml` files, not shared `/tmp` files. Save any required debugging
+artifacts explicitly outside temporary workspaces. Forced termination
+(`SIGKILL`), power loss, or filesystem errors can still leave a workspace;
+check that no process or Git worktree uses it before manual removal. Never
+delete raw captures, firmware ELF evidence, or another project's test files.
+
+The live SDR collector intentionally keeps its `flock` coordination file after
+closing. Removing that inode during competing capture sessions can defeat
+exclusive device ownership. Tests use isolated lock files in their own temporary
+directories instead of the live collector's lock.

@@ -53,6 +53,13 @@ DECODE_FIELD_NAMES = (
     "Aux",
     "Pilot",
     "Integrity",
+    "Variant",
+    "Raw words",
+    "W6",
+    "W7",
+    "W8",
+    "W9",
+    "W10",
 )
 
 
@@ -400,7 +407,22 @@ def _capture_summary_line(capture: CaptureParseResult, baseline: CaptureParseRes
     decoded_summary = (
         " ".join(
             f"{name}={fields[name]}"
-            for name in ("Id", "Cmd1", "Cmd2", "Err1", "Err2", "Power", "Flame")
+            for name in (
+                "Id",
+                "Variant",
+                "Cmd1",
+                "Cmd2",
+                "Err1",
+                "Err2",
+                "W6",
+                "W7",
+                "W8",
+                "W9",
+                "W10",
+                "Raw words",
+                "Power",
+                "Flame",
+            )
             if name in fields
         )
         or "-"
@@ -432,7 +454,22 @@ def _normalized_diff_line(capture: CaptureParseResult, baseline: CaptureParseRes
     base_gap_short, base_gap_long, base_gap_reset = infer_gap_families(baseline)
     code_diff = first_code_difference_index(baseline.analyzer_codes, capture.analyzer_codes)
     field_mismatches = []
-    for key in ("Id", "Cmd1", "Cmd2", "Err1", "Err2", "Power", "Flame"):
+    for key in (
+        "Id",
+        "Variant",
+        "Cmd1",
+        "Cmd2",
+        "Err1",
+        "Err2",
+        "W6",
+        "W7",
+        "W8",
+        "W9",
+        "W10",
+        "Raw words",
+        "Power",
+        "Flame",
+    ):
         if baseline.decoded_fields.get(key) != capture.decoded_fields.get(key):
             field_mismatches.append(key)
     return (

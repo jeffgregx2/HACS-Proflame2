@@ -1,0 +1,508 @@
+{
+  "schema_version": 1,
+  "remote": {
+    "serial_id": "338705",
+    "model": "SIT 0.584.090 / T99058404300",
+    "reporter": "WillyLax24"
+  },
+  "sources": [
+    "https://github.com/jeffgregx2/HACS-Proflame2/issues/26#issuecomment-6386673559",
+    "https://github.com/user-attachments/files/33908939/mendota-fireplace-logs.txt",
+    "https://github.com/jeffgregx2/HACS-Proflame2/issues/15#issuecomment-6330909979"
+  ],
+  "captures": [
+    {
+      "capture_id": 1,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99695b999556e9a595b95565ae595a6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        166,
+        80,
+        178,
+        2,
+        35,
+        216
+      ]
+    },
+    {
+      "capture_id": 2,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99695b999556e9a595b95565ae595a6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        166,
+        80,
+        178,
+        2,
+        35,
+        216
+      ]
+    },
+    {
+      "capture_id": 3,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99665b999556ea5695b95565aeaa665ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        165,
+        80,
+        198,
+        2,
+        245,
+        216
+      ]
+    },
+    {
+      "capture_id": 4,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99665b999556ea5695b95565aeaa665ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        165,
+        80,
+        198,
+        2,
+        245,
+        216
+      ]
+    },
+    {
+      "capture_id": 5,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99656b999556ea5695b95565ae9a696ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        164,
+        80,
+        198,
+        2,
+        182,
+        216
+      ]
+    },
+    {
+      "capture_id": 6,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99656b999556ea5695b95565ae9a696ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        164,
+        80,
+        198,
+        2,
+        182,
+        216
+      ]
+    },
+    {
+      "capture_id": 7,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae995a5b999556ea5695b95565ae6aaa6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        163,
+        80,
+        198,
+        2,
+        127,
+        216
+      ]
+    },
+    {
+      "capture_id": 8,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae995a5b999556ea5695b95565ae6aaa6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        163,
+        80,
+        198,
+        2,
+        127,
+        216
+      ]
+    },
+    {
+      "capture_id": 9,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99596b999556ea5695b95565ae5aa55ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        162,
+        80,
+        198,
+        2,
+        60,
+        216
+      ]
+    },
+    {
+      "capture_id": 10,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99566b999556ea5695b95565aeaa965ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        161,
+        80,
+        198,
+        2,
+        249,
+        216
+      ]
+    },
+    {
+      "capture_id": 11,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99566b999556ea5695b95565aeaa965ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        161,
+        80,
+        198,
+        2,
+        249,
+        216
+      ]
+    },
+    {
+      "capture_id": 12,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99596b999556ea5695b95565ae5aa55ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        162,
+        80,
+        198,
+        2,
+        60,
+        216
+      ]
+    },
+    {
+      "capture_id": 13,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae995a5b999556ea5695b95565ae6aaa6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        163,
+        80,
+        198,
+        2,
+        127,
+        216
+      ]
+    },
+    {
+      "capture_id": 14,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae995a5b999556ea5695b95565ae6aaa6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        163,
+        80,
+        198,
+        2,
+        127,
+        216
+      ]
+    },
+    {
+      "capture_id": 15,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99656b999556ea5695b95565ae9a696ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        164,
+        80,
+        198,
+        2,
+        182,
+        216
+      ]
+    },
+    {
+      "capture_id": 16,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99665b999556ea5695b95565aeaa665ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        165,
+        80,
+        198,
+        2,
+        245,
+        216
+      ]
+    },
+    {
+      "capture_id": 17,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99695b999556ea5695b95565ae5a555ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        166,
+        80,
+        198,
+        2,
+        48,
+        216
+      ]
+    },
+    {
+      "capture_id": 18,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba55956e99695b999556ea5695b95565ae5a555b9aaa9a0",
+      "words": [
+        51,
+        135,
+        5,
+        132,
+        166,
+        80,
+        198,
+        2,
+        48,
+        127
+      ]
+    },
+    {
+      "capture_id": 19,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba55956e99695b999556ea6556b95565aea56a6b9aaa9a0",
+      "words": [
+        51,
+        135,
+        5,
+        132,
+        166,
+        80,
+        208,
+        2,
+        199,
+        127
+      ]
+    },
+    {
+      "capture_id": 20,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99695b999556ea6556b95565aea56a6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        166,
+        80,
+        208,
+        2,
+        199,
+        216
+      ]
+    },
+    {
+      "capture_id": 21,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99665b999556ea6556b95565ae55596ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        165,
+        80,
+        208,
+        2,
+        2,
+        216
+      ]
+    },
+    {
+      "capture_id": 22,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99656b999556ea6556b95565ae65565ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        164,
+        80,
+        208,
+        2,
+        65,
+        216
+      ]
+    },
+    {
+      "capture_id": 23,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae995a5b999556ea6556b95565ae95955ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        163,
+        80,
+        208,
+        2,
+        136,
+        216
+      ]
+    },
+    {
+      "capture_id": 24,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99596b999556ea6556b95565aea59a6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        162,
+        80,
+        208,
+        2,
+        203,
+        216
+      ]
+    },
+    {
+      "capture_id": 25,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99566b999556ea6556b95565ae55a96ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        161,
+        80,
+        208,
+        2,
+        14,
+        216
+      ]
+    },
+    {
+      "capture_id": 26,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99555b999556ea6556b95565ae65a65ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        160,
+        80,
+        208,
+        2,
+        77,
+        216
+      ]
+    },
+    {
+      "capture_id": 27,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99555b999556ea6556b95565ae65a65ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        160,
+        80,
+        208,
+        2,
+        77,
+        216
+      ]
+    },
+    {
+      "capture_id": 28,
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba5599ae99555b999556ea6996b95565ae556a6ba9a5560",
+      "words": [
+        51,
+        135,
+        5,
+        133,
+        160,
+        80,
+        218,
+        2,
+        7,
+        216
+      ]
+    },
+    {
+      "capture_id": "original",
+      "pcm_bit_length": 259,
+      "pcm_hex": "e5a5aaba55a96e55665ba55a5ae95696b999556e55596b955696e56a56b95955a0",
+      "words": [
+        51,
+        135,
+        5,
+        134,
+        134,
+        80,
+        2,
+        3,
+        28,
+        16
+      ]
+    }
+  ]
+}

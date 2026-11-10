@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-RELEASE_TAG_PATTERN = re.compile(r"v(?P<version>\d+\.\d+\.\d+(?:-beta\d+)?)$")
+RELEASE_TAG_PATTERN = re.compile(r"v(?P<version>\d+\.\d+\.\d+(?:-(?:alpha|beta)\d+)?)$")
 
 
 def parse_release_tag(tag: str) -> str:
@@ -17,7 +17,7 @@ def parse_release_tag(tag: str) -> str:
 
     match = RELEASE_TAG_PATTERN.fullmatch(tag)
     if match is None:
-        raise ValueError(f"Invalid release tag {tag!r}. Use vX.Y.Z or vX.Y.Z-betaN.")
+        raise ValueError(f"Invalid release tag {tag!r}. Use vX.Y.Z, vX.Y.Z-alphaN, or vX.Y.Z-betaN.")
     return match.group("version")
 
 
@@ -36,9 +36,9 @@ def validate_release_source(tag: str, prerelease: bool | None = None) -> None:
     """Validate versions and documentation links for the supplied release tag."""
 
     version = parse_release_tag(tag)
-    is_beta = "-beta" in version
-    if is_beta and prerelease is False:
-        raise ValueError(f"Beta release tag {tag!r} must be marked as a GitHub prerelease.")
+    is_prerelease = "-" in version
+    if is_prerelease and prerelease is False:
+        raise ValueError(f"Prerelease tag {tag!r} must be marked as a GitHub prerelease.")
 
     manifest_path = Path("custom_components/proflame2/manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -80,7 +80,7 @@ def main() -> None:
     """Run release-source validation from the repository root."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tag", required=True, help="Release tag, for example v0.6.0-beta3.")
+    parser.add_argument("--tag", required=True, help="Release tag, for example v0.6.0-alpha1 or v0.6.0-beta3.")
     parser.add_argument(
         "--prerelease",
         choices=("true", "false"),

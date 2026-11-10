@@ -12,6 +12,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -39,20 +40,29 @@ from .const import (
     DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
 )
+from .control_intent import ControllerArbiter, controller_arbiter
 from .packet_debug import (
     async_disable_packet_debug_logging,
     async_enable_packet_debug_logging,
     get_packet_debug_logger,
 )
+from .protocol.derivation import (
+    LearningRequirements,
+    ProfileConflictError,
+    derive_remote_profile,
+    learning_command_key,
+    thermostat_mode_active,
+    validate_frame,
+)
 from .protocol.ecc import derive_ecc_profile
-from .protocol.models import PROTOCOL_VARIANT_EXTENDED_10_WORD
+from .protocol.models import PROTOCOL_VARIANT_EXTENDED_10_WORD, FireplaceFeatures
 from .protocol.packet import ProflameFrame, ProflamePacket
+from .rf.band import DEFAULT_RF_BAND, yardstick_band
 from .rf.base import RFBackend
 from .rf.esphome.transport import HomeAssistantESPHomeTransport
 from .rf.esphome_api import ESPHomeAPIBackend
 from .rf.fake import FakeRFBackend
 from .rf.yardstick import (
-    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
     YARDSTICK_RX_LEARNING_PACKET_BYTES,
     YARDSTICK_RX_LEARNING_SWEEP_ENABLED,
     YardStickBackend,
@@ -66,14 +76,27 @@ MIN_VALID_PACKETS = 3
 DEFAULT_LEARN_TIMEOUT_SECONDS = 120.0
 DEFAULT_RECEIVE_TIMEOUT_SECONDS = 1.0
 DEFAULT_FAKE_LEARN_DELAY_SECONDS = 2.0
-DEFAULT_EXTENDED_MANUAL_W7 = 0xC8
 
 ERROR_TIMEOUT = "timeout"
 ERROR_INCONSISTENT_REMOTE_ID = "inconsistent_remote_id"
 ERROR_CONTRADICTORY_PROFILE = "contradictory_profile"
 ERROR_AMBIGUOUS_PROFILE = "ambiguous_profile"
 ERROR_BACKEND_UNAVAILABLE = "backend_unavailable"
-RESTORE_PROMPT_LABELS = {"restore_power_on"}
+RESTORE_PROMPT_LABELS = {"restore_power_on", "ensure_power_on"}
+MANUAL_MODE_INSTRUCTION = (
+    "Thermostat or SMART mode detected.  \n"
+    "Turn OFF thermostat and SMART mode on your remote. Press the thermostat button until both modes are off. "
+    "Learning will continue automatically. If it does not continue, press Power once after turning both modes off."
+)
+
+
+class LearningModeTransition(Enum):
+    """Prerequisite events change instructions without completing an action."""
+
+    MANUAL_REQUIRED = "manual_required"
+    MANUAL_RESTORED = "manual_restored"
+    POWER_REQUIRED = "power_required"
+
 
 LearningBackendFactory = Callable[[str], RFBackend | Awaitable[RFBackend]]
 
@@ -159,6 +182,14 @@ class LearnSession:
     packet_debug_logging_enabled: bool = False
     packet_debug_log_path: str | None = None
     _seen_frames: set[tuple[int, ...]] = field(default_factory=set)
+    controller_lease: ControllerArbiter | None = None
+    controller_lease_owner: object | None = None
+    suspended_runtimes: list = field(default_factory=list)
+    waiting_for_manual: bool = False
+    last_manual_command: tuple[int, int] | None = None
+    extended_protocol: bool | None = None
+    diagnostic_capture: bool = False
+    last_observed_packet: ProflamePacket | None = None
 
 
 @dataclass(frozen=True)
@@ -182,10 +213,15 @@ async def async_create_learning_backend(
     *,
     esphome_entry_id: str | None = None,
     debug_logging_enabled: bool = False,
+    rf_band: str = DEFAULT_RF_BAND,
 ) -> RFBackend:
     """Create and connect a backend for config-flow learning."""
 
     domain_data = hass.data.setdefault(DOMAIN, {})
+    band = yardstick_band(rf_band) if backend_type == BACKEND_YARDSTICK else None
+    learning_frequency = (
+        band.learning_frequency(domain_data.get(DATA_YARDSTICK_LEARNING_FREQUENCY_HZ)) if band is not None else None
+    )
     factory = domain_data.get(DATA_LEARNING_BACKEND_FACTORY)
     backend: RFBackend
 
@@ -198,12 +234,8 @@ async def async_create_learning_backend(
     elif backend_type == BACKEND_YARDSTICK:
         backend = YardStickBackend(
             hass=hass,
-            frequency_hz=int(
-                domain_data.get(
-                    DATA_YARDSTICK_LEARNING_FREQUENCY_HZ,
-                    YARDSTICK_RX_LEARNING_FREQUENCY_HZ,
-                )
-            ),
+            frequency_hz=learning_frequency,
+            tx_frequency_hz=band.tx_frequency_hz,
             packet_length_bytes=int(
                 domain_data.get(
                     DATA_YARDSTICK_LEARNING_PACKET_LENGTH_BYTES,
@@ -255,8 +287,73 @@ async def async_start_learning_session(
     esphome_entry_id: str | None = None,
     timeout: float = DEFAULT_LEARN_TIMEOUT_SECONDS,
     receive_timeout: float = DEFAULT_RECEIVE_TIMEOUT_SECONDS,
+    rf_band: str = DEFAULT_RF_BAND,
 ) -> LearnSession:
     """Create a backend and wrap it in a guided-learning session."""
+
+    from .runtime import async_get_runtime_entries
+    from .services import _async_stop_rx, _control_arbiter
+
+    key = (
+        f"esphome:{esphome_entry_id}"
+        if backend_type == BACKEND_ESPHOME
+        else "yardstick:0" if backend_type == BACKEND_YARDSTICK else None
+    )
+    lease = controller_arbiter(hass.data.setdefault(DOMAIN, {}), key) if key is not None else None
+    affected = [
+        entry
+        for entry in async_get_runtime_entries(hass).values()
+        if lease is not None and _control_arbiter(hass, entry) is lease
+    ]
+    if lease is not None and (
+        lease.lock.locked()
+        or lease.learning_owner is not None
+        or any(
+            entry.desired_state is not None or entry.radio_configuration_in_progress or entry.radio_configuration_error
+            for entry in affected
+        )
+    ):
+        raise RuntimeError("Controller is busy; finish existing controls or learning before starting another session.")
+    owner = object()
+    if lease is not None:
+        lease.learning_owner = owner
+    for entry in affected:
+        entry.learning_in_progress = True
+    try:
+        for entry in affected:
+            await _async_stop_rx(entry)
+        session = await _async_open_learning_session(
+            hass,
+            backend_type,
+            debug_logging=debug_logging,
+            esphome_entry_id=esphome_entry_id,
+            timeout=timeout,
+            receive_timeout=receive_timeout,
+            rf_band=rf_band,
+        )
+    except BaseException:
+        if lease is not None and lease.learning_owner is owner:
+            lease.learning_owner = None
+        for entry in affected:
+            entry.learning_in_progress = False
+        raise
+    session.controller_lease = lease
+    session.controller_lease_owner = owner
+    session.suspended_runtimes = affected
+    return session
+
+
+async def _async_open_learning_session(
+    hass: HomeAssistant,
+    backend_type: str,
+    *,
+    debug_logging: bool,
+    esphome_entry_id: str | None,
+    timeout: float,
+    receive_timeout: float,
+    rf_band: str = DEFAULT_RF_BAND,
+) -> LearnSession:
+    """Open learning only after exclusive controller ownership is reserved."""
 
     _LOGGER.info(
         "Proflame2 learning debug logging is %s for backend=%s",
@@ -283,6 +380,7 @@ async def async_start_learning_session(
             backend_type,
             esphome_entry_id=esphome_entry_id,
             debug_logging_enabled=debug_logging,
+            **({"rf_band": rf_band} if backend_type == BACKEND_YARDSTICK else {}),
         )
     except Exception:
         if debug_logging:
@@ -339,6 +437,11 @@ async def async_close_learning_session(session: LearnSession | None) -> None:
                     _LOGGER.exception("Proflame2 learning-mode shutdown update failed")
             await session.backend.close()
         finally:
+            lease = session.controller_lease
+            if lease is not None and lease.learning_owner is session.controller_lease_owner:
+                lease.learning_owner = None
+                for entry in session.suspended_runtimes:
+                    entry.learning_in_progress = False
             if session.packet_debug_logging_enabled and session.hass is not None:
                 get_packet_debug_logger().info("Closed packet debug learning session")
                 await async_disable_packet_debug_logging(session.hass)
@@ -395,7 +498,9 @@ def _seed_fake_learning_packets(backend: FakeRFBackend) -> None:
     )
 
 
-async def async_capture_next_learning_packet(session: LearnSession) -> ProflamePacket | LearnResult:
+async def async_capture_next_learning_packet(
+    session: LearnSession,
+) -> ProflamePacket | LearnResult | LearningModeTransition:
     """Capture the next distinct packet for one guided-learning prompt.
 
     The timeout applies only to the current prompted action. A slow but active
@@ -413,10 +518,34 @@ async def async_capture_next_learning_packet(session: LearnSession) -> ProflameP
             _record_no_learning_packet(session, receive_timeout)
             continue
 
-        _record_learning_packet_observed(session, receive_timeout, packet)
-        remote_failure = _ensure_learning_remote_id(session, receive_timeout, packet)
-        if remote_failure is not None:
-            return remote_failure
+        failure = _validate_learning_observation(session, receive_timeout, packet)
+        if failure is not None:
+            return failure
+
+        if (
+            session.prompt_label == "ensure_power_on"
+            and not packet.frame.cmd1 & 0x01
+            and not (packet.frame.is_extended and thermostat_mode_active(packet.frame))
+        ):
+            # OFF repeats do not satisfy a power prerequisite or restart its deadline.
+            continue
+
+        if (
+            session.prompt_label in {"flame_down", "cmd2_change"}
+            and not packet.state.power
+            and not session.waiting_for_manual
+            and not (packet.frame.is_extended and thermostat_mode_active(packet.frame))
+        ):
+            # Even a duplicate OFF packet makes a flame instruction inapplicable.
+            if packet.frame.is_extended:
+                session.last_manual_command = learning_command_key(packet.frame)
+            return LearningModeTransition.POWER_REQUIRED
+
+        if packet.frame.is_extended and not session.diagnostic_capture:
+            result = await _capture_extended_manual_action(session, receive_timeout, packet)
+            if result is not None:
+                return result
+            continue
 
         frame_key = _learning_frame_key(packet)
         if frame_key in session._seen_frames:
@@ -429,6 +558,64 @@ async def async_capture_next_learning_packet(session: LearnSession) -> ProflameP
         return await _accept_distinct_learning_packet(session, receive_timeout, packet, frame_key)
 
     return await _finish_learning_prompt_timeout(session)
+
+
+def _validate_learning_observation(
+    session: LearnSession, receive_timeout: float, packet: ProflamePacket
+) -> LearnResult | None:
+    """Check original bytes and identity before allowing mode or command changes."""
+    try:
+        validate_frame(packet.frame)
+    except ProfileConflictError as exc:
+        return LearnResult(success=False, error_code=ERROR_CONTRADICTORY_PROFILE, error=str(exc))
+    _record_learning_packet_observed(session, receive_timeout, packet)
+    remote_failure = _ensure_learning_remote_id(session, receive_timeout, packet)
+    if remote_failure is not None:
+        return remote_failure
+    if session.extended_protocol is None:
+        session.extended_protocol = packet.frame.is_extended
+    elif session.extended_protocol != packet.frame.is_extended:
+        return LearnResult(
+            success=False,
+            error_code=ERROR_CONTRADICTORY_PROFILE,
+            error="Commands must come from one remote and one protocol format.",
+        )
+    session.last_observed_packet = packet
+    return None
+
+
+async def _capture_extended_manual_action(
+    session: LearnSession, receive_timeout: float, packet: ProflamePacket
+) -> ProflamePacket | LearningModeTransition | None:
+    """Separate mode events and unchanged telemetry from prompted commands."""
+    transition = _observe_extended_learning_mode(session, packet)
+    if transition is not None:
+        return transition
+    if session.waiting_for_manual:
+        return None
+    command = learning_command_key(packet.frame)
+    if command == session.last_manual_command:
+        _log_learning_receive_heartbeat(
+            session, outcome="unchanged_manual_command", receive_timeout=receive_timeout, packet=packet
+        )
+        return None
+    session.last_manual_command = command
+    # A restore may return to an earlier command, provided the latest controls
+    # changed. Keep raw frames, rather than normalized copies, as evidence.
+    return await _accept_distinct_learning_packet(session, receive_timeout, packet, _learning_frame_key(packet))
+
+
+def _observe_extended_learning_mode(session: LearnSession, packet: ProflamePacket) -> LearningModeTransition | None:
+    """Observe validated mode changes before duplicate or action acceptance."""
+    if thermostat_mode_active(packet.frame):
+        if not session.waiting_for_manual:
+            session.waiting_for_manual = True
+            return LearningModeTransition.MANUAL_REQUIRED
+    elif session.waiting_for_manual:
+        session.waiting_for_manual = False
+        session.last_manual_command = learning_command_key(packet.frame)
+        return LearningModeTransition.MANUAL_RESTORED
+    return None
 
 
 def _start_learning_prompt_wait(session: LearnSession) -> _LearningPromptContext:
@@ -524,7 +711,7 @@ def _record_learning_packet_observed(
         packet.frame.cmd2,
         packet.frame.err2,
     )
-    artifact = getattr(session.backend, "last_fifo_semantic_artifact", None)
+    artifact = _learning_capture_artifact(session, packet)
     if not isinstance(artifact, dict):
         return
     notes = artifact.get("validation_notes")
@@ -543,10 +730,33 @@ def _record_learning_packet_observed(
         "err1": f"{packet.frame.err1:02x}",
         "err2": f"{packet.frame.err2:02x}",
         "validation_notes": notes,
+        "raw_words": bytes(packet.frame.wire_words).hex(),
+        "frame_bit_offset": artifact.get("frame_bit_offset"),
+        "source": artifact.get("source", packet.source),
     }
     session.extended_frame_records.append(record)
     if session.packet_debug_logging_enabled:
         _log_unwritten_extended_frame_records(session)
+
+
+def _learning_capture_artifact(session: LearnSession, packet: ProflamePacket) -> dict | None:
+    """Read the owning backend's capture evidence without fabricating a waveform."""
+    artifact = getattr(session.backend, "last_fifo_semantic_artifact", None)
+    if isinstance(artifact, dict):
+        return artifact
+    diagnostics = getattr(session.backend, "last_receive_diagnostics", None)
+    sample = getattr(diagnostics, "sample", None)
+    if sample is None or sample.as_frame() != packet.frame:
+        return None
+    selected = diagnostics.selected_candidate_window or {}
+    return {
+        "source": "yardstick",
+        "validation_notes": tuple(selected.get("validation_notes", ())),
+        "event_id": diagnostics.host_complete_ns,
+        "capture_metadata": {"pcm_bit_length": len(diagnostics.bit_stream)},
+        "raw_payload_hex": diagnostics.raw_payload_hex,
+        "frame_bit_offset": selected.get("absolute_bit_offset"),
+    }
 
 
 def _log_unwritten_extended_frame_records(session: LearnSession) -> None:
@@ -751,53 +961,29 @@ def _build_prompt_timeout_result(session: LearnSession) -> LearnResult:
         valid_packets=session.valid_packets,
         warnings=session.warnings,
         error_code=ERROR_TIMEOUT,
-        error="Timed out waiting for the requested remote action before learning could continue.",
+        error=(
+            "Timed out waiting for thermostat and SMART mode to turn off. Turn both modes off before trying again."
+            if session.waiting_for_manual
+            else "Timed out waiting for the requested remote action before learning could continue."
+        ),
     )
 
 
-def derive_learn_result_from_session(session: LearnSession) -> LearnResult | None:
-    """Attempt to derive a stable profile from the packets seen so far."""
-
-    extended_packets = [packet for packet in session.packets if packet.frame.is_extended]
-    if extended_packets:
-        return _derive_extended_learn_result(session, extended_packets)
-
-    cmd1_samples = {(packet.frame.cmd1, packet.frame.err1) for packet in session.packets}
-    cmd2_samples = {(packet.frame.cmd2, packet.frame.err2) for packet in session.packets}
-
-    if (
-        session.valid_packets < MIN_VALID_PACKETS
-        or len(cmd1_samples) < MIN_UNIQUE_CMD1_SAMPLES
-        or len(cmd2_samples) < MIN_UNIQUE_CMD2_SAMPLES
-    ):
-        _session_debug(
-            session,
-            "insufficient distinct samples valid_packets=%s unique_cmd1=%s unique_cmd2=%s",
-            session.valid_packets,
-            len(cmd1_samples),
-            len(cmd2_samples),
-        )
+def derive_learn_result_from_session(
+    session: LearnSession, *, requirements: LearningRequirements | None = None
+) -> LearnResult | None:
+    """Adapt shared profile derivation to the existing HA session contract."""
+    if requirements is None and session.valid_packets < MIN_VALID_PACKETS:
         return None
-
     try:
-        ecc = derive_ecc_profile(sorted(cmd1_samples), sorted(cmd2_samples))
-    except ValueError as exc:
-        message = str(exc)
-        if "No stable" in message:
-            _session_debug(session, "contradictory profile derivation: %s", message)
-            return LearnResult(
-                success=False,
-                remote_id=session.remote_id,
-                packets_seen=session.packets_seen,
-                valid_packets=session.valid_packets,
-                warnings=session.warnings,
-                error_code=ERROR_CONTRADICTORY_PROFILE,
-                error=("Observed packets contradict each other and do not converge " "to one stable C/D profile."),
-            )
-        if "Ambiguous stable" in message:
-            _session_debug(session, "ambiguous profile derivation: %s", message)
-            return None
-        _session_debug(session, "unexpected profile derivation failure: %s", message)
+        result = derive_remote_profile(
+            (packet.frame for packet in session.packets),
+            FireplaceFeatures(),
+            # HA's existing session policy requires command-byte diversity,
+            # without the standalone helper's repeat/confirmation gates.
+            requirements=requirements if requirements is not None else LearningRequirements(min_commands=0),
+        )
+    except ProfileConflictError as exc:
         return LearnResult(
             success=False,
             remote_id=session.remote_id,
@@ -805,83 +991,35 @@ def derive_learn_result_from_session(session: LearnSession) -> LearnResult | Non
             valid_packets=session.valid_packets,
             warnings=session.warnings,
             error_code=ERROR_CONTRADICTORY_PROFILE,
-            error=message,
+            error=str(exc),
         )
-
-    _session_debug(
-        session,
-        "learned stable profile remote_id=%06x c1=%s d1=%s c2=%s d2=%s",
-        session.remote_id,
-        ecc.c1,
-        ecc.d1,
-        ecc.c2,
-        ecc.d2,
-    )
-    return LearnResult(
+    profile = result.profile
+    if profile is None:
+        return None
+    common = dict(
         success=True,
-        remote_id=session.remote_id,
-        c1=ecc.c1,
-        d1=ecc.d1,
-        c2=ecc.c2,
-        d2=ecc.d2,
+        remote_id=profile.serial_id,
+        protocol_variant=profile.protocol_variant,
         packets_seen=session.packets_seen,
         valid_packets=session.valid_packets,
         warnings=session.warnings,
         final_packet=session.packets[-1] if session.packets else None,
     )
-
-
-def _derive_extended_learn_result(
-    session: LearnSession,
-    extended_packets: list[ProflamePacket],
-) -> LearnResult | None:
-    """Build a manual ten-word profile from integrity-validated RMT frames."""
-
-    if len(extended_packets) != len(session.packets):
+    if profile.is_extended:
+        template = profile.extended_template
         return LearnResult(
-            success=False,
-            remote_id=session.remote_id,
-            packets_seen=session.packets_seen,
-            valid_packets=session.valid_packets,
-            warnings=session.warnings,
-            error_code=ERROR_CONTRADICTORY_PROFILE,
-            error="Learning observed a mixture of legacy and extended Proflame frame formats.",
+            **common,
+            extended_w4_base=template.w4_base,
+            extended_w6=template.w6,
+            extended_w7=template.w7,
+            extended_w8=template.w8,
         )
-    if len(extended_packets) < MIN_VALID_PACKETS:
-        return None
-
-    manual_frames = [packet.frame for packet in extended_packets if (packet.frame.cmd1 & 0x03) == 0x01]
-    # The normal Power On/Off/restore sequence retains only two distinct
-    # packets. Require the following Flame change before promoting an extended
-    # profile, so W5 is proven to be the manual state word.
-    if len(manual_frames) < 2 or len({frame.cmd2 for frame in manual_frames}) < 2:
-        return None
-    w4_base_values = {frame.cmd1 & 0x80 for frame in manual_frames}
-    w6_values = {frame.err1 for frame in manual_frames}
-    w8_values = {frame.extension_words[0] for frame in manual_frames}
-    if len(w4_base_values) != 1 or len(w6_values) != 1 or len(w8_values) != 1:
-        return LearnResult(
-            success=False,
-            remote_id=session.remote_id,
-            packets_seen=session.packets_seen,
-            valid_packets=session.valid_packets,
-            warnings=session.warnings,
-            error_code=ERROR_CONTRADICTORY_PROFILE,
-            error="Extended-frame learning observed inconsistent fixed template fields.",
-        )
-
     return LearnResult(
-        success=True,
-        remote_id=session.remote_id,
-        protocol_variant=PROTOCOL_VARIANT_EXTENDED_10_WORD,
-        extended_w4_base=next(iter(w4_base_values)),
-        extended_w6=next(iter(w6_values)),
-        extended_w7=DEFAULT_EXTENDED_MANUAL_W7,
-        extended_w8=next(iter(w8_values)),
-        packets_seen=session.packets_seen,
-        valid_packets=session.valid_packets,
-        warnings=session.warnings,
-        final_packet=extended_packets[-1],
+        **common,
+        c1=profile.ecc.c1,
+        d1=profile.ecc.d1,
+        c2=profile.ecc.c2,
+        d2=profile.ecc.d2,
     )
 
 
@@ -915,6 +1053,9 @@ async def async_learn_remote_profile(
     cmd1_samples: set[tuple[int, int]] = set()
     cmd2_samples: set[tuple[int, int]] = set()
     last_ambiguity: str | None = None
+    observed_extended: bool | None = None
+    extended_session = LearnSession(backend=backend, step_timeout=timeout, receive_timeout=receive_timeout)
+    extended_commands: set[tuple[int, int]] = set()
 
     while time.monotonic() < deadline:
         packet = await backend.receive(timeout=min(receive_timeout, max(0.0, deadline - time.monotonic())))
@@ -922,7 +1063,28 @@ async def async_learn_remote_profile(
             continue
 
         packets_seen += 1
-        valid_packets += 1
+        try:
+            validate_frame(packet.frame)
+        except ProfileConflictError as exc:
+            return LearnResult(
+                success=False,
+                error_code=ERROR_CONTRADICTORY_PROFILE,
+                error=str(exc),
+                packets_seen=packets_seen,
+                valid_packets=valid_packets,
+            )
+        if observed_extended is None:
+            observed_extended = packet.frame.is_extended
+        elif observed_extended != packet.frame.is_extended:
+            return LearnResult(
+                success=False,
+                error_code=ERROR_CONTRADICTORY_PROFILE,
+                error="Commands must come from one remote and one protocol format.",
+                packets_seen=packets_seen,
+                valid_packets=valid_packets,
+            )
+        if not (observed_extended and thermostat_mode_active(packet.frame)):
+            valid_packets += 1
 
         if remote_id is None:
             remote_id = packet.remote_id
@@ -939,6 +1101,24 @@ async def async_learn_remote_profile(
                     "cannot determine one stable fireplace profile."
                 ),
             )
+
+        if observed_extended:
+            if thermostat_mode_active(packet.frame):
+                continue
+            extended_session.remote_id = remote_id
+            extended_session.packets_seen = packets_seen
+            extended_session.valid_packets = valid_packets
+            command = learning_command_key(packet.frame)
+            if command not in extended_commands:
+                extended_commands.add(command)
+                extended_session.packets.append(packet)
+            # Distinct controls provide derivation evidence; repeated manual
+            # observations can satisfy a caller's higher packet threshold.
+            result = derive_learn_result_from_session(extended_session, requirements=LearningRequirements())
+            if result is not None and (not result.success or valid_packets >= min_valid_packets):
+                result.final_packet = packet
+                return result
+            continue
 
         cmd1_samples.add((packet.frame.cmd1, packet.frame.err1))
         cmd2_samples.add((packet.frame.cmd2, packet.frame.err2))
@@ -991,6 +1171,8 @@ async def async_learn_remote_profile(
 
     error_code = ERROR_AMBIGUOUS_PROFILE if last_ambiguity else ERROR_TIMEOUT
     error = last_ambiguity if last_ambiguity else "Timed out before learning enough stable Proflame2 packets."
+    if observed_extended:
+        error = "Timed out waiting for enough different manual-mode commands. Turn OFF thermostat and SMART mode."
     return LearnResult(
         success=False,
         remote_id=remote_id,

@@ -6,15 +6,51 @@ the Home Assistant host by USB and does not require ESPHome firmware.
 Use this guide when you want a USB controller attached to the Home Assistant
 host.
 
+One YardStick can be assigned to one fireplace in this integration. Home
+Assistant rejects assigning a second fireplace to the same controller.
+Selecting among multiple YardStick USB radios is not currently supported.
+
 ## Capabilities
 
 | Capability | Supported |
 | --- | --- |
 | Control the fireplace | Yes |
 | Guided learning from the original remote | Yes |
+| RF bands | 315 MHz and 433 MHz (433.92 MHz) |
+| Remote protocols | Legacy and extended remotes, on either band |
 | Active listening after setup | No |
 | Home Assistant state updates from original remote | No |
 | Additional controller software required | No ESPHome firmware |
+
+## Radio Band
+
+Choose **315 MHz** or **433 MHz** during fireplace setup, before guided learning
+starts. **315 MHz is the default for most users.** Choose 433 MHz only if your
+original remote uses 433 or 433.92 MHz. The 433 MHz setting operates at 433.92 MHz.
+
+To check your remote:
+
+1. Look at the identification label on the back of the remote or inside its
+   battery cover. If it lists **315 MHz**, keep the default. If it lists
+   **433 MHz** or **433.92 MHz**, select 433 MHz.
+2. If the label does not show a frequency, note the **model/part number** and
+   check the radio-frequency specification in the remote or fireplace manual,
+   or confirm it with the manufacturer. Match the manual to your remote's
+   version; do not infer the frequency from digits within an FCC ID.
+
+For example, [SIT's transmitter instructions](https://proflame.sitgroup.it/media/94/t-file/Proflame_2_Transmitter_Use_and_Installation_Instructions.pdf)
+list the radio frequency under Technical Data. Use the documentation for your
+own remote version to confirm its frequency.
+
+Home Assistant creates your fireplace device automatically. To change the band
+later, open Settings → Devices & services → Devices → your fireplace, then
+change **RF band** in its Configuration section.
+
+Finish learning before changing bands. If a band change fails, fireplace
+controls pause. Select the desired band again to retry, even if it is already
+shown as selected.
+
+Existing YardStick installations keep 315 MHz unless another band was selected.
 
 ## Pros And Cons
 
@@ -63,7 +99,7 @@ sure the YardStick USB device is passed through to the Home Assistant runtime.
 
 If you see intermittent failures:
 
-- Confirm the YardStick device is still visible to Home Assistant.
+- Confirm the YardStick USB radio is still available to the Home Assistant host.
 - Check VM/container USB passthrough rules.
 - Try a different USB port or powered USB hub.
 - Try a USB extension cable to move the YardStick closer to the fireplace.
@@ -82,7 +118,8 @@ After the YardStick is connected and available to Home Assistant:
 5. Enter a fireplace short name.
 6. Select `YARD Stick One USB Controller` as the `Controller Type`.
 7. Select `Submit`.
-8. Start guided learning.
+8. Choose the RF band used by your remote (315 MHz for most users) and submit
+   the choice to start guided learning.
 9. Hold the original remote within about 3 feet of the YardStick controller.
 10. Follow the prompts and press the requested buttons on the original remote.
 11. Select the fireplace features your installation supports.
@@ -94,20 +131,29 @@ Guided learning connects the controller to your fireplace using the original
 remote. Home Assistant will ask you to press buttons on the original remote.
 Keep the remote within about 3 feet of the YardStick while learning.
 
+Turn OFF thermostat and SMART mode before starting. If either mode is detected
+on an extended remote, Home Assistant asks you to turn it off and continues
+automatically when the remote returns to manual mode. Follow the displayed
+instruction again after the mode change. If learning does not continue, press
+Power once after turning both modes off.
+
+Changes in room temperature, setpoint, or Fahrenheit/Celsius selection do not
+require restarting learning. Continue following the button prompts.
+
 When learning is complete, Home Assistant stores the values needed to control
 that fireplace.
 
 YardStick receive is used for guided learning only. YardStick does not keep Home
 Assistant updated when the original remote is used after setup.
 
-If YardStick guided learning cannot decode your remote but rtl_433 can, use
-[rtl_433-assisted manual learning](rtl433_manual_learning.md). YardStick still
-controls the fireplace after setup; the SDR and rtl_433 are only used to collect
-learning values.
+If YardStick guided learning cannot learn your remote, use the
+[rtl_433 Learning ID helper](Using_rtl_433_for_learning.md). YardStick still
+controls the fireplace after setup; the SDR and helper are only needed to
+generate the Learning ID.
 
-## Validation
+## Check Your Setup
 
-After setup, validate:
+After setup, check:
 
 - YardStick commands are accepted by the fireplace.
 - The original remote still controls the fireplace.

@@ -1,0 +1,2 @@
+# Optional offline IQ/lattice analysis only; never an HA/firmware dependency.
+numpy>=1.24,<3

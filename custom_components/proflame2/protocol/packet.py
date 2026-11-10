@@ -160,13 +160,11 @@ def state_from_frame(frame: ProflameFrame) -> FireplaceState:
         power=bool(frame.cmd1 & 0x01),
         thermostat=bool(frame.cmd1 & 0x02),
         light=(frame.cmd1 >> 4) & 0x07,
-        # Extended frames use this high bit as part of their learned manual
-        # frame template, not as the legacy CPI control field.
-        cpi=bool(frame.cmd1 & 0x80) and not frame.is_extended,
+        cpi=bool(frame.cmd1 & 0x80),
         flame=frame.cmd2 & 0x07,
         aux=bool(frame.cmd2 & 0x08),
         fan=(frame.cmd2 >> 4) & 0x07,
         front=bool(frame.cmd2 & 0x80),
     )
-    state.validate_observed(allow_thermostat=True)
+    state.validate_observed(allow_thermostat=True, allow_flame_off=True)
     return state

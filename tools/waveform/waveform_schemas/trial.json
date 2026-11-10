@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Waveform trial and independent physical outcome",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "trial_id", "source_alias", "command", "desired_state", "decoded_state", "prompt_monotonic_ns", "action_monotonic_ns", "rf_sample_start", "receiver_capture_ids", "retry_of", "outcome", "quality_flags", "notes"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "trial_id": {"type": "string", "minLength": 1},
+    "source_alias": {"type": "string", "minLength": 1},
+    "command": {"enum": ["light_6", "light_0", "fan_6", "fan_0", "power_off", "power_on", "quiet", "setup"]},
+    "desired_state": {"$ref": "#/$defs/state"},
+    "decoded_state": {"$ref": "#/$defs/state"},
+    "prompt_monotonic_ns": {"type": "integer", "minimum": 0},
+    "action_monotonic_ns": {"type": ["integer", "null"], "minimum": 0},
+    "rf_sample_start": {"type": ["integer", "null"], "minimum": 0},
+    "receiver_capture_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "retry_of": {"type": ["string", "null"]},
+    "outcome": {"enum": ["before_retry", "after_retry", "no_response", "ambiguous", "unobserved"]},
+    "quality_flags": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "notes": {"type": "string"}
+  },
+  "$defs": {
+    "state": {"type": ["object", "null"], "additionalProperties": false,
+      "properties": {
+        "power": {"type": "boolean"},
+        "flame": {"type": "integer", "minimum": 0, "maximum": 6},
+        "light": {"type": "integer", "minimum": 0, "maximum": 6},
+        "fan": {"type": "integer", "minimum": 0, "maximum": 6},
+        "thermostat": {"type": "boolean"},
+        "pilot": {"type": "boolean"},
+        "front": {"type": "boolean"},
+        "aux": {"type": "boolean"}
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+substitutions:
+  name: pf2-invalid-rf-band
+  friendly_name: PF2 Invalid Band
+  proflame2_package_ref: "main"
+  proflame2_asset_base_url: assets/icons
+  proflame2_rf_band: "868"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ap:
+    ssid: ${friendly_name} Fallback
+
+packages:
+  proflame2_tembed_base: !include packages/proflame2_tembed_base.yaml
+  proflame2_tembed_display: !include packages/proflame2_tembed_display.yaml
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [proflame2_tembed]

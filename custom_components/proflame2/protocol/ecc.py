@@ -78,7 +78,7 @@ def build_extended_integrity_byte(values: Iterable[int], final_xor: int) -> int:
     """Build one extended-frame interleaved integrity lane.
 
     The ten-word Proflame2 variant chains the C/D-free legacy transform across
-    alternating state words, then applies a fixed final XOR.  It is not a
+    alternating words, with an optional reduced-lane final XOR. It is not a
     legacy C/D ``Err`` byte and must not be passed to :func:`derive_ecc_profile`.
     """
 
@@ -98,19 +98,20 @@ def extended_frame_integrity_matches(words: Iterable[int]) -> bool:
     decoded_words = tuple(value & 0xFF for value in words)
     if len(decoded_words) != 10:
         return False
+    serial_id = int.from_bytes(bytes(decoded_words[:3]), "big")
+    return build_extended_integrity_words(serial_id, *decoded_words[3:8]) == decoded_words[8:]
+
+
+def build_extended_integrity_words(serial_id: int, w4: int, w5: int, w6: int, w7: int, w8: int) -> tuple[int, int]:
+    """Return serial-inclusive alternating-word integrity lanes ``W9/W10``.
+
+    The original 0x23/0x65 reduced-lane constants apply only to serial 08E905.
+    Including W1/W2/W3 reproduces those captures and supports other remotes.
+    """
+
     return (
-        build_extended_integrity_byte((decoded_words[4], decoded_words[6]), 0x23) == decoded_words[8]
-        and build_extended_integrity_byte((decoded_words[3], decoded_words[5], decoded_words[7]), 0x65)
-        == decoded_words[9]
-    )
-
-
-def build_extended_integrity_words(w4: int, w5: int, w6: int, w7: int, w8: int) -> tuple[int, int]:
-    """Return ``W9/W10`` for one generated ten-word Proflame2 frame."""
-
-    return (
-        build_extended_integrity_byte((w5, w7), 0x23),
-        build_extended_integrity_byte((w4, w6, w8), 0x65),
+        build_extended_integrity_byte(((serial_id >> 16) & 0xFF, serial_id & 0xFF, w5, w7), 0),
+        build_extended_integrity_byte(((serial_id >> 8) & 0xFF, w4, w6, w8), 0),
     )
 
 

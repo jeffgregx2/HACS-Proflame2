@@ -6,60 +6,49 @@
         "title": "Add fireplace profile",
         "menu_options": {
           "learn": "Learn from remote (Recommended)",
-          "manual_rtl433": "Learn from rtl_433 output",
-          "manual": "Manual entry"
+          "manual": "Enter a Learning ID",
+          "manual_legacy": "Enter legacy values"
         },
         "menu_option_descriptions": {
           "learn": "Use your selected LilyGO or YardStick controller to learn from the original remote.",
-          "manual_rtl433": "Use a separate SDR with rtl_433 to learn, then control the fireplace with LilyGO or YardStick.",
-          "manual": "Enter the permanent remote ID and learned C/D values directly."
+          "manual": "Use a Learning ID for your native remote. Supports legacy and extended remotes.",
+          "manual_legacy": "Enter a legacy remote ID and learned C/D values instead."
         }
       },
       "manual": {
-        "title": "Manual fireplace profile",
+        "title": "Enter a Learning ID",
+        "description": "Paste the Learning ID for your native remote. This supports both legacy and extended remotes.\n\nYou can copy an ID from an existing Proflame2 fireplace in Home Assistant or generate one using the companion Learning ID helper. See [Using Learning IDs]({learning_ids_url}) for instructions.\n\nSave the ID for future use: it describes the specific native remote used to generate it.\n\nFor legacy remotes with known Remote ID & C/D Values, choose Enter legacy values from the Proflame 2 Fireplace - Add entry option.",
+        "data": {
+          "name": "Fireplace name",
+          "fireplace_short_name": "Display short name",
+          "backend_type": "Controller Type",
+          "learning_id": "Learning ID"
+        }
+      },
+      "manual_legacy": {
+        "title": "Enter legacy values",
         "description": "Enter the permanent learned remote profile for one Proflame2 fireplace.",
         "data": {
           "name": "Fireplace name",
+          "fireplace_short_name": "Display short name",
           "backend_type": "Controller Type",
           "remote_id": "Remote ID",
           "c1": "C1",
           "d1": "D1",
           "c2": "C2",
-          "d2": "D2",
+          "d2": "D2"
+        }
+      },
+      "manual_features": {
+        "title": "Fireplace features (1 of 2)",
+        "description": "Select the features your fireplace supports. Continue to configure optional settings; changes are saved on the next page.",
+        "data": {
           "fan": "Fan supported",
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported"
+          "cpi": "CPI (Continuous Pilot Ignition) supported"
         }
-      },
-      "manual_rtl433": {
-        "title": "Learn from rtl_433 output",
-        "description": "Start rtl_433 outside Home Assistant before continuing. Run this command:\n\n    rtl_433 -f 315M -R 207 -M level -F json\n\nOnce the rtl_433 command is fully running, fill in the remaining fields on this form and select Submit.",
-        "data": {
-          "name": "Fireplace name",
-          "fireplace_short_name": "Display short name",
-          "backend_type": "Controller Type"
-        }
-      },
-      "manual_rtl433_esphome": {
-        "title": "Choose LilyGO ESPHome device",
-        "description": "{setup_text}",
-        "data": {
-          "esphome_entry_id": "LilyGO ESPHome device"
-        }
-      },
-      "manual_rtl433_prompt": {
-        "title": "Paste rtl_433 decoded row",
-        "description": "Ensure that the following command is running:\n`{rtl433_command}`\n\n**Do this now:**\n{instruction}\n\nPaste the newest rtl_433 JSON line that appears after this button press. Ignore duplicate lines from earlier button presses. See the {rtl433_manual_learning_guide} for details.\n\nThe integration has accepted {sample_count} sample(s) so far.",
-        "data": {
-          "rtl433_samples": "rtl_433 output"
-        }
-      },
-      "manual_rtl433_power_off": {
-        "title": "Remote learned",
-        "description": "Congratulations, the rtl_433 output allowed Home Assistant to learn your remote.\n\nSelect Submit to continue.",
-        "data": {}
       },
       "manual_esphome": {
         "title": "Choose LilyGO ESPHome device",
@@ -85,17 +74,14 @@
         }
       },
       "learn_features": {
-        "title": "Select supported features",
-        "description": "Learning found the permanent remote profile. Select the fireplace features that should be enabled.",
+        "title": "Fireplace features (1 of 2)",
+        "description": "Select the features your fireplace supports. Continue to configure optional settings; changes are saved on the next page.",
         "data": {
           "fan": "Fan supported",
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log",
-          "active_listening": "Enable active listening",
-          "fireplace_short_name": "Display short name"
+          "cpi": "CPI (Continuous Pilot Ignition) supported"
         }
       },
       "learn_failed": {
@@ -103,20 +89,44 @@
         "description": "Guided learning could not produce a trustworthy remote profile.\n\nReason: {error}",
         "menu_options": {
           "retry_learn": "Retry learning",
-          "manual_rtl433": "Learn from rtl_433 output",
-          "manual": "Manual entry"
+          "manual": "Enter a Learning ID",
+          "manual_legacy": "Enter legacy values"
         },
         "menu_option_descriptions": {
           "retry_learn": "Start guided learning again with the same backend.",
-          "manual_rtl433": "Run rtl_433 yourself, follow prompted remote button presses, and paste decoded rows.",
-          "manual": "Enter the permanent remote profile yourself instead."
+          "manual": "Use a Learning ID for your native remote. Supports legacy and extended remotes.",
+          "manual_legacy": "Enter a known legacy remote ID and C/D values."
+        }
+      },
+      "yardstick_band": {
+        "title": "Choose YardStick RF band",
+        "description": "315 MHz is the default for most users. Choose 433 MHz only if your original remote uses 433 or 433.92 MHz.\n\nCheck the remote's identification label on the back or inside the battery cover. If the frequency is not printed, use the model/part number on that label to check the remote or fireplace manual's radio-frequency specification. Do not infer the frequency from digits in an FCC ID.\n\nLearning starts after you submit this choice. You can change it later in the fireplace device's Configuration section. One controller supports one fireplace.",
+        "data": {
+          "rf_band": "RF band"
+        }
+      },
+      "optional_settings": {
+        "title": "Optional settings (2 of 2)",
+        "description": "Choose optional behavior, then submit to save both pages. Leave flame OFF support disabled unless your original remote supports it.",
+        "data": {
+          "refresh_period_minutes": "Refresh period in minutes",
+          "allow_flame_off_when_on": "Allow flame OFF while power is ON",
+          "active_listening": "Enable active listening",
+          "debug_logging": "Enable packet debug log"
+        },
+        "data_description": {
+          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF.",
+          "allow_flame_off_when_on": "Enable only if your original remote can turn the flame off while keeping the fireplace ON for lights or fan operation. Otherwise, leave this off.",
+          "active_listening": "Update Home Assistant when you use the original remote by keeping the radio in listening mode when not transmitting.",
+          "debug_logging": "Record detailed diagnostic information for troubleshooting. Leave this off unless requested for support."
         }
       }
     },
     "progress": {
-      "learn_remote": "Listening with {backend_name}.\n\n**Do this now:**\n**{instruction}**\n\nThis step times out after 2 minutes if no packet is observed. Close this dialog to cancel listening."
+      "learn_remote": "Listening with {backend_name}.\n\n**{header}**\n\n{instruction}\n\nComplete the requested action within 2 minutes. Repeated packets do not extend the timeout. Close this dialog to cancel listening."
     },
     "error": {
+      "invalid_learning_id": "Invalid Learning ID. Copy the complete ID, including its PF2 prefix. Check for missing characters or an unsupported version.",
       "invalid_remote_id": "Remote ID must be a 24-bit hexadecimal value.",
       "invalid_nibble": "C and D values must be integers from 0 to 15.",
       "invalid_profile": "The saved profile contains an invalid fireplace state.",
@@ -125,12 +135,12 @@
       "unknown_profile": "Choose an existing saved profile.",
       "required": "This field is required.",
       "invalid_esphome_entry": "Select a valid ESPHome device.",
-      "invalid_rtl433_samples": "Paste rtl_433 Proflame2 output containing id, cmd1, cmd2, err1, and err2.",
-      "rtl433_remote_id_mismatch": "All accepted rtl_433 rows must have the same remote ID.",
-      "rtl433_profile_derivation_failed": "Those rtl_433 rows contradict each other. Recapture the last button press and paste the decoded row again."
+      "invalid_refresh_period": "Enter a non-negative whole number of minutes (0 disables refresh).",
+      "invalid_rf_band": "Choose 315 MHz or 433 MHz."
     },
     "abort": {
-      "already_configured": "A fireplace with this remote ID is already configured for this controller."
+      "already_configured": "A fireplace with this remote ID is already configured for this controller.",
+      "controller_in_use": "This controller is already assigned to a fireplace. Each controller supports one fireplace. Select a different controller, or remove its existing fireplace entry before setting it up again."
     }
   },
   "options": {
@@ -138,27 +148,28 @@
       "invalid_profile": "The saved profile contains an invalid fireplace state.",
       "invalid_profile_name": "Profile name is required.",
       "duplicate_profile_id": "A saved profile with that name already exists.",
-      "unknown_profile": "Choose an existing saved profile."
+      "unknown_profile": "Choose an existing saved profile.",
+      "invalid_refresh_period": "Enter a non-negative whole number of minutes (0 disables refresh).",
+      "flame_zero_conflict": "Turn power OFF or select a positive flame before disabling this option. Edit or delete any saved profiles with power ON and flame 0, then try again."
     },
     "step": {
       "init": {
         "title": "Manage fireplace settings",
         "menu_options": {
-          "features": "Edit supported features",
+          "features": "Edit fireplace settings",
           "profiles": "Manage saved profiles"
         }
       },
       "features": {
-        "title": "Edit supported features",
+        "title": "Fireplace features (1 of 2)",
         "data": {
           "fan": "Fan supported",
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported",
-          "debug_logging": "Enable packet debug log",
-          "active_listening": "Enable active listening"
-        }
+          "cpi": "CPI (Continuous Pilot Ignition) supported"
+        },
+        "description": "Select the features your fireplace supports. Continue to configure optional settings; changes are saved on the next page."
       },
       "profiles": {
         "title": "Manage saved profiles",
@@ -207,6 +218,34 @@
         "description": "Delete saved profile: {profile_name}",
         "data": {
           "confirm": "Confirm delete"
+        }
+      },
+      "optional_settings": {
+        "title": "Optional settings (2 of 2)",
+        "description": "Choose optional behavior, then submit to save both pages. Leave flame OFF support disabled unless your original remote supports it.",
+        "data": {
+          "refresh_period_minutes": "Refresh period in minutes",
+          "allow_flame_off_when_on": "Allow flame OFF while power is ON",
+          "active_listening": "Enable active listening",
+          "debug_logging": "Enable packet debug log",
+          "fireplace_short_name": "Display short name"
+        },
+        "data_description": {
+          "refresh_period_minutes": "Resend the current ON state after this many minutes without a transmission or valid received command. Set to 0 to disable. No refresh is sent while the fireplace is OFF.",
+          "allow_flame_off_when_on": "Enable only if your original remote can turn the flame off while keeping the fireplace ON for lights or fan operation. Otherwise, leave this off.",
+          "active_listening": "Update Home Assistant when you use the original remote by keeping the radio in listening mode when not transmitting.",
+          "debug_logging": "Record detailed diagnostic information for troubleshooting. Leave this off unless requested for support."
+        }
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "rf_band": {
+        "name": "RF band",
+        "state": {
+          "315": "315 MHz",
+          "433": "433 MHz"
         }
       }
     }

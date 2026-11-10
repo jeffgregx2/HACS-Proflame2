@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Final
 
 from ..const import BACKEND_ESPHOME, BACKEND_FAKE, BACKEND_YARDSTICK
@@ -34,6 +35,13 @@ class BackendDefinition:
     available_in_prod: bool
     supports_learning: bool
     requires_esphome_entry: bool = False
+
+    @property
+    def supports_active_listening(self) -> bool:
+        """Read the backend's declared capability without constructing hardware."""
+        module_name, _, class_name = self.class_path.rpartition(".")
+        backend_class = getattr(import_module(module_name), class_name)
+        return backend_class.supports_active_listening
 
 
 BACKEND_REGISTRY: Final[dict[str, BackendDefinition]] = {

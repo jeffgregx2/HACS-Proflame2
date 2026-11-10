@@ -83,6 +83,9 @@ instance/
 # Sphinx documentation
 docs/_build/
 
+# Local-only documents and device-specific test data (all nested content).
+/docs/private/
+
 # PyBuilder
 .pybuilder/
 target/
@@ -149,6 +152,13 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+waveform.env
+native-pilot.json
+*.cu8
+*.cs8
+*.cf32
+session.tar.gz
+firmware.elf
 .venv
 .venv-macos/
 .venv-esphome/
@@ -228,13 +238,11 @@ __marimo__/
 #*#
 *~
 
-# Protocol debug data, we don't want that checked in
-analysis/
+# Legacy root working-data paths remain excluded as a privacy guard.
+# Local documents/data now live under the recursively ignored docs/private/.
+/analysis/
+/llm_prompts/
+/tmp/
 
 # Ignore any private rtl_433 build with added instrumentation
 rtl_433/
-
-llm_prompts
-
-# Ignore tmp directory used for testing and refactor
-tmp/

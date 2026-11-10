@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .ecc import build_extended_integrity_words, err1_for, err2_for
-from .models import FireplaceState, RemoteProfile
+from .models import EXTENDED_W4_FIXED_MASK, FireplaceState, RemoteProfile
 from .packet import ProflameFrame, ProflamePacket
 
 
@@ -34,21 +34,24 @@ def encode_state(
     profile: RemoteProfile,
     *,
     allow_power_off_flame: bool = False,
+    allow_flame_off_when_on: bool = False,
 ) -> ProflameFrame:
     """Encode a full-state fireplace command into a deterministic frame."""
 
-    state.validate_transmit(allow_power_off_flame=allow_power_off_flame)
+    state.validate_transmit(
+        allow_power_off_flame=allow_power_off_flame,
+        allow_flame_off_when_on=allow_flame_off_when_on,
+    )
     cmd1 = build_cmd1(state)
     cmd2 = build_cmd2(state)
 
     if profile.is_extended:
         template = profile.extended_template
         assert template is not None
-        # The high control bit is fixed by the learned manual-mode frame. The
-        # remaining state bits retain the established legacy command layout.
-        w4 = (template.w4_base & 0x80) | cmd1
+        # Pilot mode is current command state, not a permanently retained flag.
+        w4 = (template.w4_base & EXTENDED_W4_FIXED_MASK & ~0x80) | cmd1
         w5 = cmd2
-        w9, w10 = build_extended_integrity_words(w4, w5, template.w6, template.w7, template.w8)
+        w9, w10 = build_extended_integrity_words(profile.serial_id, w4, w5, template.w6, template.w7, template.w8)
         return ProflameFrame(
             serial_id=profile.serial_id,
             cmd1=w4,
@@ -74,6 +77,7 @@ def encode_packet(
     source: str | None = None,
     warnings: tuple[str, ...] | list[str] | None = None,
     allow_power_off_flame: bool = False,
+    allow_flame_off_when_on: bool = False,
 ) -> ProflamePacket:
     """Encode a semantic fireplace state into an operational packet."""
 
@@ -81,6 +85,7 @@ def encode_packet(
         state,
         profile,
         allow_power_off_flame=allow_power_off_flame,
+        allow_flame_off_when_on=allow_flame_off_when_on,
     )
     return ProflamePacket(
         remote_id=profile.serial_id,

@@ -26,3 +26,23 @@ ignore = [
 "tools/proflame_capture/lilygo_syslog_monitor.py" = ["E402"]
 "tools/proflame_capture/rtl433_monitor.py" = ["E402"]
 "tools/proflame_capture/run_capture_session.py" = ["E402"]
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proflame2-learning-id"
+version = "0.1.0"
+description = "Offline Proflame2 protocol library and rtl_433 Learning ID tool"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+proflame2-learning-id = "proflame2_learning_id.cli:main"
+
+[tool.setuptools]
+packages = ["proflame2_protocol", "proflame2_learning_id"]
+
+[tool.setuptools.package-dir]
+proflame2_protocol = "custom_components/proflame2/protocol"
+proflame2_learning_id = "tools/learning_id"

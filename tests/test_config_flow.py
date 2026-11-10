@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+import voluptuous as vol
 
 homeassistant = pytest.importorskip("homeassistant")
 pytest.importorskip("pytest_homeassistant_custom_component")
@@ -23,6 +26,7 @@ from custom_components.proflame2.const import (
     BACKEND_ESPHOME,
     BACKEND_YARDSTICK,
     CONF_ACTIVE_LISTENING,
+    CONF_ALLOW_FLAME_OFF_WHEN_ON,
     CONF_AUX,
     CONF_BACKEND_TYPE,
     CONF_C1,
@@ -32,20 +36,25 @@ from custom_components.proflame2.const import (
     CONF_D2,
     CONF_DEBUG_LOGGING,
     CONF_ESPHOME_ENTRY_ID,
+    CONF_EXTENDED_W4_BASE,
+    CONF_EXTENDED_W6,
+    CONF_EXTENDED_W7,
+    CONF_EXTENDED_W8,
     CONF_FAN,
     CONF_FIREPLACE_SHORT_NAME,
     CONF_FLAME,
     CONF_FRONT,
-    CONF_INITIAL_FRAME,
-    CONF_INITIAL_PACKET_SOURCE,
     CONF_LEARNING_DEBUG_LOGGING,
+    CONF_LEARNING_ID,
     CONF_LIGHT,
     CONF_NAME,
     CONF_POWER,
     CONF_PROFILE_ID,
     CONF_PROFILES,
+    CONF_PROTOCOL_VARIANT,
+    CONF_REFRESH_PERIOD_MINUTES,
     CONF_REMOTE_ID,
-    CONF_RTL433_SAMPLES,
+    CONF_RF_BAND,
     CONF_YARDSTICK_LEARNING_FREQUENCY_HZ,
     CONF_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DATA_FAKE_LEARNING_DELAY,
@@ -57,12 +66,24 @@ from custom_components.proflame2.const import (
     DATA_YARDSTICK_LEARNING_SWEEP_ENABLED,
     DOMAIN,
     PROTOCOL_VARIANT_EXTENDED_10_WORD,
+    PROTOCOL_VARIANT_LEGACY_7_WORD,
 )
 from custom_components.proflame2.learning import LearnSession
 from custom_components.proflame2.packet_debug import PacketDebugLogPaths
+from custom_components.proflame2.protocol.encoder import encode_state
+from custom_components.proflame2.protocol.learning_id import encode_learning_id
+from custom_components.proflame2.protocol.manual_profile import canonical_manual_profile
+from custom_components.proflame2.protocol.models import (
+    ECCProfile,
+    ExtendedFrameTemplate,
+    FireplaceFeatures,
+    FireplaceState,
+    RemoteProfile,
+)
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.fake import FakeRFBackend
 from custom_components.proflame2.rf.yardstick import YardStickBackendUnavailableError
+from custom_components.proflame2.runtime import async_get_runtime_entries
 from custom_components.proflame2.version import ENABLE_FAKE_BACKEND_ENV
 
 
@@ -82,6 +103,131 @@ def _form_schema_fields(data_schema):
     """
 
     return {str(marker.schema): selector for marker, selector in data_schema.schema.items()}
+
+
+@pytest.mark.parametrize("edit_short_name", [False, True])
+def test_refresh_form_is_serializable_and_requires_whole_minutes(edit_short_name):
+    from homeassistant.helpers import config_validation as cv
+    from probatio import to_field_list
+
+    from custom_components.proflame2.config_flow import (
+        FEATURE_SELECTION_SCHEMA,
+        _manual_legacy_profile_schema,
+        _manual_profile_schema,
+        _optional_settings_schema,
+    )
+
+    schema = _optional_settings_schema(edit_short_name=edit_short_name)
+    fields = to_field_list(schema, custom_serializer=cv.custom_serializer)
+    field = next(item for item in fields if item["name"] == CONF_REFRESH_PERIOD_MINUTES)
+    assert field["default"] == 0
+    for other in (FEATURE_SELECTION_SCHEMA, _manual_profile_schema(), _manual_legacy_profile_schema()):
+        assert CONF_REFRESH_PERIOD_MINUTES not in _form_schema_fields(other)
+    validator = _form_schema_fields(schema)[CONF_REFRESH_PERIOD_MINUTES]
+    assert validator(10) == 10
+    for value in (-1, 1.5, "invalid"):
+        with pytest.raises(vol.Invalid):
+            validator(value)
+
+
+@pytest.mark.parametrize("route", ["manual_legacy", "learning_id_legacy", "learning_id_extended", "learn_features"])
+async def test_refresh_period_initial_setup_routes(hass, route):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+    from custom_components.proflame2.learning import LearnResult
+
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    if route == "manual_legacy":
+        result = await flow.async_step_manual_legacy(
+            {
+                CONF_NAME: "Test",
+                CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+                CONF_REMOTE_ID: "123456",
+                CONF_C1: "5",
+                CONF_D1: "7",
+                CONF_C2: "1",
+                CONF_D2: "8",
+            }
+        )
+    elif route.startswith("learning_id_"):
+        result = await flow.async_step_manual(
+            {
+                CONF_NAME: "Test",
+                CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+                CONF_LEARNING_ID: (
+                    "PF2-1-E-CI2FNACCZAMYKTI4W4" if route.endswith("extended") else "PF2-1-L-CI2FMVYYTNVRS7Q"
+                ),
+            }
+        )
+    else:
+        flow._learn_input = {CONF_NAME: "Test", CONF_BACKEND_TYPE: BACKEND_YARDSTICK}
+        flow._learn_result = LearnResult(success=True, remote_id=0x123456, c1=5, d1=7, c2=1, d2=8)
+        result = await flow.async_step_learn_features()
+    if result.get("step_id") == "yardstick_band":
+        result = await flow.async_step_yardstick_band({CONF_RF_BAND: "315"})
+    assert result["step_id"] in ("manual_features", "learn_features")
+    submit = flow.async_step_learn_features if route == "learn_features" else flow.async_step_manual_features
+    result = await submit({CONF_LIGHT: False})
+    assert result["step_id"] == "optional_settings"
+    invalid = await flow.async_step_optional_settings({CONF_REFRESH_PERIOD_MINUTES: 1.5})
+    assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
+    assert not hass.config_entries.async_entries(DOMAIN)
+    result = await flow.async_step_optional_settings({CONF_REFRESH_PERIOD_MINUTES: 10})
+    result = await _finish_setup_pages(hass, result)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"][CONF_REFRESH_PERIOD_MINUTES] == 10
+    assert result["options"][CONF_LIGHT] is False
+
+
+async def test_refresh_options_preserve_saved_profiles_and_reopen(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_BACKEND_TYPE: BACKEND_YARDSTICK, CONF_REMOTE_ID: 0x123456},
+        options={
+            CONF_ACTIVE_LISTENING: True,
+            CONF_REFRESH_PERIOD_MINUTES: 10,
+            CONF_PROFILES: {"evening": {CONF_NAME: "Evening", CONF_POWER: True, CONF_FLAME: 3}},
+        },
+    )
+    entry.add_to_hass(hass)
+    menu = await hass.config_entries.options.async_init(entry.entry_id)
+    form = await hass.config_entries.options.async_configure(menu["flow_id"], {"next_step_id": "features"})
+    form = await hass.config_entries.options.async_configure(form["flow_id"], {})
+    assert form["step_id"] == "optional_settings"
+    invalid = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_REFRESH_PERIOD_MINUTES: True})
+    assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
+    result = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_REFRESH_PERIOD_MINUTES: 5})
+    assert result["data"][CONF_REFRESH_PERIOD_MINUTES] == 5
+    assert result["data"][CONF_PROFILES]["evening"][CONF_NAME] == "Evening"
+    assert result["data"][CONF_ACTIVE_LISTENING] is False
+    await hass.async_block_till_done()
+    menu = await hass.config_entries.options.async_init(entry.entry_id)
+    form = await hass.config_entries.options.async_configure(menu["flow_id"], {"next_step_id": "features"})
+    form = await hass.config_entries.options.async_configure(form["flow_id"], {})
+    marker = next(key for key in form["data_schema"].schema if key.schema == CONF_REFRESH_PERIOD_MINUTES)
+    assert marker.description["suggested_value"] == 5
+
+
+async def _finish_setup_pages(hass, result):
+    """Explicitly complete any remaining setup pages in older setup regressions."""
+    if result.get("step_id") in ("manual_features", "learn_features"):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    if result.get("step_id") == "optional_settings":
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    return result
+
+
+async def _submit_feature_settings(hass, manager, flow_id, values):
+    """Submit installed hardware and behavior on their respective real HA forms."""
+    features = {
+        key: value for key, value in values.items() if key in (CONF_FAN, CONF_LIGHT, CONF_FRONT, CONF_AUX, CONF_CPI)
+    }
+    settings = {key: value for key, value in values.items() if key not in features}
+    result = await manager.async_configure(flow_id, features)
+    assert result["step_id"] == "optional_settings"
+    if manager is hass.config_entries.flow:
+        settings.pop(CONF_FIREPLACE_SHORT_NAME, None)
+    return await manager.async_configure(flow_id, settings)
 
 
 def _packet(
@@ -107,7 +253,7 @@ def _packet(
 def _extended_packet(*, remote_id: int, cmd1: int, cmd2: int, w6: int = 0x15, w7: int = 0xE1) -> ProflamePacket:
     from custom_components.proflame2.protocol.ecc import build_extended_integrity_words
 
-    w9, w10 = build_extended_integrity_words(cmd1, cmd2, w6, w7, 0x00)
+    w9, w10 = build_extended_integrity_words(remote_id, cmd1, cmd2, w6, w7, 0x00)
     return ProflamePacket.from_frame(
         ProflameFrame(
             serial_id=remote_id,
@@ -264,6 +410,9 @@ async def test_config_flow_creates_entry_with_normalized_profile_data(hass) -> N
         },
     )
 
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_RF_BAND: "315"})
+
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Living Room Fireplace"
     assert result["data"][CONF_REMOTE_ID] == 0x3B3F02
@@ -279,6 +428,8 @@ async def test_config_flow_creates_entry_with_normalized_profile_data(hass) -> N
         CONF_CPI: False,
         CONF_DEBUG_LOGGING: False,
         CONF_ACTIVE_LISTENING: False,
+        CONF_REFRESH_PERIOD_MINUTES: 0,
+        CONF_ALLOW_FLAME_OFF_WHEN_ON: False,
         CONF_FIREPLACE_SHORT_NAME: "---",
         CONF_PROFILES: {},
     }
@@ -344,6 +495,7 @@ async def test_manual_entry_form_schema_exposes_fields(hass) -> None:
         context={"source": SOURCE_USER},
     )
     assert result["type"] is FlowResultType.MENU
+    assert "manual_legacy" in result["menu_options"]
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -352,136 +504,220 @@ async def test_manual_entry_form_schema_exposes_fields(hass) -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "manual"
-    assert _form_schema_fields(result["data_schema"])
+    assert set(_form_schema_fields(result["data_schema"])) == {
+        CONF_NAME,
+        CONF_FIREPLACE_SHORT_NAME,
+        CONF_BACKEND_TYPE,
+        CONF_LEARNING_ID,
+    }
 
 
-async def test_manual_rtl433_learning_captures_buttons_then_confirms_remote_learned(hass) -> None:
-    """rtl_433 manual learning should collect pasted rows before feature setup."""
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_USER},
-    )
-    assert "manual_rtl433" in result["menu_options"]
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={"next_step_id": "manual_rtl433"},
-    )
+async def test_legacy_values_button_retains_old_form(hass) -> None:
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual_legacy"})
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433"
+    assert result["step_id"] == "manual_legacy"
+    fields = _form_schema_fields(result["data_schema"])
+    assert {CONF_REMOTE_ID, CONF_C1, CONF_D1, CONF_C2, CONF_D2}.issubset(fields)
+    assert CONF_LEARNING_ID not in fields
 
+
+async def test_setup_menus_use_learning_ids_instead_of_json_paste(hass) -> None:
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    assert (await flow.async_step_user())["menu_options"] == ["learn", "manual", "manual_legacy"]
+    assert (await flow.async_step_learn_failed())["menu_options"] == ["retry_learn", "manual", "manual_legacy"]
+    text = json.loads(Path("custom_components/proflame2/translations/en.json").read_text())["config"]["step"]
+    for step in ("user", "learn_failed"):
+        assert "manual_rtl433" not in text[step]["menu_options"]
+        assert "rtl_433" not in json.dumps(text[step])
+    assert not any(step.startswith("manual_rtl433") for step in text)
+
+
+@pytest.mark.parametrize("extended", [False, True])
+async def test_learning_id_import_loads_complete_runtime_profile(hass, monkeypatch, extended) -> None:
+    """Exercise the UI, persisted fields, sensor, and TX encoder end to end."""
+    _enable_fake_backend(monkeypatch)
+    profile = RemoteProfile(
+        0x123456,
+        ECCProfile(0, 0, 0, 0) if extended else ECCProfile(5, 7, 1, 8),
+        FireplaceFeatures(fan=True, light=False, front=True, aux=True, cpi=False),
+        PROTOCOL_VARIANT_EXTENDED_10_WORD if extended else PROTOCOL_VARIANT_LEGACY_7_WORD,
+        ExtendedFrameTemplate(0x84, 0x50, 0xC8, 2) if extended else None,
+    )
+    token = encode_learning_id(profile)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        user_input={
-            CONF_NAME: "Living Room Fireplace",
-            CONF_FIREPLACE_SHORT_NAME: "---",
-            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+        {
+            CONF_NAME: "Imported Fireplace",
+            CONF_FIREPLACE_SHORT_NAME: " TEST ",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_LEARNING_ID: f"  {token}\n",
         },
     )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_prompt"
-    assert "**Power**" in result["description_placeholders"]["instruction"]
-    assert result["description_placeholders"]["rtl433_command"] == "rtl_433 -f 315M -R 207 -M level -F json"
-    assert (
-        "rtl_433-assisted manual learning guide" in result["description_placeholders"]["rtl433_manual_learning_guide"]
-    )
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=01 cmd2=16 err1=76 err2=ef"},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_prompt"
-    assert "**Temp Down**" in result["description_placeholders"]["instruction"]
-    assert result["description_placeholders"]["sample_count"] == "1"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=31 cmd2=26 err1=25 err2=bc"},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_prompt"
-    assert "**Temp Up**" in result["description_placeholders"]["instruction"]
-    assert result["description_placeholders"]["sample_count"] == "2"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=51 cmd2=36 err1=83 err2=8d"},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_power_off"
-
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={})
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "learn_features"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_FAN: True,
-            CONF_LIGHT: True,
-            CONF_FRONT: False,
-            CONF_AUX: False,
-            CONF_CPI: False,
-            CONF_DEBUG_LOGGING: False,
-            CONF_ACTIVE_LISTENING: False,
-            CONF_FIREPLACE_SHORT_NAME: "---",
-        },
-    )
+    assert result["step_id"] == "manual_features"
+    assert not hass.config_entries.async_entries(DOMAIN)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], asdict(profile.features))
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_BACKEND_TYPE] == BACKEND_YARDSTICK
-    assert result["data"][CONF_REMOTE_ID] == 0x3B3F02
-    assert result["data"][CONF_C1] == 5
-    assert result["data"][CONF_D1] == 7
-    assert result["data"][CONF_C2] == 1
-    assert result["data"][CONF_D2] == 8
-    assert result["data"][CONF_INITIAL_PACKET_SOURCE] == "rtl433_manual"
-    assert result["data"][CONF_INITIAL_FRAME]["cmd1"] == 0x51
-    assert result["data"][CONF_INITIAL_FRAME]["cmd2"] == 0x36
+    assert result["data"][CONF_REMOTE_ID] == profile.serial_id
+    assert result["data"][CONF_PROTOCOL_VARIANT] == profile.protocol_variant
+    assert CONF_LEARNING_ID not in result["data"]
+    assert CONF_LEARNING_ID not in result["options"]
+    assert result["options"][CONF_FIREPLACE_SHORT_NAME] == "TEST"
+    assert {key: result["options"][key] for key in asdict(profile.features)} == asdict(profile.features)
+    if extended:
+        assert all(key not in result["data"] for key in (CONF_C1, CONF_D1, CONF_C2, CONF_D2))
+        assert [
+            result["data"][key] for key in (CONF_EXTENDED_W4_BASE, CONF_EXTENDED_W6, CONF_EXTENDED_W7, CONF_EXTENDED_W8)
+        ] == [0x80, 20, 0xC8, 0]
+    profile = canonical_manual_profile(profile)
+    await hass.async_block_till_done()
+    result = await _finish_setup_pages(hass, result)
+    entry = result["result"]
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    assert runtime.remote_profile == profile
+    assert runtime.learning_id == token
+    state = FireplaceState(True, flame=4, fan=3, front=True, aux=True)
+    assert encode_state(state, runtime.remote_profile) == encode_state(state, profile)
+    assert hass.states.get("sensor.imported_fireplace_learning_id").state == token
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert async_get_runtime_entries(hass)[entry.entry_id].remote_profile == profile
 
 
-async def test_manual_rtl433_learning_rejects_invalid_paste_without_advancing(hass) -> None:
-    """Invalid rtl_433 rows should keep the user on the same prompt."""
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_USER},
-    )
+@pytest.mark.parametrize("invalid", ["", "not-an-id", "PF2-1-L-CI2FMA2XDBVBZFK7", "PF2-1-L-CI2FMA2XDBVBZFKA"])
+async def test_learning_id_import_errors_allow_correction(hass, monkeypatch, invalid, caplog) -> None:
+    _enable_fake_backend(monkeypatch)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        user_input={"next_step_id": "manual_rtl433"},
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_NAME: "Living Room Fireplace",
-            CONF_FIREPLACE_SHORT_NAME: "---",
-            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+        {
+            CONF_NAME: "Imported Fireplace",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_LEARNING_ID: invalid,
         },
     )
-
+    assert result["step_id"] == "manual"
+    assert result["errors"] == {CONF_LEARNING_ID: "invalid_learning_id"}
+    assert not hass.config_entries.async_entries(DOMAIN)
+    if invalid:
+        assert invalid not in caplog.text
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        user_input={CONF_RTL433_SAMPLES: "id=3b3f02 cmd1=01 cmd2=16 err1=76"},
+        {
+            CONF_NAME: "Imported Fireplace",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_LEARNING_ID: "PF2-1-L-CI2FMVYYTNVRS7Q",
+        },
     )
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual_rtl433_prompt"
-    assert result["errors"] == {CONF_RTL433_SAMPLES: "invalid_rtl433_samples"}
-    assert result["description_placeholders"]["sample_count"] == "0"
-    assert "**Power**" in result["description_placeholders"]["instruction"]
+    assert result["step_id"] == "manual_features"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await _finish_setup_pages(hass, result)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
-def test_manual_rtl433_prompt_translation_warns_about_duplicate_output() -> None:
-    """The user-facing paste prompt should warn about delayed duplicate rtl_433 rows."""
+@pytest.mark.parametrize("extended", [False, True])
+async def test_learning_id_esphome_import_links_and_rejects_duplicates(hass, extended) -> None:
+    """Both protocols retain controller validation and per-controller uniqueness."""
+    linked = MockConfigEntry(domain="esphome", title="Test Controller", data={})
+    linked.add_to_hass(hass)
+    token = "PF2-1-E-CI2FNACCZAMYKTI4W4" if extended else "PF2-1-L-CI2FMVYYTNVRS7Q"
+    for duplicate in (False, True):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Imported Fireplace",
+                CONF_BACKEND_TYPE: BACKEND_ESPHOME,
+                CONF_LEARNING_ID: token,
+            },
+        )
+        assert result["step_id"] == "manual_esphome"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_ESPHOME_ENTRY_ID: linked.entry_id}
+        )
+        if duplicate:
+            assert result["type"] is FlowResultType.ABORT
+            assert result["reason"] == "controller_in_use"
+        else:
+            assert result["step_id"] == "manual_features"
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_ACTIVE_LISTENING: True})
+            result = await _finish_setup_pages(hass, result)
+            assert result["type"] is FlowResultType.CREATE_ENTRY
+            assert result["data"][CONF_ESPHOME_ENTRY_ID] == linked.entry_id
+            assert result["options"][CONF_ACTIVE_LISTENING] is True
+            assert CONF_LEARNING_ID not in result["data"]
 
-    translations = Path("custom_components/proflame2/translations/en.json").read_text(encoding="utf-8")
 
-    assert "Paste the newest rtl_433 JSON line" in translations
-    assert "Ignore duplicate lines from earlier button presses" in translations
-    assert "{rtl433_manual_learning_guide}" in translations
-    assert "github.com/jeffgregx2/HACS-Proflame2/blob/main/docs/rtl433_manual_learning.md" not in translations
+def test_learning_id_and_legacy_form_labels_are_translated() -> None:
+    text = json.loads((Path(__file__).parents[1] / "custom_components/proflame2/translations/en.json").read_text())[
+        "config"
+    ]
+    assert text["step"]["user"]["menu_options"]["manual"] == "Enter a Learning ID"
+    assert text["step"]["user"]["menu_options"]["manual_legacy"] == "Enter legacy values"
+    assert text["step"]["manual"]["data"][CONF_LEARNING_ID] == "Learning ID"
+    assert "invalid_learning_id" in text["error"]
+
+
+@pytest.mark.parametrize("invalid_input", [False, True])
+async def test_learning_id_form_links_to_dedicated_help_without_receiver_details(hass, monkeypatch, invalid_input):
+    """Initial and validation-error forms retain usable, ref-aware Markdown links."""
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    monkeypatch.setenv("PROFLAME2_DOCUMENTATION_REF", "dev")
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    data = {CONF_NAME: "Fireplace", CONF_BACKEND_TYPE: BACKEND_YARDSTICK, CONF_LEARNING_ID: "invalid"}
+    result = await flow.async_step_manual(data if invalid_input else None)
+    assert result["step_id"] == "manual"
+    links = result["description_placeholders"]
+    assert set(links) == {"learning_ids_url"}
+    assert links["learning_ids_url"].endswith("/blob/dev/docs/add_fireplace_profile.md#Using_learning_ids")
+    translation = json.loads(Path("custom_components/proflame2/translations/en.json").read_text())["config"]
+    description = translation["step"]["manual"]["description"].format(**links)
+    assert f"]({links['learning_ids_url']})" in description
+    assert "Save the ID for future use" in description
+    assert "{" not in description
+    assert "rtl_433" not in description
+    assert "companion Learning ID helper" in description
+    assert bool(result["errors"]) == invalid_input
+
+
+async def test_learning_id_feature_selection_validates_options_and_rechecks_ownership(hass):
+    """A controller claimed while the feature form is open cannot be reused."""
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    form = await flow.async_step_manual(
+        {
+            CONF_NAME: "Imported",
+            CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
+            CONF_LEARNING_ID: "PF2-1-L-CI2FMVYYTNVRS7Q",
+            CONF_REFRESH_PERIOD_MINUTES: 10,
+        }
+    )
+    assert form["step_id"] == "yardstick_band"
+    form = await flow.async_step_yardstick_band({CONF_RF_BAND: "315"})
+    assert form["step_id"] == "manual_features"
+    await flow.async_step_manual_features({CONF_LIGHT: False})
+    invalid = await flow.async_step_optional_settings({CONF_REFRESH_PERIOD_MINUTES: 1.5})
+    assert invalid["errors"] == {CONF_REFRESH_PERIOD_MINUTES: "invalid_refresh_period"}
+    assert not hass.config_entries.async_entries(DOMAIN)
+    other = MockConfigEntry(domain=DOMAIN, data={CONF_BACKEND_TYPE: BACKEND_YARDSTICK, CONF_REMOTE_ID: 0x654321})
+    other.add_to_hass(hass)
+    result = await flow.async_step_optional_settings({CONF_REFRESH_PERIOD_MINUTES: 10})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "controller_in_use"
+    assert hass.config_entries.async_entries(DOMAIN) == [other]
 
 
 async def test_manual_entry_form_exposes_only_hardware_backends_by_default(hass) -> None:
@@ -538,6 +774,7 @@ async def test_yaml_learning_debug_override_enables_initial_guided_learning_debu
         esphome_entry_id: str | None = None,
         timeout: float,
         receive_timeout: float,
+        rf_band: str = "315",
     ) -> LearnSession:
         assert backend_type == BACKEND_YARDSTICK
         assert esphome_entry_id is None
@@ -574,6 +811,8 @@ async def test_yaml_learning_debug_override_enables_initial_guided_learning_debu
             CONF_BACKEND_TYPE: BACKEND_YARDSTICK,
         },
     )
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_RF_BAND: "315"})
 
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     assert captured_debug_flags == [True]
@@ -687,6 +926,7 @@ async def test_manual_esphome_entry_can_create_entry_with_linked_device(hass) ->
         },
     )
 
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_BACKEND_TYPE] == BACKEND_ESPHOME
     assert result["data"][CONF_ESPHOME_ENTRY_ID] == linked_entry.entry_id
@@ -781,6 +1021,7 @@ async def test_duplicate_remote_id_is_allowed_for_different_controller(hass) -> 
         },
     )
 
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_BACKEND_TYPE] == BACKEND_ESPHOME
 
@@ -808,6 +1049,8 @@ async def test_options_flow_updates_feature_flags(hass) -> None:
                 CONF_CPI: False,
             },
         )
+        create_result = await hass.config_entries.flow.async_configure(create_result["flow_id"], {CONF_RF_BAND: "315"})
+        create_result = await _finish_setup_pages(hass, create_result)
         config_entry = create_result["result"]
     else:
         config_entry = entry[0]
@@ -822,9 +1065,11 @@ async def test_options_flow_updates_feature_flags(hass) -> None:
     assert options_result["type"] is FlowResultType.FORM
     assert options_result["step_id"] == "features"
 
-    options_result = await hass.config_entries.options.async_configure(
+    options_result = await _submit_feature_settings(
+        hass,
+        hass.config_entries.options,
         options_result["flow_id"],
-        user_input={
+        {
             CONF_FAN: False,
             CONF_LIGHT: True,
             CONF_FRONT: True,
@@ -843,6 +1088,8 @@ async def test_options_flow_updates_feature_flags(hass) -> None:
         CONF_CPI: False,
         CONF_DEBUG_LOGGING: False,
         CONF_ACTIVE_LISTENING: False,
+        CONF_REFRESH_PERIOD_MINUTES: 0,
+        CONF_ALLOW_FLAME_OFF_WHEN_ON: False,
         CONF_FIREPLACE_SHORT_NAME: "---",
         CONF_PROFILES: {},
     }
@@ -882,6 +1129,7 @@ async def test_options_flow_persists_and_reopens_debug_logging(hass, monkeypatch
             CONF_CPI: False,
         },
     )
+    create_result = await _finish_setup_pages(hass, create_result)
     config_entry = create_result["result"]
 
     options_result = await hass.config_entries.options.async_init(config_entry.entry_id)
@@ -889,9 +1137,11 @@ async def test_options_flow_persists_and_reopens_debug_logging(hass, monkeypatch
         options_result["flow_id"],
         user_input={"next_step_id": "features"},
     )
-    options_result = await hass.config_entries.options.async_configure(
+    options_result = await _submit_feature_settings(
+        hass,
+        hass.config_entries.options,
         options_result["flow_id"],
-        user_input={
+        {
             CONF_FAN: True,
             CONF_LIGHT: True,
             CONF_FRONT: False,
@@ -911,6 +1161,7 @@ async def test_options_flow_persists_and_reopens_debug_logging(hass, monkeypatch
         user_input={"next_step_id": "features"},
     )
     assert reopened["type"] is FlowResultType.FORM
+    reopened = await hass.config_entries.options.async_configure(reopened["flow_id"], {})
     debug_marker = next(
         key for key in reopened["data_schema"].schema if getattr(key, "schema", None) == CONF_DEBUG_LOGGING
     )
@@ -951,6 +1202,7 @@ async def test_options_profile_edits_preserve_debug_logging(hass, monkeypatch) -
             CONF_CPI: False,
         },
     )
+    create_result = await _finish_setup_pages(hass, create_result)
     config_entry = create_result["result"]
     hass.config_entries.async_update_entry(
         config_entry,
@@ -1011,6 +1263,8 @@ async def test_multiple_config_entries_are_allowed(hass, monkeypatch) -> None:
             CONF_CPI: False,
         },
     )
+    first = await hass.config_entries.flow.async_configure(first["flow_id"], {CONF_RF_BAND: "315"})
+
     second = await hass.config_entries.flow.async_init(
         DOMAIN,
         context={"source": SOURCE_USER},
@@ -1030,7 +1284,9 @@ async def test_multiple_config_entries_are_allowed(hass, monkeypatch) -> None:
         },
     )
 
+    first = await _finish_setup_pages(hass, first)
     assert first["type"] is FlowResultType.CREATE_ENTRY
+    second = await _finish_setup_pages(hass, second)
     assert second["type"] is FlowResultType.CREATE_ENTRY
 
 
@@ -1070,6 +1326,7 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass, monkeypatch)
     )
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     assert result["step_id"] == "learn_progress"
+    assert result["description_placeholders"]["header"] == "Step 1 of 4"
     assert result["description_placeholders"]["instruction"] == (
         "Press the Power button once. The fireplace does not need to start in any specific state."
     )
@@ -1078,9 +1335,11 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass, monkeypatch)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "learn_features"
 
-    result = await hass.config_entries.flow.async_configure(
+    result = await _submit_feature_settings(
+        hass,
+        hass.config_entries.flow,
         result["flow_id"],
-        user_input={
+        {
             CONF_FAN: True,
             CONF_LIGHT: True,
             CONF_FRONT: False,
@@ -1090,6 +1349,7 @@ async def test_config_flow_can_learn_profile_and_create_entry(hass, monkeypatch)
         },
     )
 
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Living Room Fireplace"
     assert result["data"][CONF_REMOTE_ID] == 0x3B3F02
@@ -1128,9 +1388,11 @@ async def test_extended_rmt_learning_creates_manual_profile(hass, monkeypatch) -
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "learn_features"
 
-    result = await hass.config_entries.flow.async_configure(
+    result = await _submit_feature_settings(
+        hass,
+        hass.config_entries.flow,
         result["flow_id"],
-        user_input={
+        {
             CONF_FAN: True,
             CONF_LIGHT: True,
             CONF_FRONT: False,
@@ -1140,11 +1402,12 @@ async def test_extended_rmt_learning_creates_manual_profile(hass, monkeypatch) -
         },
     )
 
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_REMOTE_ID] == 0x08E905
     assert result["data"]["protocol_variant"] == PROTOCOL_VARIANT_EXTENDED_10_WORD
     assert result["data"]["extended_w4_base"] == 0x80
-    assert result["data"]["extended_w6"] == 0x15
+    assert result["data"]["extended_w6"] == 20
     assert result["data"]["extended_w7"] == 0xC8
     assert result["data"]["extended_w8"] == 0x00
 
@@ -1173,12 +1436,14 @@ async def test_guided_learning_prompt_reuses_pending_capture_task(hass, monkeypa
     )
     flow = hass.config_entries.flow._progress[result["flow_id"]]
     original_task = flow._learn_task
+    original_action_number = flow._learn_action_number
     assert original_task is not None
 
     duplicate_result = await flow.async_step_learn_prompt()
 
     assert duplicate_result["type"] is FlowResultType.SHOW_PROGRESS
     assert flow._learn_task is original_task
+    assert flow._learn_action_number == original_action_number
     assert len(backend.receive_queue) == 4
 
     result = await _advance_guided_learning(hass, result["flow_id"], result)
@@ -1284,10 +1549,10 @@ async def test_config_flow_can_fallback_to_manual_after_learn_failure(hass, monk
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        user_input={"next_step_id": "manual"},
+        user_input={"next_step_id": "manual_legacy"},
     )
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "manual"
+    assert result["step_id"] == "manual_legacy"
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -1299,14 +1564,10 @@ async def test_config_flow_can_fallback_to_manual_after_learn_failure(hass, monk
             CONF_D1: "7",
             CONF_C2: "1",
             CONF_D2: "8",
-            CONF_FAN: True,
-            CONF_LIGHT: True,
-            CONF_FRONT: False,
-            CONF_AUX: False,
-            CONF_CPI: False,
         },
     )
 
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_BACKEND_TYPE] == "fake"
 
@@ -1332,6 +1593,8 @@ async def test_config_flow_surfaces_clean_yardstick_backend_unavailable_error(ha
             CONF_BACKEND_TYPE: "yardstick",
         },
     )
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_RF_BAND: "315"})
 
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "learn_failed"
@@ -1399,6 +1662,7 @@ async def test_config_flow_retry_can_succeed_after_initial_failure(hass, monkeyp
         },
     )
 
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_REMOTE_ID] == 0x3B3F02
 
@@ -1426,6 +1690,7 @@ async def test_options_flow_can_add_edit_and_delete_saved_profile(hass, monkeypa
             CONF_CPI: False,
         },
     )
+    create_result = await _finish_setup_pages(hass, create_result)
     config_entry = create_result["result"]
 
     options_result = await hass.config_entries.options.async_init(config_entry.entry_id)
@@ -1543,6 +1808,7 @@ async def test_options_flow_rejects_duplicate_profile_ids(hass, monkeypatch) -> 
             CONF_CPI: False,
         },
     )
+    create_result = await _finish_setup_pages(hass, create_result)
     config_entry = create_result["result"]
     hass.config_entries.async_update_entry(
         config_entry,
@@ -1648,6 +1914,399 @@ async def test_same_remote_id_can_be_used_with_two_different_linked_lilygo_entri
         },
     )
 
+    result = await _finish_setup_pages(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_ESPHOME_ENTRY_ID] == second_controller.entry_id
     assert result["options"][CONF_FIREPLACE_SHORT_NAME] == "BR"
+
+
+@pytest.mark.parametrize("initial_power_off", [False, True])
+async def test_extended_mode_recovery_updates_both_displays_and_keeps_prompt(hass, monkeypatch, initial_power_off):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+    from custom_components.proflame2.learning import MANUAL_MODE_INSTRUCTION
+
+    _enable_fake_backend(monkeypatch)
+    backend = ExtendedFrameFakeRFBackend()
+    display = []
+    progress = []
+
+    async def update_learning_mode(**state):
+        display.append(state)
+
+    original = Proflame2ConfigFlow.async_show_progress
+
+    def show_progress(self, **kwargs):
+        progress.append(kwargs["description_placeholders"])
+        return original(self, **kwargs)
+
+    backend.update_learning_mode = update_learning_mode
+    monkeypatch.setattr(Proflame2ConfigFlow, "async_show_progress", show_progress)
+    if initial_power_off:
+        # A thermostat remote can first send OFF, advancing to "Power again"
+        # before its next ON packet identifies the active thermostat mode.
+        backend.queue_packets(_extended_packet(remote_id=0x123456, cmd1=0x84, cmd2=6, w6=79))
+    backend.queue_packets(
+        *[
+            _extended_packet(remote_id=0x123456, cmd1=w4, cmd2=w5, w6=w6)
+            for w4, w5, w6 in (
+                (0x86, 0, 79),
+                (0x87, 0, 79),
+                (0x85, 6, 79),  # pause, SMART, exit baseline
+                (0x85, 6, 79),
+                (0x81, 6, 26),  # repeat and units switch do not advance
+                (0x80, 6, 26),
+                (0x81, 6, 25),
+                (0x80, 6, 25),
+                (0x85, 5, 78),
+            )
+        ]
+    )
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.001
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "learn"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "Mode recovery", CONF_BACKEND_TYPE: "fake"}
+    )
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["step_id"] == "learn_features"
+    mode_header, _, mode_instruction = MANUAL_MODE_INSTRUCTION.partition("\n")
+    mode_progress = [state for state in progress if state["header"] == mode_header.strip()]
+    assert mode_progress
+    assert all(state["instruction"] == mode_instruction for state in mode_progress)
+    assert MANUAL_MODE_INSTRUCTION.startswith("Thermostat or SMART mode detected.  \nTurn OFF")
+    mode_messages = [state for state in display if state.get("instruction") == MANUAL_MODE_INSTRUCTION]
+    assert mode_messages
+    assert {state["step_title"] for state in mode_messages} == {"Learn 3" if initial_power_off else "Learn 2"}
+    mode_position = progress.index(mode_progress[0])
+    resumed = next(state for state in progress[mode_position + 1 :] if state["header"] != mode_header.strip())
+    assert resumed["header"] == f"Step {4 if initial_power_off else 3} of 4"
+    accepted = [state for state in display if state.get("status") == "Packet accepted"]
+    assert [state["step_title"] for state in accepted] == (
+        ["Learn 1", "Learn 4", "Learn 5", "Learn 7"]
+        if initial_power_off
+        else ["Learn 3", "Learn 4", "Learn 5", "Learn 6"]
+    )
+    assert not backend.connected
+
+
+def test_additional_learning_prompts_have_distinct_step_numbers():
+    """Repeated extra instructions remain distinguishable without a fixed total."""
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    flow = Proflame2ConfigFlow()
+    flow._learn_input = {CONF_BACKEND_TYPE: BACKEND_YARDSTICK}
+    flow._learn_prompt_index = 4
+    flow._learn_action_number = 5
+    first = flow._learn_progress_placeholders()
+    flow._learn_prompt_index = 5
+    flow._learn_action_number = 6
+    second = flow._learn_progress_placeholders()
+    assert first["header"] == "Additional step 5"
+    assert second["header"] == "Additional step 6"
+    assert first["instruction"] == second["instruction"]
+    assert "Flame Down or Flame Up" in first["instruction"]
+
+
+def test_learning_progress_layout_separates_header_and_instructions():
+    """Keep a compact header and paragraph break within HA's centered layout."""
+    translation = json.loads(
+        (Path(__file__).parents[1] / "custom_components/proflame2/translations/en.json").read_text()
+    )
+    template = translation["config"]["progress"]["learn_remote"]
+    text = template.format(backend_name="YardStick", header="Step 1 of 4", instruction="Press Power once.")
+    assert "**Step 1 of 4**\n\nPress Power once." in text
+    assert "Do this now" not in text
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("initially_on,interrupt_flame", [(False, False), (True, False), (False, True)])
+async def test_learning_checks_power_before_requesting_flame(
+    hass, monkeypatch, extended, initially_on, interrupt_flame
+):
+    """An ON starting state must not leave the user adjusting flame while OFF."""
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    _enable_fake_backend(monkeypatch)
+    backend = ExtendedFrameFakeRFBackend() if extended else FakeRFBackend()
+    progress = []
+    original = Proflame2ConfigFlow.async_show_progress
+
+    def show_progress(self, **kwargs):
+        progress.append(kwargs["description_placeholders"])
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(Proflame2ConfigFlow, "async_show_progress", show_progress)
+
+    def packet(power, flame=6):
+        if extended:
+            return _extended_packet(remote_id=0x3B3F02, cmd1=0x80 | int(power), cmd2=flame)
+        return _packet(
+            remote_id=0x3B3F02,
+            cmd1=int(power),
+            err1=0x76 if power else 0x57,
+            cmd2=flame,
+            err2=0xDE if flame == 6 else 0xBD,
+        )
+
+    backend.queue_packets(packet(not initially_on), packet(initially_on), packet(not initially_on))
+    if interrupt_flame:
+        backend.queue_packets(packet(False))
+    if initially_on or interrupt_flame:
+        # Repeated OFF frames cannot satisfy the corrective power-ON prompt.
+        backend.queue_packets(packet(False), packet(False), packet(True))
+    backend.queue_packets(packet(True, 5))
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.001
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "learn"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "Power prerequisite", CONF_BACKEND_TYPE: "fake"}
+    )
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["step_id"] == "learn_features"
+    corrections = [state for state in progress if "The fireplace is OFF" in state["instruction"]]
+    assert bool(corrections) is (initially_on or interrupt_flame)
+    if corrections:
+        assert {state["header"] for state in corrections} == (
+            {"Additional step 5"} if interrupt_flame else {"Step 4 of 4"}
+        )
+        correction_position = progress.index(corrections[-1])
+        resumed = progress[correction_position + 1]
+        assert resumed["header"] == f"Additional step {6 if interrupt_flame else 5}"
+        assert resumed["instruction"] == "Press the Flame Down button once."
+    assert not backend.connected
+
+
+async def test_additional_evidence_requests_continue_global_action_number(hass, monkeypatch):
+    """Extra evidence uses the same displayed counter as normal and corrective requests."""
+    from custom_components.proflame2 import config_flow
+    from custom_components.proflame2.protocol.ecc import build_err_byte
+
+    _enable_fake_backend(monkeypatch)
+    backend = FakeRFBackend()
+    progress = []
+    original_show = config_flow.Proflame2ConfigFlow.async_show_progress
+    original_derive = config_flow.derive_learn_result_from_session
+
+    def show_progress(self, **kwargs):
+        progress.append(kwargs["description_placeholders"]["header"])
+        return original_show(self, **kwargs)
+
+    def require_more_evidence(session):
+        return None if len(session.packets) < 5 else original_derive(session)
+
+    monkeypatch.setattr(config_flow.Proflame2ConfigFlow, "async_show_progress", show_progress)
+    monkeypatch.setattr(config_flow, "derive_learn_result_from_session", require_more_evidence)
+    backend.queue_packets(
+        *[
+            _packet(
+                remote_id=0x3B3F02,
+                cmd1=int(power),
+                err1=build_err_byte(int(power), 5, 7),
+                cmd2=flame,
+                err2=build_err_byte(flame, 1, 8),
+            )
+            for power, flame in ((True, 6), (False, 6), (True, 6), (True, 5), (True, 4), (True, 3))
+        ]
+    )
+    hass.data.setdefault(DOMAIN, {})[DATA_LEARNING_BACKEND_FACTORY] = _backend_factory(backend)
+    hass.data[DOMAIN][DATA_LEARNING_TIMEOUT] = 0.2
+    hass.data[DOMAIN][DATA_LEARNING_RECEIVE_TIMEOUT] = 0.01
+    hass.data[DOMAIN][DATA_FAKE_LEARNING_DELAY] = 0.001
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "learn"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "More evidence", CONF_BACKEND_TYPE: "fake"}
+    )
+    result = await _advance_guided_learning(hass, result["flow_id"], result)
+    assert result["step_id"] == "learn_features"
+    assert list(dict.fromkeys(progress)) == [
+        "Step 1 of 4",
+        "Step 2 of 4",
+        "Step 3 of 4",
+        "Step 4 of 4",
+        "Additional step 5",
+        "Additional step 6",
+    ]
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("flame,direction", [(0, "Up"), (1, "Up"), (6, "Down")])
+@pytest.mark.parametrize("prompt_index", [3, 4])
+def test_flame_learning_prompts_choose_an_available_direction(extended, flame, direction, prompt_index):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    if extended:
+        packet = _extended_packet(remote_id=0x123456, cmd1=0x81, cmd2=flame)
+    else:
+        packet = _packet(remote_id=0x123456, cmd1=1, err1=0, cmd2=flame, err2=0)
+    flow = Proflame2ConfigFlow()
+    flow._learn_prompt_index = prompt_index
+    flow._learn_session = LearnSession(backend=FakeRFBackend(), step_timeout=1, receive_timeout=0.01)
+    flow._learn_session.last_observed_packet = packet
+    assert flow._current_learn_instruction() == f"Press the Flame {direction} button once."
+
+
+@pytest.mark.parametrize("page", ["manual_features", "optional_settings"])
+async def test_two_page_setup_cancel_never_creates_entry(hass, monkeypatch, page):
+    _enable_fake_backend(monkeypatch)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "manual"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_NAME: "Test", CONF_BACKEND_TYPE: "fake", CONF_LEARNING_ID: "PF2-1-L-CI2FMVYYTNVRS7Q"}
+    )
+    assert set(_form_schema_fields(result["data_schema"])) == {CONF_FAN, CONF_LIGHT, CONF_FRONT, CONF_AUX, CONF_CPI}
+    if page == "optional_settings":
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_LIGHT: False})
+        fields = _form_schema_fields(result["data_schema"])
+        assert CONF_ALLOW_FLAME_OFF_WHEN_ON in fields
+        assert CONF_LIGHT not in fields and CONF_FIREPLACE_SHORT_NAME not in fields
+    assert result["step_id"] == page
+    assert result["last_step"] is (page == "optional_settings")
+    assert not hass.config_entries.async_entries(DOMAIN)
+    hass.config_entries.flow.async_abort(result["flow_id"])
+    assert not hass.config_entries.async_entries(DOMAIN)
+
+
+@pytest.mark.parametrize("conflict", ["current", "desired", "pending", "in_flight", "saved", "intervening"])
+async def test_disabling_flame_zero_option_is_atomic_and_never_ignites(hass, monkeypatch, conflict):
+    from custom_components.proflame2.control_intent import ControlIntent
+    from custom_components.proflame2.protocol.encoder import encode_packet
+    from custom_components.proflame2.services import async_apply_observed_packet
+
+    _enable_fake_backend(monkeypatch)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test",
+        data={
+            CONF_NAME: "Test",
+            CONF_BACKEND_TYPE: "fake",
+            CONF_REMOTE_ID: 0x123456,
+            CONF_C1: 5,
+            CONF_D1: 7,
+            CONF_C2: 1,
+            CONF_D2: 8,
+        },
+        options={CONF_FAN: True, CONF_LIGHT: True, CONF_ALLOW_FLAME_OFF_WHEN_ON: True, "retained_option": "preserved"},
+    )
+    entry.add_to_hass(hass)
+    if conflict == "saved":
+        hass.config_entries.async_update_entry(
+            entry,
+            options={
+                **entry.options,
+                CONF_PROFILES: {"lights": {CONF_NAME: "Lights", CONF_POWER: True, CONF_FLAME: 0, CONF_LIGHT: 2}},
+            },
+        )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    zero = FireplaceState(True, flame=0, light=2)
+    original = dict(entry.options)
+    menu = await hass.config_entries.options.async_init(entry.entry_id)
+    form = await hass.config_entries.options.async_configure(menu["flow_id"], {"next_step_id": "features"})
+    form = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_FAN: False})
+    assert form["step_id"] == "optional_settings"
+    assert entry.options == original and runtime.features.fan is True
+    if conflict in ("current", "intervening"):
+        await async_apply_observed_packet(
+            hass, runtime, encode_packet(zero, runtime.remote_profile, allow_flame_off_when_on=True)
+        )
+    elif conflict == "desired":
+        runtime.desired_state = zero
+    elif conflict in ("pending", "in_flight"):
+        setattr(runtime.control_intents, conflict, ControlIntent(1, 0, zero, 0, "test"))
+    result = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_ALLOW_FLAME_OFF_WHEN_ON: False})
+    assert result["errors"] == {CONF_ALLOW_FLAME_OFF_WHEN_ON: "flame_zero_conflict"}
+    assert entry.options == original
+    assert runtime.backend.sent_packets == []
+    # Cancelling after an error also leaves both pages unapplied.
+    hass.config_entries.options.async_abort(result["flow_id"])
+    assert entry.options == original
+
+
+async def test_optional_settings_save_preserves_unrelated_options(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_BACKEND_TYPE: BACKEND_YARDSTICK, CONF_REMOTE_ID: 0x123456},
+        options={"retained_option": "preserved"},
+    )
+    entry.add_to_hass(hass)
+    menu = await hass.config_entries.options.async_init(entry.entry_id)
+    form = await hass.config_entries.options.async_configure(menu["flow_id"], {"next_step_id": "features"})
+    form = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_LIGHT: False})
+    result = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_ALLOW_FLAME_OFF_WHEN_ON: True})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["retained_option"] == "preserved"
+    assert result["data"][CONF_LIGHT] is False
+    assert result["data"][CONF_ALLOW_FLAME_OFF_WHEN_ON] is True
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_saved_profile_form_zero_uses_entry_permission_and_rejects_fractional_input(hass, enabled):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_BACKEND_TYPE: BACKEND_YARDSTICK, CONF_REMOTE_ID: 0x123456},
+        options={CONF_ALLOW_FLAME_OFF_WHEN_ON: enabled},
+    )
+    entry.add_to_hass(hass)
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    form = await hass.config_entries.options.async_configure(form["flow_id"], {"next_step_id": "profiles"})
+    form = await hass.config_entries.options.async_configure(form["flow_id"], {"next_step_id": "add_profile"})
+    values = {CONF_NAME: "Lights", CONF_POWER: True, CONF_FLAME: 0.5, CONF_LIGHT: 2}
+    invalid = await hass.config_entries.options.async_configure(form["flow_id"], values)
+    assert invalid["errors"] == {CONF_FLAME: "invalid_profile"}
+    assert not entry.options.get(CONF_PROFILES)
+    result = await hass.config_entries.options.async_configure(form["flow_id"], {**values, CONF_FLAME: 0})
+    if enabled:
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_PROFILES]["lights"][CONF_FLAME] == 0
+        assert result["data"][CONF_ALLOW_FLAME_OFF_WHEN_ON] is True
+    else:
+        assert result["errors"] == {CONF_FLAME: "invalid_profile"}
+        assert not entry.options.get(CONF_PROFILES)
+
+
+@pytest.mark.parametrize("backend,supported", [(BACKEND_ESPHOME, True), (BACKEND_YARDSTICK, False), ("fake", True)])
+@pytest.mark.parametrize("editing", [False, True])
+async def test_active_listening_field_uses_declared_controller_capability(hass, backend, supported, editing):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+
+    options = {CONF_ACTIVE_LISTENING: True}
+    if editing:
+        entry = MockConfigEntry(
+            domain=DOMAIN, data={CONF_BACKEND_TYPE: backend, CONF_REMOTE_ID: 0x123456}, options=options
+        )
+        entry.add_to_hass(hass)
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "features"})
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    else:
+        flow = Proflame2ConfigFlow()
+        flow.hass = hass
+        flow._pending_entry_data = {CONF_NAME: "Test", CONF_BACKEND_TYPE: backend, CONF_REMOTE_ID: 0x123456}
+        flow._pending_entry_options = options
+        result = await flow.async_step_optional_settings()
+    assert result["step_id"] == "optional_settings"
+    assert (CONF_ACTIVE_LISTENING in _form_schema_fields(result["data_schema"])) is supported
+    if editing:
+        saved = await hass.config_entries.options.async_configure(result["flow_id"], {})
+        assert saved["data"][CONF_ACTIVE_LISTENING] is supported
+
+
+async def test_active_listening_visibility_follows_capability_not_controller_name(hass, monkeypatch):
+    from custom_components.proflame2.config_flow import Proflame2ConfigFlow
+    from custom_components.proflame2.rf.esphome_api import ESPHomeAPIBackend
+
+    # Changing the class capability changes the form even though its ID stays LilyGO.
+    monkeypatch.setattr(ESPHomeAPIBackend, "supports_active_listening", False)
+    flow = Proflame2ConfigFlow()
+    flow.hass = hass
+    flow._pending_entry_data = {CONF_NAME: "Test", CONF_BACKEND_TYPE: BACKEND_ESPHOME}
+    flow._pending_entry_options = {CONF_ACTIVE_LISTENING: True}
+    result = await flow.async_step_optional_settings()
+    assert CONF_ACTIVE_LISTENING not in _form_schema_fields(result["data_schema"])

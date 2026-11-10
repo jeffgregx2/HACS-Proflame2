@@ -6,8 +6,9 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import CONF_AUX, CONF_CPI, CONF_FRONT, CONF_POWER, MANUFACTURER
 from .identity import fireplace_device_identifiers, runtime_entity_unique_id
@@ -29,6 +30,7 @@ async def async_setup_entry(
 
     runtime_entry = async_get_runtime_entries(hass)[entry.entry_id]
     entities: list[SwitchEntity] = [Proflame2SwitchEntity(runtime_entry, CONF_POWER, "Power", "mdi:power")]
+    entities.append(Proflame2PCMLoggingSwitch(runtime_entry))
     if runtime_entry.features.front:
         entities.append(Proflame2SwitchEntity(runtime_entry, CONF_FRONT, "Front Burner", "mdi:fire"))
     if runtime_entry.features.aux:
@@ -104,3 +106,34 @@ class Proflame2SwitchEntity(SwitchEntity):
         if self._key == CONF_AUX:
             return state.aux
         return state.cpi
+
+
+class Proflame2PCMLoggingSwitch(Proflame2SwitchEntity, RestoreEntity):
+    """Payload-only diagnostic logging; never stage a fireplace control change."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, runtime_entry: Proflame2RuntimeEntry) -> None:
+        super().__init__(runtime_entry, "pcm_logging", "PCM Payload Logging", "mdi:code-braces")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        self._set_enabled(state is not None and state.state == "on")
+
+    @property
+    def is_on(self) -> bool:
+        backend = self._runtime_entry.backend
+        return backend is not None and backend.pcm_logging_enabled
+
+    def _set_enabled(self, enabled: bool) -> None:
+        backend = self._runtime_entry.backend
+        if backend is not None:
+            backend.set_pcm_logging_enabled(enabled)
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self._set_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self._set_enabled(False)

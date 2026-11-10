@@ -524,6 +524,125 @@ async def test_service_path_tolerates_linked_esphome_diagnostic_repeat_override(
     assert runtime_entry.last_send_result.packet is runtime_entry.last_packet
 
 
+async def test_timeout_recovery_requires_correlated_terminal_telemetry(hass) -> None:
+    data = _fake_esphome_runtime_data()
+    linked_entry = _add_linked_esphome_entry(hass, data)
+    transport = HomeAssistantESPHomeTransport(
+        hass,
+        linked_entry_id=linked_entry.entry_id,
+        controller_id=f"esphome:{linked_entry.entry_id}",
+        debug_logging_enabled=False,
+    )
+    assert not await transport.recover_send_readiness("test-request")
+    await transport.connect()
+    # A ready value left over from an earlier request is not completion evidence.
+    assert not await transport.recover_send_readiness("test-request")
+    data.object_states["proflame2_last_request_id"].state = "test-request"
+    assert not await transport.recover_send_readiness("test-request")
+    data.object_states["proflame2_last_tx_result"].state = "ok"
+    assert await transport.recover_send_readiness("test-request")
+    data.available = False
+    assert not await transport.recover_send_readiness("test-request")
+
+
+async def test_request_identifiers_are_unique_across_backend_sessions() -> None:
+    first, second = ESPHomeAPIBackend(), ESPHomeAPIBackend()
+    assert first._next_request_id() != second._next_request_id()
+    assert first._next_request_id() != first._next_request_id()
+
+
+@pytest.mark.parametrize(
+    ("status", "available", "expected"),
+    [
+        ("ready", True, True),
+        ("rx_active", True, True),
+        ("tx", True, False),
+        ("fault", True, False),
+        ("booting", True, False),
+        ("unknown", True, False),
+        (None, True, False),
+        ("ready", False, False),
+    ],
+)
+async def test_recovery_without_completion_requires_explicit_readiness(hass, status, available, expected):
+    data = _fake_esphome_runtime_data()
+    linked_entry = _add_linked_esphome_entry(hass, data)
+    transport = HomeAssistantESPHomeTransport(
+        hass,
+        linked_entry_id=linked_entry.entry_id,
+        controller_id=f"esphome:{linked_entry.entry_id}",
+        debug_logging_enabled=False,
+    )
+    await transport.connect()
+    data.object_states["proflame2_endpoint_status"].state = status
+    data.available = available
+    assert await transport.recover_send_readiness(None) is expected
+
+
+@pytest.mark.parametrize("request_id", [None, "shared-controller-request"])
+async def test_backend_recovery_adapter(monkeypatch, request_id) -> None:
+    from unittest.mock import AsyncMock
+
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport)
+    await backend.connect()
+    backend.latest_request_id = "previous-completed-request"
+    recover = AsyncMock(return_value=True)
+    monkeypatch.setattr(transport, "recover_send_readiness", recover, raising=False)
+    assert await backend.recover_send_readiness(request_id)
+    recover.assert_awaited_once_with(request_id)
+
+
+@pytest.mark.parametrize("uncertain_tx", [False, True])
+async def test_controller_reboot_allows_new_control(hass, uncertain_tx) -> None:
+    from custom_components.proflame2.services import _control_arbiter, async_controller_connection_lost
+
+    data = _fake_esphome_runtime_data()
+    linked_entry = _add_linked_esphome_entry(hass, data)
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0
+    entry = _add_entry(hass, options={CONF_ESPHOME_ENTRY_ID: linked_entry.entry_id})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.services.async_call(DOMAIN, "set_state", {CONF_POWER: True, CONF_FLAME: 2}, blocking=True)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    previous_request = runtime.backend.latest_request_id
+    assert previous_request
+
+    # Reboot loses firmware completion history, not the HA adapter's history.
+    async_controller_connection_lost(hass, runtime)
+    data.object_states["proflame2_last_request_id"].state = ""
+    data.object_states["proflame2_last_tx_result"].state = "none"
+    data.object_states["proflame2_endpoint_status"].state = "ready"
+    assert not await runtime.backend.recover_send_readiness(previous_request)
+    if uncertain_tx:
+        arbiter = _control_arbiter(hass, runtime)
+        arbiter.uncertain_request_id = previous_request
+        arbiter.recovery_deadline = asyncio.get_running_loop().time() - 1
+    await hass.services.async_call(DOMAIN, "set_state", {CONF_POWER: True, CONF_FLAME: 3}, blocking=True)
+    assert runtime.backend.latest_request_id != previous_request
+    assert data.object_states["proflame2_last_request_id"].state == runtime.backend.latest_request_id
+    assert data.object_states["proflame2_last_tx_result"].state == "ok"
+
+
+async def test_backend_timeout_remains_distinguishable_for_quarantine(monkeypatch, remote_profile) -> None:
+    from custom_components.proflame2.protocol.encoder import encode_packet
+    from custom_components.proflame2.protocol.models import FireplaceState
+    from custom_components.proflame2.rf.waveform import build_transmission_plan
+
+    transport = MockESPHomeTransport()
+    backend = ESPHomeAPIBackend(transport=transport, send_timeout_seconds=0.01)
+    await backend.connect()
+
+    async def stalled_send(request):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(transport, "send_tx", stalled_send)
+    packet = encode_packet(FireplaceState(power=True, flame=3), remote_profile)
+    packet.transmission_plan = build_transmission_plan(packet.frame)
+    with pytest.raises(TimeoutError):
+        await backend.send(packet)
+    assert backend.latest_request_id is not None
+
+
 async def test_transport_receives_rx_event_from_linked_esphome_device_id(hass) -> None:
     linked_runtime_data = _fake_esphome_runtime_data()
     linked_entry = _add_linked_esphome_entry(hass, linked_runtime_data)
@@ -566,6 +685,43 @@ async def test_transport_receives_rx_event_from_linked_esphome_device_id(hass) -
     assert event.lqi == 87
     assert event.frequency_hz == 314973000
     assert event.capture_metadata["schema_version"] == "1"
+
+
+async def test_pcm_logging_observes_bus_event_before_consumption_once(hass, caplog) -> None:
+    linked_entry = _add_linked_esphome_entry(hass, _fake_esphome_runtime_data())
+    device_id = _add_linked_esphome_device(hass, linked_entry, connection=("mac", "00:00:00:00:00:01"))
+    transport = HomeAssistantESPHomeTransport(
+        hass,
+        linked_entry_id=linked_entry.entry_id,
+        controller_id="test-controller",
+        debug_logging_enabled=False,
+    )
+    backend = ESPHomeAPIBackend(transport=transport)
+    backend.set_pcm_logging_enabled(True)
+    await transport.connect()
+    await transport.configure_radio(backend.radio_config)
+    hass.bus.async_fire(
+        ESPHOME_RX_EVENT_TYPE,
+        {
+            ATTR_DEVICE_ID: device_id,
+            "schema_version": "2",
+            "protocol": "proflame2",
+            "event_kind": "pulse_capture",
+            "payload_hex": "dead80",
+            "pcm_bit_length": "17",
+            "packet_count": "1",
+        },
+    )
+    await hass.async_block_till_done()
+    lines = [record.getMessage() for record in caplog.records if record.name == "custom_components.proflame2.pcm"]
+    assert len(lines) == 1
+    assert "pcm_hex=dead80" in lines[0]
+    assert "bits=17" in lines[0]
+    event = await transport.receive_rx_event(timeout=0.1)
+    assert event is not None
+    backend._rx_event_is_decodable(event, strict_packet_policy=True)
+    assert len([record for record in caplog.records if record.name == "custom_components.proflame2.pcm"]) == 1
+    await transport.close()
 
 
 async def test_transport_receives_fifo_capture_event_from_linked_esphome_device_id(hass) -> None:
@@ -926,7 +1082,7 @@ async def test_esphome_diagnostics_include_linked_transport_telemetry(hass) -> N
     assert transport_diagnostics["linked_entry_id"] == linked_entry.entry_id
     assert transport_diagnostics["action_name"] == "proflame2_tx_stateful"
     assert transport_diagnostics["last_tx_path"] == "cc1101_async_gdo0_msb_first"
-    assert transport_diagnostics["last_request_id"] == "proflame2-1"
+    assert transport_diagnostics["last_request_id"] == runtime_entry.backend.last_tx_response.request_id
     assert transport_diagnostics["last_payload_length"] == 25
     assert transport_diagnostics["last_payload_hex"] == (runtime_entry.last_packet.transmission_plan.air_payload.hex())
     assert transport_diagnostics["last_request_repeat_count"] == 5
@@ -1071,6 +1227,8 @@ async def test_esphome_display_sync_reapplies_active_listener_policy(hass) -> No
 
 async def test_active_listener_retries_when_linked_esphome_not_ready(hass) -> None:
     class _Backend:
+        supports_active_listening = True
+
         def __init__(self) -> None:
             self.calls = 0
 
@@ -1100,6 +1258,196 @@ async def test_active_listener_retries_when_linked_esphome_not_ready(hass) -> No
     runtime_entry.active_listener_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await runtime_entry.active_listener_task
+
+
+async def _wait_for_listener_condition(predicate, *, timeout=0.5):
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.001)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["runtime_not_ready", "missing_action", "disconnected", "timeout", "offline_after_connect", "replaced_runtime"],
+)
+async def test_active_listener_recovers_real_transport_and_receives_without_user_action(hass, monkeypatch, failure):
+    from custom_components.proflame2 import services
+    from custom_components.proflame2.const import DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS
+    from custom_components.proflame2.protocol.encoder import encode_state
+    from custom_components.proflame2.protocol.models import FireplaceState
+    from custom_components.proflame2.rf.capture import frame_to_air_bytes
+    from custom_components.proflame2.runtime import async_unload_runtime_entry
+
+    # Use real transport/backend setup and real RX event delivery, not a mocked
+    # success response. Nothing calls the send path or periodic display sync.
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_INITIAL_SECONDS", 0.001, raising=False)
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_MAX_SECONDS", 0.004, raising=False)
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS] = 0.01
+    native = _fake_esphome_runtime_data()
+    linked = _add_linked_esphome_entry(hass, native)
+    device_id = _add_linked_esphome_device(hass, linked, identifier=("esphome", "listener-test"))
+    entry = _add_entry(hass, options={CONF_ESPHOME_ENTRY_ID: linked.entry_id, CONF_ACTIVE_LISTENING: True})
+    runtime = await async_setup_runtime_entry(hass, entry)
+    expected_services = dict(native.services)
+    if failure in {"offline_after_connect", "replaced_runtime"}:
+        await runtime.backend.connect()
+        native.active_listening_enabled = False
+    if failure == "runtime_not_ready":
+        linked.runtime_data = None
+    elif failure == "missing_action":
+        native.services = {}
+    elif failure == "disconnected":
+        native.client.execute_error = "Not connected to test-controller"
+    elif failure == "offline_after_connect":
+        native.available = False
+        native.client.execute_error = "Not connected to test-controller"
+    elif failure == "replaced_runtime":
+        native = _fake_esphome_runtime_data()
+        expected_services = dict(native.services)
+        native.services = {}
+        linked.runtime_data = native
+    else:
+        from unittest.mock import AsyncMock
+
+        original = native.client.execute_service
+        native.client.execute_service = AsyncMock(side_effect=TimeoutError("API timed out"))
+
+    attempts = 0
+    original_connect = runtime.backend.connect
+
+    async def counted_connect():
+        nonlocal attempts
+        attempts += 1
+        await original_connect()
+
+    monkeypatch.setattr(runtime.backend, "connect", counted_connect)
+    try:
+        await async_start_active_listener(hass, runtime)
+        await _wait_for_listener_condition(lambda: attempts >= 3)
+        task = runtime.active_listener_task
+        assert task is not None and not task.done()
+        linked.runtime_data = native
+        native.available = True
+        native.services = expected_services
+        native.client.execute_error = None
+        if failure == "timeout":
+            native.client.execute_service = original
+        await _wait_for_listener_condition(lambda: runtime.backend.connected)
+        assert native.active_listening_enabled
+        frame = encode_state(FireplaceState(True, flame=3, fan=2, light=4), runtime.remote_profile)
+        hass.bus.async_fire(
+            ESPHOME_RX_EVENT_TYPE,
+            {
+                ATTR_DEVICE_ID: device_id,
+                "schema_version": "2",
+                "protocol": "proflame2",
+                "event_kind": "pulse_capture",
+                "payload_hex": frame_to_air_bytes(frame).hex(),
+                # Match the supported RMT final-low-guard truncation. A bare
+                # 182-bit legacy body lacks the full-frame separator evidence.
+                "pcm_bit_length": "181",
+                "packet_count": "1",
+            },
+        )
+        await _wait_for_listener_condition(lambda: runtime.last_observed_packet is not None)
+        assert runtime.last_observed_packet.frame == frame
+        assert runtime.active_listener_task is task
+        assert all(name != "proflame2_tx_stateful" for name, _ in native.client.calls)
+        assert runtime.control_task is None
+    finally:
+        await async_unload_runtime_entry(hass, entry)
+
+
+@pytest.mark.parametrize("error", [RuntimeError("Not connected"), ValueError("Invalid received frame")])
+async def test_active_listener_recovers_from_receive_errors_after_start(hass, monkeypatch, caplog, error):
+    from custom_components.proflame2 import services
+    from custom_components.proflame2.protocol.encoder import encode_packet
+    from custom_components.proflame2.protocol.models import FireplaceState
+    from custom_components.proflame2.runtime import async_unload_runtime_entry
+
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_INITIAL_SECONDS", 0.001, raising=False)
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_MAX_SECONDS", 0.004, raising=False)
+    _install_mock_esphome_transport(hass, MockESPHomeTransport())
+    entry = _add_entry(hass, options={CONF_ACTIVE_LISTENING: True})
+    runtime = await async_setup_runtime_entry(hass, entry)
+    first = encode_packet(FireplaceState(True, flame=2), runtime.remote_profile)
+    last = encode_packet(FireplaceState(True, flame=4), runtime.remote_profile)
+    received = asyncio.Queue()
+    received.put_nowait(first)
+    for _ in range(5):
+        received.put_nowait(error)
+    received.put_nowait(last)
+
+    class Backend:
+        supports_active_listening = True
+        connected = True
+
+        async def receive(self, **kwargs):
+            item = await received.get()
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        async def close(self, **kwargs):
+            pass
+
+    runtime.backend = Backend()
+    try:
+        await async_start_active_listener(hass, runtime)
+        task = runtime.active_listener_task
+        await async_start_active_listener(hass, runtime)
+        assert runtime.active_listener_task is task
+        await _wait_for_listener_condition(lambda: runtime.last_observed_packet is last)
+        assert runtime.active_listener_task is task and not task.done()
+        assert len([r for r in caplog.records if "active listening interrupted" in r.getMessage()]) == 1
+    finally:
+        await async_unload_runtime_entry(hass, entry)
+
+
+@pytest.mark.parametrize("stop", ["disabled", "shutdown", "backend_removed", "unload"])
+async def test_active_listener_stops_intentionally_during_retry(hass, monkeypatch, stop):
+    from custom_components.proflame2 import services
+    from custom_components.proflame2.runtime import async_unload_runtime_entry
+
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_INITIAL_SECONDS", 0.001, raising=False)
+    monkeypatch.setattr(services, "_ACTIVE_LISTENER_RETRY_MAX_SECONDS", 0.002, raising=False)
+    _install_mock_esphome_transport(hass, MockESPHomeTransport())
+    entry = _add_entry(hass, options={CONF_ACTIVE_LISTENING: True})
+    runtime = await async_setup_runtime_entry(hass, entry)
+
+    class Backend:
+        supports_active_listening = True
+        calls = 0
+
+        async def receive(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("Linked ESPHome entry does not expose action 'proflame2_tx_stateful'")
+
+        async def close(self, **kwargs):
+            pass
+
+    backend = Backend()
+    runtime.backend = backend
+    try:
+        await async_start_active_listener(hass, runtime)
+        task = runtime.active_listener_task
+        await _wait_for_listener_condition(lambda: backend.calls >= 3)
+        if stop == "disabled":
+            runtime.active_listening_enabled = False
+        elif stop == "shutdown":
+            runtime.shutting_down = True
+        elif stop == "backend_removed":
+            runtime.backend = None
+        else:
+            await async_unload_runtime_entry(hass, entry)
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.5)
+        assert runtime.active_listener_task is None
+        count = backend.calls
+        await asyncio.sleep(0.01)
+        assert backend.calls == count
+    finally:
+        await async_unload_runtime_entry(hass, entry)
 
 
 async def test_esphome_runtime_can_link_later_when_controller_device_appears(hass) -> None:
@@ -1167,7 +1515,7 @@ async def test_multiple_esphome_entries_keep_distinct_controller_links(hass) -> 
     assert runtime_entry_two.controller_device_identifier is None
 
 
-async def test_yardstick_runtime_does_not_set_controller_link(hass, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_yardstick_runtime_does_not_expose_controller_device(hass, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_connect(self):
         return None
 
@@ -1182,3 +1530,41 @@ async def test_yardstick_runtime_does_not_set_controller_link(hass, monkeypatch:
     fireplace_device = registry.async_get(runtime_entry.device_id)
     assert fireplace_device is not None
     assert fireplace_device.via_device_id is None
+    assert len(dr.async_entries_for_config_entry(registry, entry.entry_id)) == 1
+
+
+@pytest.mark.parametrize("backend", [BACKEND_ESPHOME, BACKEND_YARDSTICK])
+@pytest.mark.parametrize("w4,w6,w7,w8", [(0x80, 21, 200, 0), (0x84, 79, 0x16, 3)])
+async def test_loaded_extended_profiles_use_fixed_manual_temperatures(hass, backend, w4, w6, w7, w8):
+    from custom_components.proflame2.const import (
+        CONF_EXTENDED_W4_BASE,
+        CONF_EXTENDED_W6,
+        CONF_EXTENDED_W7,
+        CONF_EXTENDED_W8,
+        CONF_PROTOCOL_VARIANT,
+    )
+    from custom_components.proflame2.protocol.encoder import encode_state
+    from custom_components.proflame2.protocol.models import FireplaceState
+    from custom_components.proflame2.runtime import async_unload_runtime_entry
+
+    _install_mock_esphome_transport(hass, MockESPHomeTransport())
+    entry = _add_entry(hass, backend_type=backend, remote_id=0x123456)
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            CONF_PROTOCOL_VARIANT: "extended_10_word",
+            CONF_EXTENDED_W4_BASE: w4,
+            CONF_EXTENDED_W6: w6,
+            CONF_EXTENDED_W7: w7,
+            CONF_EXTENDED_W8: w8,
+        },
+    )
+    runtime = await async_setup_runtime_entry(hass, entry)
+    template = runtime.remote_profile.extended_template
+    assert (template.w4_base, template.w6, template.w7, template.w8) == (0x80, 20, 200, 0)
+    assert runtime.learning_id == "PF2-1-E-CI2FNAAUZAAISF7GOU"
+    frame = encode_state(FireplaceState(True, flame=3), runtime.remote_profile)
+    assert frame.wire_words[5:8] == (20, 200, 0)
+    assert not frame.cmd1 & 4
+    await async_unload_runtime_entry(hass, entry)

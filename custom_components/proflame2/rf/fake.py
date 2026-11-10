@@ -15,6 +15,7 @@ from .capture import CaptureSample
 class FakeRFBackend(RFBackend):
     """In-memory backend that records sent frames without touching hardware."""
 
+    supports_active_listening = True
     name: str = "fake"
     connected: bool = False
     sent_packets: list[ProflamePacket] = field(default_factory=list)
@@ -26,6 +27,9 @@ class FakeRFBackend(RFBackend):
 
     async def connect(self) -> None:
         self.connected = True
+
+    async def recover_send_readiness(self, request_id: str | None = None) -> bool:
+        return self.connected
 
     async def close(self, *, reason: str | None = None) -> None:
         self.connected = False

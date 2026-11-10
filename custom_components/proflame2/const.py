@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from .protocol.variants import (
+    PROTOCOL_VARIANT_EXTENDED_10_WORD as PROTOCOL_VARIANT_EXTENDED_10_WORD,
+)
+from .protocol.variants import (
+    PROTOCOL_VARIANT_LEGACY_7_WORD as PROTOCOL_VARIANT_LEGACY_7_WORD,
+)
 from .version import fake_backend_enabled, is_dev_build
 
 DOMAIN = "proflame2"
 MANUFACTURER = "Proflame2"
 
 CONF_BACKEND_TYPE = "backend_type"
+CONF_RF_BAND = "rf_band"
 CONF_C1 = "c1"
 CONF_C2 = "c2"
 CONF_D1 = "d1"
@@ -18,6 +25,7 @@ CONF_EXTENDED_W6 = "extended_w6"
 CONF_EXTENDED_W7 = "extended_w7"
 CONF_EXTENDED_W8 = "extended_w8"
 CONF_REMOTE_ID = "remote_id"
+CONF_LEARNING_ID = "learning_id"
 CONF_RTL433_SAMPLES = "rtl433_samples"
 CONF_CONFIG_ENTRY_ID = "config_entry_id"
 CONF_NAME = "name"
@@ -39,6 +47,9 @@ CONF_LEARNING_DEBUG_LOGGING = "learning_debug_logging"
 CONF_YARDSTICK_LEARNING_FREQUENCY_HZ = "yardstick_learning_frequency_hz"
 CONF_YARDSTICK_LEARNING_SWEEP_ENABLED = "yardstick_learning_sweep_enabled"
 CONF_ACTIVE_LISTENING = "active_listening"
+CONF_ALLOW_FLAME_OFF_WHEN_ON = "allow_flame_off_when_on"
+CONF_REFRESH_PERIOD_MINUTES = "refresh_period_minutes"
+DEFAULT_REFRESH_PERIOD_MINUTES = 0
 CONF_INITIAL_FRAME = "initial_frame"
 CONF_INITIAL_PACKET_SOURCE = "initial_packet_source"
 CONF_ESPHOME_ENTRY_ID = "esphome_entry_id"
@@ -47,9 +58,6 @@ CONF_FIREPLACE_SHORT_NAME = "fireplace_short_name"
 BACKEND_FAKE = "fake"
 BACKEND_ESPHOME = "lilygo_cc1101"
 BACKEND_YARDSTICK = "yardstick"
-
-PROTOCOL_VARIANT_LEGACY_7_WORD = "legacy_7_word"
-PROTOCOL_VARIANT_EXTENDED_10_WORD = "extended_10_word"
 
 
 def available_backend_types() -> tuple[str, ...]:
@@ -139,6 +147,6 @@ OPERATIONAL_STATUS_FAILED = "failed"
 OPERATIONAL_STATUS_LEARNING = "learning"
 OPERATIONAL_STATUS_UNAVAILABLE = "unavailable"
 
-DEFAULT_CONTROL_DEBOUNCE_SECONDS = 1.5
+DEFAULT_CONTROL_DEBOUNCE_SECONDS = 1.0
 DEFAULT_CONFIRMATION_WINDOW_SECONDS = 20.0
 DEFAULT_CONFIRMATION_RECEIVE_TIMEOUT_SECONDS = 2.5

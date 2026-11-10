@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID, STATE_UNAVAILABLE
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     BACKEND_ESPHOME,
@@ -48,10 +50,25 @@ from .const import (
     STATE_CONFIDENCE_OBSERVED,
     STATE_CONFIDENCE_REQUESTED,
 )
-from .control import StateValidationError, build_requested_state, build_staged_state
+from .control import StateValidationError, build_requested_state, build_staged_state, flame_for_power_on
+from .control_intent import ControlIntent, ControllerArbiter, controller_arbiter
+from .display_sync import (
+    DISPLAY_SYNC_INTERVAL_SECONDS,
+    DISPLAY_SYNC_RECONCILE_SECONDS,
+    DisplaySyncOutcome,
+    DisplaySyncRecovery,
+)
 from .packet_debug import get_packet_debug_logger
 from .protocol.encoder import encode_packet
+from .protocol.models import FireplaceState
+from .refresh import (
+    SOURCE_REFRESH,
+    RefreshSkipped,
+    current_refresh_state,
+    record_received_activity,
+)
 from .rf.esphome.contract import ESPHomeDisplayState
+from .rf.esphome_api import is_display_connection_error
 from .rf.waveform import build_transmission_plan
 from .runtime import (
     Proflame2RuntimeEntry,
@@ -64,7 +81,10 @@ from .runtime import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_ACTIVE_LISTENER_RETRY_INITIAL_SECONDS = 1.0
+_ACTIVE_LISTENER_RETRY_MAX_SECONDS = 30.0
 BACKEND_SEND_TIMEOUT_SECONDS = 30.0
+CONTROLLER_RECOVERY_GRACE_SECONDS = 2.0
 _RETAINED_OFF_CONTROL_KEYS = frozenset({CONF_FAN, CONF_LIGHT, CONF_FRONT, CONF_AUX, CONF_CPI})
 
 
@@ -76,6 +96,7 @@ class _PreparedSendRequest:
     request_summary: str
     packet: Any
     source: str
+    intent: ControlIntent | None = None
 
 
 SERVICE_SET_STATE_SCHEMA = vol.Schema(
@@ -85,9 +106,9 @@ SERVICE_SET_STATE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_DEVICE_ID): vol.Any(str, [str]),
         vol.Optional(ATTR_ENTITY_ID): vol.Any(str, [str]),
         vol.Optional(ATTR_AREA_ID): vol.Any(str, [str]),
-        vol.Optional(CONF_FLAME): vol.Coerce(int),
-        vol.Optional(CONF_FAN): vol.Coerce(int),
-        vol.Optional(CONF_LIGHT): vol.Coerce(int),
+        vol.Optional(CONF_FLAME): vol.Any(int, float, str),
+        vol.Optional(CONF_FAN): vol.Any(int, float, str),
+        vol.Optional(CONF_LIGHT): vol.Any(int, float, str),
         vol.Optional(CONF_FRONT): bool,
         vol.Optional(CONF_AUX): bool,
         vol.Optional(CONF_CPI): bool,
@@ -226,10 +247,29 @@ def _log_control_event(
         get_packet_debug_logger().log(level, "control: " + prefixed_message, *args)
 
 
+def _retain_extended_cpi(
+    runtime_entry: Proflame2RuntimeEntry,
+    requested_state: FireplaceState,
+    base_state: FireplaceState | None,
+    changes: dict[str, Any],
+) -> FireplaceState:
+    """Preserve Pilot mode unless an enabled extended CPI control changes it."""
+
+    if (
+        runtime_entry.remote_profile.is_extended
+        and base_state is not None
+        and (not runtime_entry.features.cpi or CONF_CPI not in changes)
+    ):
+        return replace(requested_state, cpi=base_state.cpi)
+    return requested_state
+
+
 def _is_retained_off_control_edit(
     current_state: Any,
     desired_state: Any,
     changes: dict[str, Any],
+    *,
+    cpi_enabled: bool,
 ) -> bool:
     """Return whether an OFF-state feature edit should be retained without TX."""
 
@@ -238,6 +278,9 @@ def _is_retained_off_control_edit(
         and not current_state.power
         and not desired_state.power
         and set(changes).issubset(_RETAINED_OFF_CONTROL_KEYS)
+        # CPI changes must reach the receiver even with the main burner OFF.
+        # A coalesced accessory edit must not discard an unsent CPI change.
+        and (not cpi_enabled or current_state.cpi == desired_state.cpi)
     )
 
 
@@ -331,22 +374,30 @@ async def async_stage_control_change(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         return
 
-    desired_state = build_staged_state(runtime_entry.features, base_state, changes)
+    try:
+        desired_state = build_staged_state(
+            runtime_entry.features,
+            base_state,
+            changes,
+            allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
+        )
+    except StateValidationError as exc:
+        raise HomeAssistantError(str(exc)) from exc
 
-    clear_active_profile_if_state_differs(runtime_entry, desired_state)
-    if runtime_entry.active_profile_state is None:
-        runtime_entry.last_applied_profile_id = None
-        runtime_entry.last_applied_profile_name = None
-
-    if current_state is not None and desired_state == current_state:
+    desired_state = _retain_extended_cpi(runtime_entry, desired_state, base_state, changes)
+    intents = runtime_entry.control_intents
+    expected_state = intents.in_flight.state if intents.in_flight is not None else current_state
+    if expected_state is not None and desired_state == expected_state:
+        if intents.pending is not None:
+            _finish_intent(intents.pending, HomeAssistantError("Request superseded by a newer control change."))
+            intents.pending = None
+            intents.wake.set()
+        if intents.in_flight is not None:
+            runtime_entry.desired_state = intents.desired_state
+            async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
+            return
         runtime_entry.desired_state = None
         runtime_entry.operational_status = OPERATIONAL_STATUS_READY
-        _cancel_runtime_task(
-            runtime_entry,
-            runtime_entry.debounce_task,
-            reason="staged_state_matches_current",
-            kind="debounce",
-        )
         runtime_entry.debounce_task = None
         _log_control_event(
             runtime_entry,
@@ -356,16 +407,17 @@ async def async_stage_control_change(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         return
 
-    if _is_retained_off_control_edit(current_state, desired_state, changes):
+    if intents.in_flight is None and _is_retained_off_control_edit(
+        current_state, desired_state, changes, cpi_enabled=runtime_entry.features.cpi
+    ):
+        if intents.pending is not None:
+            _finish_intent(intents.pending, HomeAssistantError("Request superseded by a retained control change."))
+            intents.pending = None
+            intents.wake.set()
         runtime_entry.desired_state = None
         runtime_entry.operational_status = OPERATIONAL_STATUS_READY
-        _cancel_runtime_task(
-            runtime_entry,
-            runtime_entry.debounce_task,
-            reason="retained_off_control_edit",
-            kind="debounce",
-        )
         runtime_entry.debounce_task = None
+        clear_active_profile_if_state_differs(runtime_entry, desired_state)
         _log_control_event(
             runtime_entry,
             "off-state control edit retained without transmit state=%s",
@@ -386,126 +438,276 @@ async def async_stage_control_change(
         )
         return
 
-    runtime_entry.desired_state = desired_state
-    runtime_entry.operational_status = OPERATIONAL_STATUS_PENDING
-    _log_control_event(
-        runtime_entry,
-        "desired state staged pending_state=%s",
-        _state_summary(desired_state),
+    _submit_control_intent(
+        hass, runtime_entry, desired_state, source="debounced_control", delay=_control_debounce_seconds(hass)
     )
-    if runtime_entry.debounce_task is not None and not runtime_entry.debounce_task.done():
-        _log_control_event(runtime_entry, "debounce task cancel requested for restart")
-    _cancel_runtime_task(
-        runtime_entry,
-        runtime_entry.debounce_task,
-        reason="restart_debounce_after_new_user_edit",
-        kind="debounce",
-    )
-    runtime_entry.debounce_task = hass.async_create_task(_async_debounce_send_task(hass, runtime_entry))
-    _log_control_event(
-        runtime_entry,
-        "debounce task scheduled delay=%.3fs",
-        _control_debounce_seconds(hass),
-    )
-    async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
 
 
-async def _async_debounce_send_task(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
-    """Wait for the debounce window, then send the latest staged desired state."""
+def _finish_intent(intent: ControlIntent, error: Exception | None = None) -> None:
+    future = intent.completion
+    if future is None or future.done():
+        return
+    if error is None:
+        future.set_result(None)
+    else:
+        future.set_exception(error)
 
-    staged_summary = "None"
-    send_started = False
+
+def _control_arbiter(hass: HomeAssistant, entry: Proflame2RuntimeEntry) -> ControllerArbiter:
+    key = getattr(entry.backend, "physical_controller_id", None) or entry.controller_id
+    return controller_arbiter(hass.data.setdefault(DOMAIN, {}), key)
+
+
+def async_controller_connection_lost(hass: HomeAssistant, entry: Proflame2RuntimeEntry) -> None:
+    """Fence controller work without assuming a frontend disconnect is device loss."""
+    arbiter = _control_arbiter(hass, entry)
+    if not arbiter.readiness_unknown:
+        arbiter.recovery_deadline = asyncio.get_running_loop().time() + CONTROLLER_RECOVERY_GRACE_SECONDS
+    arbiter.readiness_unknown = True
+    for candidate in async_get_runtime_entries(hass).values():
+        if _control_arbiter(hass, candidate) is not arbiter:
+            continue
+        if candidate.control_intents.in_flight is not None:
+            arbiter.uncertain_request_id = getattr(candidate.backend, "latest_request_id", None)
+        candidate.refresh_schedule.suspended = True
+        candidate.refresh_schedule.restart()
+        if hasattr(candidate.backend, "connected"):
+            candidate.backend.connected = False
+        if candidate.control_intents.desired_state is not None:
+            _mark_send_failed(candidate, "Controller disconnected; controls reverted to last known state.")
+            async_notify_runtime_entry_updated(hass, candidate.config_entry_id)
+
+
+@callback
+def async_observe_controller_connection(hass: HomeAssistant, entry: Proflame2RuntimeEntry) -> None:
+    """Use public entity availability, not ESPHome's private connection internals."""
+    if entry.backend_type != BACKEND_ESPHOME:
+        return
+    linked_entry = entry.controller_id.partition(":")[2]
+    entities = [
+        item.entity_id
+        for item in er.async_entries_for_config_entry(er.async_get(hass), linked_entry)
+        if item.unique_id.endswith("proflame2_endpoint_status")
+    ]
+    if not entities:
+        return
+
+    @callback
+    def state_changed(event) -> None:
+        old = event.data.get("old_state")
+        new = event.data.get("new_state")
+        if old is not None and old.state != STATE_UNAVAILABLE and (new is None or new.state == STATE_UNAVAILABLE):
+            async_controller_connection_lost(hass, entry)
+        elif new is not None and new.state != STATE_UNAVAILABLE and (old is None or old.state == STATE_UNAVAILABLE):
+            arbiter = _control_arbiter(hass, entry)
+            for candidate in async_get_runtime_entries(hass).values():
+                if _control_arbiter(hass, candidate) is arbiter:
+                    candidate.refresh_schedule.suspended = False
+                    candidate.refresh_schedule.restart()
+
+    entry.refresh_schedule.suspended = any(
+        (state := hass.states.get(entity_id)) is None or state.state == STATE_UNAVAILABLE for entity_id in entities
+    )
+    entry.control_disconnect_unsub = async_track_state_change_event(hass, entities, state_changed)
+
+
+async def async_request_refresh(hass: HomeAssistant, entry: Proflame2RuntimeEntry) -> None:
+    """Submit one low-priority refresh through the ordinary owning dispatcher."""
+    state = current_refresh_state(entry)
+    if state is None or entry.control_intents.pending is not None or entry.control_intents.in_flight is not None:
+        return
+    completion = asyncio.get_running_loop().create_future()
+    completion.add_done_callback(lambda future: None if future.cancelled() else future.exception())
+    intent = _submit_control_intent(
+        hass, entry, state, source=SOURCE_REFRESH, clear_active_profile=False, completion=completion
+    )
     try:
-        delay = _control_debounce_seconds(hass)
-        await asyncio.sleep(delay)
-        desired_state = runtime_entry.desired_state
-        if desired_state is None:
-            _log_control_event(
-                runtime_entry,
-                "debounce task fired after %.3fs with no desired state; nothing to send",
-                delay,
-            )
-            return
-        staged_summary = _state_summary(desired_state)
+        await asyncio.shield(completion)
+    except HomeAssistantError:
+        # A newer user edit can replace the low-priority pending refresh. Actual
+        # send failures invalidate the epoch and must retain normal reporting.
+        if entry.control_intents.epoch != intent.epoch:
+            raise
+
+
+def _submit_control_intent(
+    hass: HomeAssistant,
+    entry: Proflame2RuntimeEntry,
+    state: Any,
+    *,
+    source: str,
+    delay: float = 0,
+    warnings: tuple[str, ...] = (),
+    profile_id: str | None = None,
+    profile_name: str | None = None,
+    clear_active_profile: bool = True,
+    completion: asyncio.Future[None] | None = None,
+) -> ControlIntent:
+    _ensure_runtime_entry_accepts_actions(entry)
+    intents = entry.control_intents
+    if intents.pending is not None:
+        _finish_intent(intents.pending, HomeAssistantError("Request superseded by a newer control change."))
         _log_control_event(
-            runtime_entry,
-            "debounce task fired after %.3fs pending_state=%s",
-            delay,
-            staged_summary,
+            entry, "debounce_timer_cancelled reason=restart_debounce_after_new_user_edit", level=logging.DEBUG
         )
-        runtime_entry.debounce_task = None
-        runtime_entry.debounce_cancel_reason = None
-        runtime_entry.active_send_task = asyncio.current_task()
-        send_started = True
-        await _async_execute_requested_state(
-            hass,
-            runtime_entry,
-            desired_state,
-            source="debounced_control",
-            clear_active_profile=True,
-        )
-        _log_control_event(
-            runtime_entry,
-            "debounced send terminal result=succeeded state=%s",
-            staged_summary,
-        )
-    except asyncio.CancelledError:
-        if send_started:
-            _log_control_event(
-                runtime_entry,
-                "debounced send terminal result=cancelled desired_state=%s",
-                staged_summary,
-                level=logging.WARNING,
-            )
-        else:
-            _log_control_event(
-                runtime_entry,
-                "debounce_timer_cancelled reason=%s desired_state=%s",
-                runtime_entry.debounce_cancel_reason or "unknown",
-                _state_summary(runtime_entry.desired_state),
-                level=logging.WARNING,
-            )
-        runtime_entry.debounce_cancel_reason = None
-        raise
-    except Exception as exc:
-        _LOGGER.exception(
-            "Proflame2 debounce task failed config_entry_id=%s backend=%s desired_state=%s",
-            runtime_entry.config_entry_id,
-            runtime_entry.backend_type,
-            _state_summary(runtime_entry.desired_state),
-        )
-        if runtime_entry.debug_logging_enabled:
-            get_packet_debug_logger().exception(
-                "control: config_entry_id=%s backend=%s debounce task failed desired_state=%s",
-                runtime_entry.config_entry_id,
-                runtime_entry.backend_type,
-                _state_summary(runtime_entry.desired_state),
-            )
-        runtime_entry.sending_in_progress = False
-        runtime_entry.desired_state = None
-        runtime_entry.operational_status = OPERATIONAL_STATUS_FAILED
-        if runtime_entry.last_error is None:
-            runtime_entry.last_error = f"{type(exc).__name__}: {exc}"
-        _log_control_event(
-            runtime_entry,
-            "debounced send terminal result=exception current_state=%s last_issue=%s",
-            _state_summary(runtime_current_state(runtime_entry)),
-            runtime_entry.last_error,
-            level=logging.ERROR,
-        )
-        async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
+    intents.revision += 1
+    intent = ControlIntent(
+        intents.revision,
+        intents.epoch,
+        state,
+        asyncio.get_running_loop().time() + delay,
+        source,
+        warnings,
+        profile_id,
+        profile_name,
+        clear_active_profile,
+        completion,
+    )
+    intents.pending = intent
+    entry.desired_state = intents.desired_state
+    entry.operational_status = OPERATIONAL_STATUS_SENDING if entry.sending_in_progress else OPERATIONAL_STATUS_PENDING
+    intents.wake.set()
+    _log_control_event(entry, "desired state staged pending_state=%s", _state_summary(state))
+    if entry.control_task is None or entry.control_task.done():
+        # Install ownership before the dispatcher can reach its finally block.
+        entry.control_task = hass.async_create_task(_async_control_dispatcher(hass, entry), eager_start=False)
+    if intents.in_flight is None:
+        entry.debounce_task = entry.control_task
+    async_notify_runtime_entry_updated(hass, entry.config_entry_id)
+    return intent
+
+
+async def _async_control_dispatcher(hass: HomeAssistant, entry: Proflame2RuntimeEntry) -> None:
+    """Drain latest intent, never overlapping physical sends or retaining obsolete packets."""
+    intents = entry.control_intents
+    arbiter = _control_arbiter(hass, entry)
+    try:
+        while not entry.shutting_down and intents.pending is not None:
+            intents.wake.clear()
+            remaining = intents.pending.eligible_at - asyncio.get_running_loop().time()
+            if remaining > 0:
+                try:
+                    await asyncio.wait_for(intents.wake.wait(), remaining)
+                except TimeoutError:
+                    pass
+                continue
+            async with arbiter.lock:
+                intent = intents.pending
+                if intent is None:
+                    continue
+                if intent.eligible_at > asyncio.get_running_loop().time():
+                    continue
+                if entry.shutting_down:
+                    break
+                if intent.source == SOURCE_REFRESH:
+                    state = current_refresh_state(entry)
+                    if state is None or arbiter.learning_owner is not None:
+                        intents.pending = None
+                        entry.desired_state = None
+                        entry.operational_status = OPERATIONAL_STATUS_READY
+                        _finish_intent(intent)
+                        async_notify_runtime_entry_updated(hass, entry.config_entry_id)
+                        continue
+                    intent = replace(intent, state=state)
+                intents.pending = None
+                intents.in_flight = intent
+                entry.debounce_task = None
+                entry.active_send_task = asyncio.current_task()
+                _log_control_event(entry, "debounce task fired pending_state=%s", _state_summary(intent.state))
+                try:
+                    if arbiter.learning_owner is not None:
+                        raise HomeAssistantError("Controller is learning a remote; try again after learning finishes.")
+                    if arbiter.readiness_unknown:
+                        if intent.source == SOURCE_REFRESH and arbiter.uncertain_request_id is not None:
+                            raise RefreshSkipped("Controller recovery requires a new explicit command.")
+                        recover = getattr(entry.backend, "recover_send_readiness", None)
+                        recovery_expired = asyncio.get_running_loop().time() >= arbiter.recovery_deadline
+                        request_id = None if recovery_expired else arbiter.uncertain_request_id
+                        if recover is None or not await recover(request_id):
+                            raise HomeAssistantError(
+                                "Controller recovery is pending; wait briefly, then retry once it is connected and ready."
+                            )
+                        if recovery_expired and arbiter.uncertain_request_id is not None:
+                            _log_control_event(
+                                entry, "controller recovery window elapsed; accepting new intent after readiness check"
+                            )
+                        arbiter.readiness_unknown = False
+                        arbiter.uncertain_request_id = None
+                        arbiter.recovery_deadline = 0.0
+                    await _async_execute_requested_state(
+                        hass,
+                        entry,
+                        intent.state,
+                        source=intent.source,
+                        warnings=intent.warnings,
+                        applied_profile_id=intent.profile_id,
+                        applied_profile_name=intent.profile_name,
+                        clear_active_profile=intent.clear_active_profile,
+                    )
+                    _finish_intent(intent)
+                    _log_control_event(
+                        entry, "debounced send terminal result=succeeded state=%s", _state_summary(intent.state)
+                    )
+                except RefreshSkipped:
+                    # RX was stopped for handoff, but no backend send ran to
+                    # restore it. Reapply policy even if the listener task lives.
+                    await async_sync_runtime_rx_policy(entry)
+                    _finish_intent(intent)
+                    entry.operational_status = (
+                        OPERATIONAL_STATUS_PENDING if intents.pending is not None else OPERATIONAL_STATUS_READY
+                    )
+                    if entry.active_listening_enabled:
+                        await async_start_active_listener(hass, entry)
+                    async_notify_runtime_entry_updated(hass, entry.config_entry_id)
+                except asyncio.CancelledError:
+                    _finish_intent(intent, HomeAssistantError("Transmit cancelled."))
+                    raise
+                except Exception as exc:
+                    _finish_intent(intent, exc)
+                    if intents.owns(intent):
+                        message = str(exc) if isinstance(exc, HomeAssistantError) else f"{type(exc).__name__}: {exc}"
+                        _mark_send_failed(entry, message)
+                    if not isinstance(exc, HomeAssistantError):
+                        _LOGGER.exception("Proflame2 debounce task failed")
+                    if "timed out" in str(exc).lower():
+                        if not arbiter.readiness_unknown:
+                            arbiter.recovery_deadline = (
+                                asyncio.get_running_loop().time() + CONTROLLER_RECOVERY_GRACE_SECONDS
+                            )
+                        arbiter.readiness_unknown = True
+                        arbiter.uncertain_request_id = getattr(entry.backend, "latest_request_id", None)
+                    _log_control_event(
+                        entry, "debounced send terminal result=exception error=%s", str(exc), level=logging.ERROR
+                    )
+                    async_notify_runtime_entry_updated(hass, entry.config_entry_id)
+                    if intents.pending is None:
+                        break
+                finally:
+                    if intents.in_flight is intent:
+                        intents.in_flight = None
+                    entry.sending_in_progress = False
+                    entry.active_send_task = None
+                    entry.desired_state = intents.desired_state
+            if intents.pending is not None:
+                entry.debounce_task = asyncio.current_task()
+                entry.operational_status = OPERATIONAL_STATUS_PENDING
+                async_notify_runtime_entry_updated(hass, entry.config_entry_id)
     finally:
-        if not send_started:
-            runtime_entry.debounce_cancel_reason = None
-        if runtime_entry.debounce_task is asyncio.current_task():
-            runtime_entry.debounce_task = None
-        if runtime_entry.active_send_task is asyncio.current_task():
-            runtime_entry.active_send_task = None
+        if entry.control_task is asyncio.current_task():
+            if intents.in_flight is not None or intents.pending is not None:
+                for abandoned in intents.invalidate():
+                    _finish_intent(abandoned, HomeAssistantError("Control sequence stopped."))
+                entry.desired_state = None
+            entry.control_task = None
+            entry.debounce_task = None
+            entry.active_send_task = None
 
 
 async def async_start_active_listener(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
-    """Start background active listening when the hidden test flag enables it."""
+    """Start background listening only for a capable controller with RX enabled."""
 
+    if not getattr(runtime_entry.backend, "supports_active_listening", False):
+        runtime_entry.active_listening_enabled = False
     if runtime_entry.shutting_down or not runtime_entry.active_listening_enabled or runtime_entry.backend is None:
         _log_control_event(
             runtime_entry,
@@ -545,76 +747,148 @@ async def async_start_display_sync_listener(hass: HomeAssistant, runtime_entry: 
 async def _async_display_sync_loop(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
     """Keep the LilyGO display state converged after reconnects and HA option changes."""
 
-    reconcile_interval_seconds = 300.0
+    recovery = DisplaySyncRecovery(_LOGGER, runtime_entry.config_entry_id)
+    generation = getattr(runtime_entry.backend, "display_sync_generation", None)
     try:
         while (
             not runtime_entry.shutting_down
             and runtime_entry.backend_type == BACKEND_ESPHOME
             and runtime_entry.backend is not None
         ):
-            await asyncio.sleep(15.0)
+            await asyncio.sleep(DISPLAY_SYNC_INTERVAL_SECONDS)
             if runtime_entry.shutting_down:
                 break
             try:
-                loop_time = asyncio.get_running_loop().time()
-                last_sync = runtime_entry.last_display_sync_monotonic
-                force = last_sync is None or (loop_time - last_sync) >= reconcile_interval_seconds
-                await async_sync_runtime_display_state(hass, runtime_entry, force=force)
-            except RuntimeError as exc:
-                _LOGGER.debug(
-                    "Proflame2 periodic display sync skipped config_entry_id=%s: %s",
-                    runtime_entry.config_entry_id,
-                    exc,
-                )
-            except Exception:
-                _LOGGER.exception(
-                    "Proflame2 periodic display sync failed config_entry_id=%s",
-                    runtime_entry.config_entry_id,
+                backend = runtime_entry.backend
+                if backend is None:
+                    break
+                now = asyncio.get_running_loop().time()
+                if getattr(backend, "controller_available", None) is False:
+                    invalidate = getattr(backend, "invalidate_display_connection", None)
+                    if callable(invalidate):
+                        invalidate()
+                    recovery.failure(now, "Linked ESPHome controller is offline")
+                    continue
+                current_generation = getattr(backend, "display_sync_generation", None)
+                if generation and current_generation != generation:
+                    recovery.failure(now, "ESPHome connection binding changed")
+                generation = current_generation
+                arbiter = _control_arbiter(hass, runtime_entry)
+                if (
+                    arbiter.lock.locked()
+                    or arbiter.learning_owner is not None
+                    or (arbiter.readiness_unknown and arbiter.uncertain_request_id is not None)
+                    or _display_sync_deferred(runtime_entry)
+                ):
+                    continue
+                # Background rebinding/policy updates cannot race a user TX.
+                async with arbiter.lock:
+                    if runtime_entry.shutting_down or _display_sync_deferred(runtime_entry):
+                        continue
+                    last_sync = runtime_entry.last_display_sync_monotonic
+                    force = (
+                        recovery.resync_pending
+                        or recovery.confirmation_due(now)
+                        or last_sync is None
+                        or now - last_sync >= DISPLAY_SYNC_RECONCILE_SECONDS
+                    )
+                    recovery.attempting()
+                    outcome = await async_sync_runtime_display_state(hass, runtime_entry, force=force)
+                    completed = asyncio.get_running_loop().time()
+                    current_generation = getattr(backend, "display_sync_generation", None)
+                    if generation and current_generation != generation:
+                        recovery.failure(completed, "ESPHome connection binding changed")
+                    generation = current_generation
+                    if outcome is DisplaySyncOutcome.APPLIED:
+                        recovery.applied(completed)
+            except Exception as exc:
+                expected = is_display_connection_error(exc)
+                if expected:
+                    invalidate = getattr(runtime_entry.backend, "invalidate_display_connection", None)
+                    if callable(invalidate):
+                        invalidate()
+                recovery.failure(
+                    asyncio.get_running_loop().time(),
+                    f"{type(exc).__name__}: {exc}",
+                    error=exc,
+                    expected=expected,
                 )
     except asyncio.CancelledError:
         raise
     finally:
-        runtime_entry.display_sync_task = None
+        if runtime_entry.display_sync_task is asyncio.current_task():
+            runtime_entry.display_sync_task = None
 
 
 async def _async_active_listener_loop(hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry) -> None:
-    """Continuously receive observed packets when active listening is enabled."""
+    """Own RX recovery until listening is disabled or the entry shuts down.
 
-    retry_delay_seconds = 1.0
+    Action discovery and the native API can become ready after this task starts.
+    A receive/decode failure must not leave recovery dependent on a user command
+    or the unrelated periodic display sync. Cancellation remains intentional.
+    """
+    retry_delay_seconds = _ACTIVE_LISTENER_RETRY_INITIAL_SECONDS
+    interrupted = False
     try:
         while (
             not runtime_entry.shutting_down
             and runtime_entry.active_listening_enabled
             and runtime_entry.backend is not None
+            and runtime_entry.backend.supports_active_listening
         ):
             try:
+                if runtime_entry.learning_in_progress:
+                    await asyncio.sleep(0.1)
+                    continue
                 packet = await runtime_entry.backend.receive(timeout=_confirmation_receive_timeout_seconds(hass))
-            except RuntimeError as exc:
-                message = str(exc)
-                if "Linked ESPHome entry is not loaded or has no runtime_data" not in message:
-                    raise
-                _log_control_event(
-                    runtime_entry,
-                    "active listener waiting for linked ESPHome runtime data: %s",
-                    message,
-                    level=logging.DEBUG,
-                )
+                if (
+                    not runtime_entry.shutting_down
+                    and runtime_entry.active_listening_enabled
+                    and not runtime_entry.learning_in_progress
+                    and packet is not None
+                    and packet.remote_id == runtime_entry.remote_profile.serial_id
+                ):
+                    await async_apply_observed_packet(hass, runtime_entry, packet)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Reconnect after API failures; malformed observed packets must
+                # remain rejected without unnecessarily reconfiguring the radio.
+                connection_error = isinstance(exc, (RuntimeError, OSError))
+                if connection_error and hasattr(runtime_entry.backend, "connected"):
+                    runtime_entry.backend.connected = False
+                if not interrupted:
+                    _LOGGER.warning(
+                        "Proflame2 active listening interrupted config_entry_id=%s; retrying automatically: %s",
+                        runtime_entry.config_entry_id,
+                        exc,
+                        exc_info=not connection_error,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Proflame2 active listening retry failed config_entry_id=%s delay=%ss: %s",
+                        runtime_entry.config_entry_id,
+                        retry_delay_seconds,
+                        exc,
+                    )
+                interrupted = True
                 await asyncio.sleep(retry_delay_seconds)
+                retry_delay_seconds = min(retry_delay_seconds * 2, _ACTIVE_LISTENER_RETRY_MAX_SECONDS)
                 continue
-            if packet is None or packet.remote_id != runtime_entry.remote_profile.serial_id:
-                if packet is None:
-                    await asyncio.sleep(0.01)
-                continue
-            await async_apply_observed_packet(hass, runtime_entry, packet)
+            if interrupted:
+                _LOGGER.info(
+                    "Proflame2 active listening resumed config_entry_id=%s",
+                    runtime_entry.config_entry_id,
+                )
+            interrupted = False
+            retry_delay_seconds = _ACTIVE_LISTENER_RETRY_INITIAL_SECONDS
+            if packet is None:
+                await asyncio.sleep(0.01)
     except asyncio.CancelledError:
         raise
-    except Exception:
-        _LOGGER.exception(
-            "Proflame2 active listening loop failed config_entry_id=%s",
-            runtime_entry.config_entry_id,
-        )
     finally:
-        runtime_entry.active_listener_task = None
+        if runtime_entry.active_listener_task is asyncio.current_task():
+            runtime_entry.active_listener_task = None
 
 
 async def async_apply_observed_packet(
@@ -624,9 +898,13 @@ async def async_apply_observed_packet(
 ) -> None:
     """Apply a valid observed packet as the current integration-known state."""
 
+    record_received_activity(runtime_entry, packet)
+    runtime_entry.last_observed_packet = packet
     clear_active_profile_if_state_differs(runtime_entry, packet.state)
-    runtime_entry.last_error = None
-    runtime_entry.operational_status = OPERATIONAL_STATUS_READY
+    local_work = runtime_entry.desired_state is not None
+    if not local_work:
+        runtime_entry.last_error = None
+        runtime_entry.operational_status = OPERATIONAL_STATUS_READY
     _log_control_event(
         runtime_entry,
         "observed packet accepted remote_id=%06x state=%s source=%s",
@@ -637,8 +915,9 @@ async def async_apply_observed_packet(
     current_state = runtime_current_state(runtime_entry)
     if current_state == packet.state and runtime_entry.state_confidence == STATE_CONFIDENCE_OBSERVED:
         runtime_entry.last_packet = packet
-        runtime_entry.last_error = None
-        runtime_entry.operational_status = OPERATIONAL_STATUS_READY
+        if not local_work:
+            runtime_entry.last_error = None
+            runtime_entry.operational_status = OPERATIONAL_STATUS_READY
         return
     await async_set_runtime_current_state(
         hass,
@@ -676,6 +955,8 @@ async def _async_confirmation_task(
 ) -> None:
     """Listen briefly for a post-TX confirmation/echo packet."""
 
+    revision = runtime_entry.control_intents.revision
+    epoch = runtime_entry.control_intents.epoch
     try:
         deadline = asyncio.get_running_loop().time() + _confirmation_window_seconds(hass)
         receive_timeout = _confirmation_receive_timeout_seconds(hass)
@@ -691,6 +972,8 @@ async def _async_confirmation_task(
             if runtime_entry.backend is None:
                 break
             packet = await runtime_entry.backend.receive(timeout=receive_timeout)
+            if (revision, epoch) != (runtime_entry.control_intents.revision, runtime_entry.control_intents.epoch):
+                return
             if packet is None:
                 await asyncio.sleep(min(0.05, max(0.0, deadline - asyncio.get_running_loop().time())))
                 continue
@@ -708,6 +991,7 @@ async def _async_confirmation_task(
                 _state_summary(packet.state),
                 "yes" if packet.state == requested_packet.state else "no",
             )
+            record_received_activity(runtime_entry, packet)
             if packet.state != requested_packet.state:
                 _log_control_event(
                     runtime_entry,
@@ -719,6 +1003,8 @@ async def _async_confirmation_task(
             await async_apply_observed_packet(hass, runtime_entry, packet)
             return
 
+        if (revision, epoch) != (runtime_entry.control_intents.revision, runtime_entry.control_intents.epoch):
+            return
         runtime_entry.operational_status = OPERATIONAL_STATUS_READY
         runtime_entry.state_confidence = STATE_CONFIDENCE_REQUESTED
         await async_persist_runtime_entry_state(hass, runtime_entry)
@@ -743,10 +1029,15 @@ async def _async_confirmation_task(
             )
         raise
     finally:
-        await _async_end_confirmation_rx(runtime_entry)
-        if not runtime_entry.active_listening_enabled:
-            await _async_stop_rx(runtime_entry)
-        runtime_entry.confirmation_task = None
+        if (revision, epoch) == (
+            runtime_entry.control_intents.revision,
+            runtime_entry.control_intents.epoch,
+        ) and runtime_entry.desired_state is None:
+            await _async_end_confirmation_rx(runtime_entry)
+            if not runtime_entry.active_listening_enabled:
+                await _async_stop_rx(runtime_entry)
+        if runtime_entry.confirmation_task is asyncio.current_task():
+            runtime_entry.confirmation_task = None
 
 
 async def async_register_services(hass: HomeAssistant) -> None:
@@ -841,22 +1132,37 @@ async def async_execute_display_state_update(
     await update_display_state(display_state)
 
 
+def _display_sync_deferred(runtime_entry: Proflame2RuntimeEntry) -> bool:
+    """Learning and user intent take precedence over background convergence."""
+    return (
+        runtime_entry.learning_in_progress
+        or runtime_entry.desired_state is not None
+        or runtime_entry.sending_in_progress
+    )
+
+
 async def async_sync_runtime_display_state(
     hass: HomeAssistant,
     runtime_entry: Proflame2RuntimeEntry,
     *,
     action_label: str | None = None,
     force: bool = False,
-) -> None:
+) -> DisplaySyncOutcome:
     """Push the current known HA/runtime state to the ESPHome display endpoint."""
 
     backend = runtime_entry.backend
-    if backend is None:
-        return
+    if backend is None or _display_sync_deferred(runtime_entry):
+        return DisplaySyncOutcome.DEFERRED
+    prepare = getattr(backend, "prepare_display_sync", None)
+    if callable(prepare):
+        force = await prepare() or force
+    # User intent can arrive while connection setup yields to the event loop.
+    if _display_sync_deferred(runtime_entry):
+        return DisplaySyncOutcome.DEFERRED
     await async_sync_runtime_rx_policy(runtime_entry)
     if runtime_entry.active_listening_enabled:
         await async_start_active_listener(hass, runtime_entry)
-    await _async_push_runtime_display_state(
+    return await _async_push_runtime_display_state(
         runtime_entry,
         action_label=action_label,
         force=force,
@@ -868,19 +1174,23 @@ async def _async_push_runtime_display_state(
     *,
     action_label: str | None = None,
     force: bool = False,
-) -> None:
+) -> DisplaySyncOutcome:
     """Push current runtime state without changing receive policy."""
 
+    # Existing firmware treats changed display settings as grounds to cancel a
+    # repeat. HA-only intent must not suppress the last accepted command's retry.
+    if _display_sync_deferred(runtime_entry):
+        return DisplaySyncOutcome.DEFERRED
     backend = runtime_entry.backend
     if backend is None:
-        return
+        return DisplaySyncOutcome.DEFERRED
     update_display_state = getattr(backend, "update_display_state", None)
     if not callable(update_display_state):
-        return
+        return DisplaySyncOutcome.DEFERRED
 
     state = runtime_current_state(runtime_entry)
     if state is None:
-        return
+        return DisplaySyncOutcome.DEFERRED
 
     signature = (
         state.power,
@@ -893,7 +1203,7 @@ async def _async_push_runtime_display_state(
         runtime_entry.display_short_name,
     )
     if not force and action_label is None and runtime_entry.last_display_sync_signature == signature:
-        return
+        return DisplaySyncOutcome.UNCHANGED
 
     display_state = ESPHomeDisplayState(
         power=state.power,
@@ -910,6 +1220,7 @@ async def _async_push_runtime_display_state(
     await update_display_state(display_state)
     runtime_entry.last_display_sync_signature = signature
     runtime_entry.last_display_sync_monotonic = asyncio.get_running_loop().time()
+    return DisplaySyncOutcome.APPLIED
 
 
 async def async_sync_runtime_rx_policy(runtime_entry: Proflame2RuntimeEntry) -> None:
@@ -921,7 +1232,10 @@ async def async_sync_runtime_rx_policy(runtime_entry: Proflame2RuntimeEntry) -> 
     """
 
     backend = runtime_entry.backend
-    if backend is None:
+    if backend is None or runtime_entry.learning_in_progress:
+        return
+    if not getattr(backend, "supports_active_listening", False):
+        runtime_entry.active_listening_enabled = False
         return
     set_active_listening_enabled = getattr(backend, "set_active_listening_enabled", None)
     if not callable(set_active_listening_enabled):
@@ -1001,6 +1315,12 @@ def _ensure_runtime_entry_accepts_actions(runtime_entry: Proflame2RuntimeEntry) 
         raise HomeAssistantError(
             f"This Proflame2 fireplace is shutting down ({reason}); new actions are temporarily unavailable."
         )
+    if runtime_entry.learning_in_progress:
+        raise HomeAssistantError("Controller is learning a remote; try again after learning finishes.")
+    if runtime_entry.radio_configuration_in_progress:
+        raise HomeAssistantError("Controller RF band is changing; try again after configuration finishes.")
+    if runtime_entry.radio_configuration_error:
+        raise HomeAssistantError(runtime_entry.radio_configuration_error)
 
 
 async def async_execute_set_state(
@@ -1022,7 +1342,26 @@ async def async_execute_set_state(
         {key: value for key, value in data.items() if key != ATTR_ENTITY_ID},
     )
     try:
-        requested_state, ignored_warnings = build_requested_state(runtime_entry.features, data)
+        retain_off_flame = False
+        base_state = runtime_entry.desired_state or runtime_current_state(runtime_entry)
+        if CONF_POWER in data and CONF_FLAME not in data and source != "saved_profile":
+            # A power request without a flame uses existing settings. Explicit
+            # full-state commands and saved profiles retain their own values.
+            state = runtime_entry.desired_state or runtime_current_state(runtime_entry)
+            if state is None:
+                if data[CONF_POWER]:
+                    raise StateValidationError("Cannot turn power on because current state is unknown; specify flame.")
+            else:
+                flame = flame_for_power_on(state) if data[CONF_POWER] else state.flame
+                data = {**asdict(state), **data, CONF_FLAME: flame}
+                retain_off_flame = not data[CONF_POWER]
+        requested_state, ignored_warnings = build_requested_state(
+            runtime_entry.features,
+            data,
+            allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
+            allow_power_off_flame=retain_off_flame,
+        )
+        requested_state = _retain_extended_cpi(runtime_entry, requested_state, base_state, data)
     except StateValidationError as exc:
         runtime_entry.last_error = str(exc)
         _log_control_event(
@@ -1100,20 +1439,61 @@ async def _async_execute_requested_state(
     applied_profile_name: str | None = None,
     clear_active_profile: bool = False,
 ) -> None:
-    """Send one already-validated full-state request and update runtime state."""
+    """Submit explicit services and execute only on the single owning dispatcher."""
 
-    _ensure_runtime_entry_accepts_actions(runtime_entry)
-    request_summary = await _async_begin_send_execution(
+    if runtime_entry.active_send_task is not asyncio.current_task():
+        completion = asyncio.get_running_loop().create_future()
+        # A caller may disconnect while physical TX continues; always retrieve
+        # its terminal exception without changing what active waiters observe.
+        completion.add_done_callback(lambda future: None if future.cancelled() else future.exception())
+        _submit_control_intent(
+            hass,
+            runtime_entry,
+            requested_state,
+            source=source,
+            warnings=warnings,
+            profile_id=applied_profile_id,
+            profile_name=applied_profile_name,
+            clear_active_profile=clear_active_profile,
+            completion=completion,
+        )
+        await asyncio.shield(completion)
+        return
+
+    await _async_transmit_requested_state(
         hass,
         runtime_entry,
         requested_state,
         source=source,
         warnings=warnings,
+        applied_profile_id=applied_profile_id,
+        applied_profile_name=applied_profile_name,
+        clear_active_profile=clear_active_profile,
     )
-    _ensure_send_backend_available(hass, runtime_entry, source=source)
 
+
+async def _async_transmit_requested_state(
+    hass: HomeAssistant,
+    runtime_entry: Proflame2RuntimeEntry,
+    requested_state,
+    *,
+    source: str,
+    warnings: tuple[str, ...] = (),
+    applied_profile_id: str | None = None,
+    applied_profile_name: str | None = None,
+    clear_active_profile: bool = False,
+) -> None:
+    """Send one already-validated full-state request and update runtime state."""
+
+    _ensure_runtime_entry_accepts_actions(runtime_entry)
+    send_epoch = runtime_entry.control_intents.epoch
+    request_summary = _state_summary(requested_state)
     prepared_request: _PreparedSendRequest | None = None
     try:
+        await _async_begin_send_execution(hass, runtime_entry, requested_state, source=source, warnings=warnings)
+        if send_epoch != runtime_entry.control_intents.epoch:
+            raise HomeAssistantError("Control sequence ended before transmission started.")
+        _ensure_send_backend_available(hass, runtime_entry, source=source)
         prepared_request = _prepare_send_request(
             runtime_entry,
             requested_state,
@@ -1122,6 +1502,8 @@ async def _async_execute_requested_state(
             request_summary=request_summary,
         )
         send_result = await _async_send_prepared_request(runtime_entry, prepared_request)
+    except RefreshSkipped:
+        raise
     except asyncio.TimeoutError as exc:
         _mark_send_failed(
             runtime_entry,
@@ -1129,6 +1511,7 @@ async def _async_execute_requested_state(
                 f"Transmit timed out after {BACKEND_SEND_TIMEOUT_SECONDS:.0f} seconds; "
                 "controls reverted to last known state."
             ),
+            expected_epoch=send_epoch,
         )
         _log_control_event(
             runtime_entry,
@@ -1142,7 +1525,9 @@ async def _async_execute_requested_state(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         raise HomeAssistantError(runtime_entry.last_error) from exc
     except asyncio.CancelledError:
-        _mark_send_failed(runtime_entry, "Transmit cancelled; controls reverted to last known state.")
+        _mark_send_failed(
+            runtime_entry, "Transmit cancelled; controls reverted to last known state.", expected_epoch=send_epoch
+        )
         _log_control_event(
             runtime_entry,
             "send execution cancelled source=%s state=%s",
@@ -1153,7 +1538,7 @@ async def _async_execute_requested_state(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         raise
     except (NotImplementedError, RuntimeError) as exc:
-        _mark_send_failed(runtime_entry, _transmit_failure_message(str(exc)))
+        _mark_send_failed(runtime_entry, _transmit_failure_message(str(exc)), expected_epoch=send_epoch)
         _log_control_event(
             runtime_entry,
             "send execution failed source=%s exception=%s error=%s",
@@ -1165,7 +1550,9 @@ async def _async_execute_requested_state(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         raise HomeAssistantError(runtime_entry.last_error) from exc
     except Exception as exc:
-        _mark_send_failed(runtime_entry, _transmit_failure_message(f"{type(exc).__name__}: {exc}"))
+        _mark_send_failed(
+            runtime_entry, _transmit_failure_message(f"{type(exc).__name__}: {exc}"), expected_epoch=send_epoch
+        )
         _LOGGER.exception(
             "Proflame2 send execution exception config_entry_id=%s backend=%s source=%s state=%s",
             runtime_entry.config_entry_id,
@@ -1194,16 +1581,33 @@ async def _async_execute_requested_state(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         raise HomeAssistantError(runtime_entry.last_error) from exc
 
-    await _async_record_successful_send(
-        hass,
-        runtime_entry,
-        prepared_request,
-        send_result,
-        applied_profile_id=applied_profile_id,
-        applied_profile_name=applied_profile_name,
-        clear_active_profile=clear_active_profile,
-    )
-    await _async_finish_send_confirmation_policy(hass, runtime_entry, prepared_request)
+    if not runtime_entry.control_intents.owns(prepared_request.intent):
+        return
+    try:
+        await _async_record_successful_send(
+            hass,
+            runtime_entry,
+            prepared_request,
+            send_result,
+            applied_profile_id=applied_profile_id,
+            applied_profile_name=applied_profile_name,
+            clear_active_profile=clear_active_profile,
+        )
+        await _async_finish_send_confirmation_policy(hass, runtime_entry, prepared_request)
+    except Exception as exc:
+        # Local RF completion is already known. Persistence/display/RX errors
+        # must not turn it into a failed TX or discard a newer pending intent.
+        if not runtime_entry.control_intents.owns(prepared_request.intent):
+            return
+        runtime_entry.last_error = f"Transmit completed; post-TX update failed: {exc}"
+        runtime_entry.operational_status = (
+            OPERATIONAL_STATUS_PENDING if runtime_entry.control_intents.pending else OPERATIONAL_STATUS_READY
+        )
+        runtime_entry.desired_state = (
+            runtime_entry.control_intents.pending.state if runtime_entry.control_intents.pending else None
+        )
+        _LOGGER.warning("Proflame2 post-TX update failed", exc_info=True)
+        async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
 
 
 async def _async_begin_send_execution(
@@ -1217,12 +1621,13 @@ async def _async_begin_send_execution(
     """Move runtime state into the sending phase and stop pending RX/tasks."""
 
     request_summary = _state_summary(requested_state)
-    _cancel_runtime_task(
-        runtime_entry,
-        runtime_entry.debounce_task,
-        reason=f"start_send_execution:{source}",
-        kind="debounce",
-    )
+    if runtime_entry.debounce_task is not asyncio.current_task():
+        _cancel_runtime_task(
+            runtime_entry,
+            runtime_entry.debounce_task,
+            reason=f"start_send_execution:{source}",
+            kind="debounce",
+        )
     runtime_entry.debounce_task = None
     _cancel_runtime_task(
         runtime_entry,
@@ -1231,8 +1636,13 @@ async def _async_begin_send_execution(
         kind="confirmation",
     )
     runtime_entry.confirmation_task = None
+    intent = runtime_entry.control_intents.in_flight
     await _async_stop_rx(runtime_entry)
+    if not runtime_entry.control_intents.owns(intent):
+        raise HomeAssistantError("Control sequence ended before transmission started.")
 
+    if source == SOURCE_REFRESH and current_refresh_state(runtime_entry) != requested_state:
+        raise RefreshSkipped
     runtime_entry.last_send_result = None
     runtime_entry.last_error = None
     runtime_entry.sending_in_progress = True
@@ -1288,7 +1698,10 @@ def _prepare_send_request(
         runtime_entry.remote_profile,
         source=source,
         warnings=warnings,
-        allow_power_off_flame=(source == "debounced_control"),
+        # Service/profile input was validated before dispatch. Retained OFF
+        # levels from power-only services and staged switches remain valid.
+        allow_power_off_flame=True,
+        allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
     )
     packet.transmission_plan = build_transmission_plan(packet.frame)
     packet.display_state = ESPHomeDisplayState(
@@ -1308,6 +1721,7 @@ def _prepare_send_request(
         request_summary=request_summary,
         packet=packet,
         source=source,
+        intent=runtime_entry.control_intents.in_flight,
     )
     _log_pre_send_packet(runtime_entry, prepared_request)
     return prepared_request
@@ -1365,14 +1779,20 @@ async def _async_send_prepared_request(runtime_entry: Proflame2RuntimeEntry, pre
     )
 
 
-def _mark_send_failed(runtime_entry: Proflame2RuntimeEntry, error_message: str) -> None:
+def _mark_send_failed(
+    runtime_entry: Proflame2RuntimeEntry, error_message: str, *, expected_epoch: int | None = None
+) -> None:
     """Apply the common runtime state for failed or cancelled sends."""
 
+    if expected_epoch is not None and expected_epoch != runtime_entry.control_intents.epoch:
+        return
     runtime_entry.sending_in_progress = False
     runtime_entry.operational_status = OPERATIONAL_STATUS_FAILED
     runtime_entry.last_error = error_message
     runtime_entry.last_send_result = None
     runtime_entry.desired_state = None
+    for intent in runtime_entry.control_intents.invalidate():
+        _finish_intent(intent, HomeAssistantError(error_message))
 
 
 async def _async_record_successful_send(
@@ -1387,6 +1807,9 @@ async def _async_record_successful_send(
 ) -> None:
     """Persist the optimistic requested state after a backend send succeeds."""
 
+    if not runtime_entry.control_intents.owns(prepared_request.intent):
+        return
+    runtime_entry.refresh_schedule.record_activity()
     runtime_entry.sending_in_progress = False
     runtime_entry.last_send_result = send_result
     runtime_entry.last_error = None
@@ -1397,6 +1820,13 @@ async def _async_record_successful_send(
         send_result.backend_name,
         prepared_request.request_summary,
     )
+    if prepared_request.source == SOURCE_REFRESH:
+        # Refresh is an unchanged-state send, not a new user intent. In
+        # particular, an RX received during TX must remain the accepted state.
+        runtime_entry.desired_state = (
+            runtime_entry.control_intents.pending.state if runtime_entry.control_intents.pending is not None else None
+        )
+        return
     if clear_active_profile:
         runtime_entry.last_applied_profile_id = None
         runtime_entry.last_applied_profile_name = None
@@ -1415,7 +1845,11 @@ async def _async_record_successful_send(
         packet=prepared_request.packet,
         notify=False,
     )
-    runtime_entry.desired_state = None
+    if not runtime_entry.control_intents.owns(prepared_request.intent):
+        return
+    runtime_entry.desired_state = (
+        runtime_entry.control_intents.pending.state if runtime_entry.control_intents.pending is not None else None
+    )
 
 
 async def _async_finish_send_confirmation_policy(
@@ -1424,6 +1858,22 @@ async def _async_finish_send_confirmation_policy(
     prepared_request: _PreparedSendRequest,
 ) -> None:
     """Resume active listening or start post-TX confirmation after send success."""
+
+    if not runtime_entry.control_intents.owns(prepared_request.intent):
+        return
+    if runtime_entry.control_intents.pending is not None:
+        runtime_entry.operational_status = OPERATIONAL_STATUS_PENDING
+        if runtime_entry.active_listening_enabled:
+            await async_start_active_listener(hass, runtime_entry)
+        async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
+        return
+
+    if prepared_request.source == SOURCE_REFRESH:
+        runtime_entry.operational_status = OPERATIONAL_STATUS_READY
+        if runtime_entry.active_listening_enabled:
+            await async_start_active_listener(hass, runtime_entry)
+        async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
+        return
 
     if runtime_entry.active_listening_enabled:
         runtime_entry.operational_status = OPERATIONAL_STATUS_CONFIRMING
@@ -1446,6 +1896,7 @@ async def _async_finish_send_confirmation_policy(
         runtime_entry.confirmation_task = hass.async_create_background_task(
             _async_confirmation_task(hass, runtime_entry, prepared_request.packet),
             f"{DOMAIN}_{runtime_entry.config_entry_id}_confirmation",
+            eager_start=False,
         )
     else:
         runtime_entry.operational_status = OPERATIONAL_STATUS_READY

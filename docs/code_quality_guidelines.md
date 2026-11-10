@@ -40,6 +40,11 @@ senior engineer can navigate, evaluate, debug, and safely change.
    installations unless the project intentionally changes the major version and
    documents the required upgrade path.
 
+   Unreleased experimental data formats keep their initial version during
+   development. Increment the format version only when changing a format that
+   has been released; do not add compatibility layers for discarded development
+   schemas unless explicitly required.
+
 7. Use codified lifecycle automation.
    Repository lifecycle operations should use existing GitHub Actions or other
    checked-in automation before manual edits. Version stamping, release
@@ -47,6 +52,52 @@ senior engineer can navigate, evaluate, debug, and safely change.
    repeatable operations must follow the repository's workflows when they
    exist. Manual execution is acceptable only for inspection, emergency repair,
    or one-off investigation, and should not replace the canonical workflow.
+
+## Privacy Before Publication or Commit
+
+Scrubbing personal and environment-identifying information is mandatory before
+posting anything to GitHub or creating any commit, including local-only commits.
+Local commits may later be pushed, so the same rule applies immediately.
+
+- Review issue and pull request titles, bodies, comments, release notes, commit
+  messages, committed content, logs, screenshots, and other attachments before
+  submission or commit.
+- Remove personal names, local account names, email addresses, home-directory
+  paths, private hostnames, network names, IP addresses, hardware identifiers,
+  credentials, and other identifying details from submitted content.
+- For local artifact references, include only a scrubbed filename, never a home
+  directory or other identity-bearing path. Use neutral placeholders where
+  context is necessary, and retain non-identifying technical evidence such as
+  source filenames, crash addresses, and line numbers.
+- Keep device-specific Learning IDs and private local notes in `docs/private/`,
+  which is ignored recursively by Git. Never force-add its contents. Keep raw
+  captures in dedicated capture storage and credentials in external configuration.
+- The only exception is the maintainer's explicitly authorized personal
+  sign-off on a post. Do not record the signature in these guidelines or infer
+  permission for any other personal information from it.
+- Inspect the final text and attachments, not just a draft or template. If
+  identifying information is discovered after posting, redact it promptly and
+  inform the maintainer. Editing a post does not guarantee removal from prior
+  notifications or copies.
+
+## Development Checkouts
+
+- Perform mainline development in the primary repository checkout. Use normal
+  branches there for sequential work; a feature branch does not itself require
+  a separate worktree.
+- Use an additional worktree only for parallel work or an isolated baseline
+  where switching the primary checkout would disrupt or confuse ongoing
+  development. Identify its purpose and branch before creating it.
+- Additional worktrees must use the approved external worktree directory,
+  never a directory inside the primary repository or the projects directory.
+- Keep the primary checkout as the integration point. Changes in another
+  worktree are not present there until deliberately integrated.
+- Retire worktrees when their parallel effort is complete and all desired
+  changes have been integrated. Check tracked, untracked, and private files
+  for anything that still needs preserving before removal.
+- Preserve unrelated work and use normal Git worktree removal. Do not force
+  removal, discard changes, or delete unmerged branches without explicit
+  approval. Do not let completed worktrees accumulate indefinitely.
 
 ## Repository Structure
 
@@ -112,6 +163,12 @@ Guidelines:
   future engineering decisions.
 - Generated files such as `__pycache__/` are not source artifacts and should
   not be committed.
+- Build and test scratch directories must be uniquely owned by each invocation
+  and cleaned on success, failure, and handled interruption. Use context managers
+  or exit traps rather than relying on a later run or system reboot. Never prune
+  shared temporary directories, active worktrees, or capture/firmware evidence.
+  Keep deliberately retained reports in ignored project directories and document
+  any persistent coordination files or dependency caches.
 
 When reviewing `tools/`, focus on whether the workflow is understandable,
 reproducible, and safe from semantic/debug artifact confusion. Do not require
@@ -510,6 +567,30 @@ When adding or changing documented policy, add or update tests for:
 
 If a comment says failed artifacts must never be used semantically, a test
 should make that policy difficult to regress.
+
+### Capture-Backed Regression Tests
+
+New remote frames obtained during debugging must be added to the regression
+suite as compact protocol fixtures, with automated tests for their expected
+behavior. Keep original raw recordings, IQ files, full logs, capture archives,
+and generated analysis outside the repository. Retain only the protocol vectors
+and non-identifying provenance/state labels needed by the regression tests.
+Apply the project's privacy rules before committing fixtures; if evidence cannot
+be shared safely, retain it externally and document the coverage limitation.
+Expected decoded fields and integrity bytes must come from recorded evidence,
+not be generated by the implementation under test. Do not silently rewrite frame
+bytes or recalculate integrity to make a recorded example pass.
+
+- Cover each newly observed remote and distinct protocol/state case. Exact
+  duplicates may be deduplicated when they add no repeat/acquisition coverage.
+- An unsupported or currently undecodable frame is not automatically corrupt.
+  Preserve it as evidence, reproduce the failure before applying a fix, and
+  retain a passing regression test afterward.
+- Corrupt, incomplete, or untrustworthy captures may be excluded from valid-frame
+  tests, but document the reason. Retain them as rejection tests when useful;
+  never silently repair them or treat guessed fields as confirmed evidence.
+- Protocol/integrity changes must also pass the existing real-remote corpus,
+  covering legacy and extended remotes, before being considered ready.
 
 ## Tooling Expectations
 

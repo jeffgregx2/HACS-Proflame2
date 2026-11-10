@@ -17,10 +17,13 @@ YardStick path is responsible for:
 YardStick does not provide always-on active listening. Do not present it as a
 state-tracking controller.
 
-Packet layout, ECC behavior, and transmit structure are derived from
+Legacy packet layout, ECC behavior, and transmit structure are derived from
 [SmartFire](https://github.com/johnellinwood/SmartFire). Use SmartFire and
 [custom_components/proflame2/rf/waveform.py](../custom_components/proflame2/rf/waveform.py)
-as the packet-format references.
+as the legacy references. Ten-word framing and serial-inclusive integrity are
+documented in the [extended protocol specification](issue_15_extended_protocol_design.md).
+The [YardStick extended support design](yardstick_extended_frame_support_design.md)
+records implementation boundaries and automated validation.
 
 ## rfcat Radio Configuration
 
@@ -29,19 +32,50 @@ matching the model used by SmartFire:
 
 | Setting | Value |
 | --- | --- |
-| TX frequency | `314973000` Hz |
-| RX/learning frequency | `315000000` Hz |
+| TX frequency | 315 band: `314973000` Hz; 433 band: `433920000` Hz |
+| RX/learning frequency | 315 band: `315000000` Hz; 433 band: `433920000` Hz |
 | Modulation | `MOD_ASK_OOK` |
 | Data rate | `2400` bps |
 | Sync mode | Disabled, `setMdmSyncMode(0)` when available |
 | Manchester | Disabled, `setEnableMdmManchester(False)` when available |
 | Packet CRC | Disabled for receive, `setEnablePktCRC(False)` when available |
-| RX packet length | Fixed byte window via `makePktFLEN(...)` when available |
+| RX packet length | 255-byte default capture window via `makePktFLEN(...)` when available |
 
 The implementation intentionally treats receive as a byte-window problem, not
 as packet-aligned decoded bytes from the radio. Software scans candidate
 bit/symbol offsets over the returned bytes and promotes only valid decoded
 samples.
+
+Explicit shorter windows remain available for diagnostics. A window shorter
+than 33 bytes cannot contain a complete extended frame body; receive diagnostics
+report this limitation. Keep the legacy 25-byte serialized packet-size constant
+separate from the receive-window default.
+
+## Controller Configuration
+
+One fireplace configuration entry exposes only the fireplace device. Its
+Configuration section contains the YardStick RF band select entity; band data
+is saved as `rf_band` in the same entry's data. Missing band data means 315 MHz.
+
+Band policy still belongs to the controller/backend. Presenting the setting on
+the fireplace is a UI simplification justified by the enforced 1:1 assignment.
+It does not become part of the remote profile or Learning ID. Keep this boundary
+if more controller settings are added. Revisit presentation if controller
+sharing is introduced in a future release.
+
+Both physical backends retain exclusive fireplace assignment. LilyGO keeps its
+existing ESPHome device, fireplace relationship, and YAML band configuration.
+No separate YardStick device or configuration entry is created, and no migration
+for the discarded development-only device presentation is included.
+
+`rf/band.py` resolves YardStick frequencies for setup, runtime, and learning.
+Diagnostic learning frequency overrides must stay in the selected band.
+`yardstick_controller.py` uses existing controller arbitration to finish in-flight
+TX, discard queued controls, stop old RX tasks, and apply settings. Its worker
+`CONFIGURE` command reuses receive configuration and returns to idle, without
+capture or TX. Save the selection only after successful application. Failures
+keep controls and refresh suspended until an explicit retry succeeds; native
+executor work retains ownership across caller cancellation.
 
 ## Learning Receive Model
 
@@ -49,6 +83,32 @@ During guided learning, Home Assistant asks the YardStick backend to receive
 native remote traffic. The accepted candidate is promoted into the same learned
 profile model used by the other controllers. Do not add YardStick-only learned
 profile semantics.
+
+The FIFO scanner recognizes complete seven-word legacy and ten-word extended
+frames. Extended parsing reuses the bounded word parser in `rf/pulse.py`, checks
+guards, padding, parity, and both original integrity words, and retains all ten
+words. FIFO decoding does not apply the RMT-only missing-final-guard exception.
+It accepts the existing 12-low-bit repeat separator and a complete final extended
+frame followed by at most seven low byte-padding bits. An incomplete or invalid
+extended frame is not accepted as a seven-word prefix when continuation is present.
+
+RF repeats are grouped by the full `frame.wire_words`, with distinct physical
+offsets counted once. Extended learning separately uses `(W4 & 0xFB, W5)` for
+control diversity. Units, setpoint, and room temperature can change without
+changing the derived identity. Shared manual-profile policy fixes Celsius and
+20-degree setpoint/room-temperature values during learning, HA profile loading,
+and Learning ID import/export. Original frames and imported IDs are validated
+before normalization. See the [Issue #32 policy](issue_32_learning_mode_design.md).
+
+Guided learning pauses for thermostat/SMART mode and resumes the pending action
+when manual mode is observed. The convenience learning API also uses shared
+extended derivation, while preserving its legacy thresholds. Backend `learn()`
+returns original samples rather than independently deriving a profile.
+
+Diagnostics and collector output include the protocol variant, complete words,
+extension words, frame length, and extended integrity status. Failed and heuristic
+windows remain debug evidence; receiving bytes alone does not establish a valid
+packet or a learned profile.
 
 Receive failures are often lower-level rfcat/libusb/device-access failures
 rather than Proflame2 decode failures. Keep those failure classes separate when
@@ -70,9 +130,14 @@ The current backend therefore uses an internal repeat strategy:
 
 The default embedded strategy aligns YardStick with LilyGO at the semantic
 level: one Home Assistant command becomes one RF burst containing the repeated
-frames the fireplace expects. In validation, `rtl_433` sees this as one logical
+frames the fireplace expects. YardStick retains five repeats; LilyGO's normal
+ten-repeat setting does not change this backend policy. In validation,
+`rtl_433` sees this as one logical
 Proflame2 command and the fireplace accepts it when RF placement/power are
-adequate.
+adequate for previously validated installations. That history does not establish
+physical RF acceptance of extended commands. Extended software tests verify a
+260-bit frame body and a five-frame burst of 1,348 meaningful bits in 169 bytes,
+including unchanged direct and worker byte transport.
 
 Do not expose repeat strategy as a normal UI option unless a real compatibility
 case requires it. It is a backend implementation detail under the common
@@ -90,6 +155,17 @@ backend, preserve that isolation boundary.
 
 ## Validation Expectations
 
+The extended implementation passed the full software regression suite, including
+recorded packet replay, direct/worker transport tests, raw FIFO input through HA
+guided learning, and cancellation/controller-release checks. See the
+[completed validation record](yardstick_extended_frame_support_design.md#completed-software-validation).
+Maintainer RF testing confirmed extended learning from a separate LilyGO
+transmitter, extended TX decoded by rtl_433 on both bands, and a 433-to-315 MHz
+change through HA followed by a correctly decoded control change. Legacy
+learning/control regression testing also passed. Actual extended-fireplace
+acceptance remains unverified. See the
+[hardware validation record](yardstick_extended_frame_support_design.md#maintainer-rf-validation).
+
 After YardStick backend changes, validate at least:
 
 - YardStick TX is accepted by the fireplace.
@@ -100,3 +176,17 @@ After YardStick backend changes, validate at least:
   unavailable.
 - If changing repeat behavior, compare `rtl_433` output and real fireplace
   acceptance, not just whether rfcat returned success.
+
+## Independent Receiver Check
+
+Use rtl_433 to inspect transmissions on the selected band:
+
+```bash
+rtl_433 -f 315M -R 207
+rtl_433 -f 433.92M -R 207
+```
+
+Run one command for the selected band. The 433 MHz option operates at
+433.92 MHz; `433M` tunes to a different frequency. A decoded packet with valid
+integrity confirms reception, but not fireplace acceptance. YardStick sends
+five repeated frames per command; rtl_433 may report them as one logical command.

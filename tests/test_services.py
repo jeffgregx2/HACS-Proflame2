@@ -347,7 +347,10 @@ async def test_observed_packet_immediately_updates_controller_display(hass) -> N
     assert display_state.action_label is None
 
 
-async def test_setup_entry_defers_display_sync_when_linked_esphome_not_ready(hass, monkeypatch) -> None:
+@pytest.mark.parametrize("typed_unavailable", [False, True])
+async def test_setup_entry_defers_display_sync_when_linked_esphome_not_ready(
+    hass, monkeypatch, typed_unavailable
+) -> None:
     entry = _add_entry(
         hass,
         title="Living Room",
@@ -356,8 +359,11 @@ async def test_setup_entry_defers_display_sync_when_linked_esphome_not_ready(has
     )
 
     from custom_components.proflame2 import services as services_module
+    from custom_components.proflame2.rf.esphome.transport import ESPHomeControllerUnavailableError
 
     async def _raise_not_ready(*args, **kwargs):
+        if typed_unavailable:
+            raise ESPHomeControllerUnavailableError("Linked ESPHome controller is offline")
         raise RuntimeError(
             "ESPHome backend is unavailable: Linked ESPHome entry is not loaded or has no runtime_data: abc123"
         )

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ESPHOME_ROOT = REPO_ROOT / "esphome"
+ESPHOME_FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "esphome"
 
 
 def _read(path: str) -> str:
@@ -48,6 +50,8 @@ def test_esphome_firmware_tree_contains_expected_source_files() -> None:
         "components/proflame2_tembed/radio_cc1101.cpp",
         "components/proflame2_tembed/radio_cc1101_rx.cpp",
         "components/proflame2_tembed/radio_cc1101_tx.cpp",
+        "components/proflame2_tembed/rf_band.h",
+        "components/proflame2_tembed/rf_band.cpp",
         "components/proflame2_tembed/rmt_ook_receiver.h",
         "components/proflame2_tembed/rmt_ook_receiver.cpp",
         "components/proflame2_tembed/telemetry_publisher.h",
@@ -72,8 +76,18 @@ def test_esphome_ci_compiles_the_checked_out_component_revision() -> None:
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
 
     assert "run: make esphome-validate" in workflow
-    assert "esphome-stage:" in makefile
+    assert "_esphome-stage:" in makefile
+    assert "bash tools/run_esphome_validation.sh _$@" in makefile
     assert 'cp -R "$(ESPHOME_STAGE)/esphome/components/proflame2_tembed"' in makefile
+
+
+def test_invalid_esphome_validation_fixture_is_not_visible_to_the_dashboard() -> None:
+    """The live ESPHome overlay must never discover an intentionally invalid config."""
+
+    assert (ESPHOME_FIXTURE_ROOT / "validate_display_preset_433.yaml").is_file()
+    assert (ESPHOME_FIXTURE_ROOT / "validate_display_preset_invalid_rf_band.yaml").is_file()
+    assert not (ESPHOME_ROOT / "validate_display_preset_433.yaml").exists()
+    assert not (ESPHOME_ROOT / "validate_display_preset_invalid_rf_band.yaml").exists()
 
 
 def test_esphome_tembed_decomposition_docs_match_current_shell_layout() -> None:
@@ -135,12 +149,16 @@ def test_firmware_logs_the_stamped_version_at_info_level() -> None:
     assert "void Proflame2TEmbedComponent::publish_firmware_version_()" in implementation
     assert "void Proflame2TEmbedComponent::log_firmware_version_if_due_()" in implementation
     assert "FIRMWARE_VERSION_API_LOG_INTERVAL_MS" in implementation
+    assert 'ESP_LOGI(TAG, "Proflame2 RF band: %s", this->rf_band_configuration_.name);' in implementation
     assert "firmware_version: ${proflame2_firmware_version}" in base
-    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
-    assert (
-        yaml.load(base, Loader=yaml.BaseLoader)["substitutions"]["proflame2_firmware_version"]
-        == f"v{manifest['version']}"
+    assert re.search(
+        r'^  proflame2_firmware_version: "v\d+\.\d+\.\d+(?:-(?:(?:alpha|beta)\d+|debug))?"$', base, re.MULTILINE
     )
+    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
+    assert yaml.load(base, Loader=yaml.BaseLoader)["substitutions"]["proflame2_firmware_version"] in {
+        f"v{manifest['version']}",
+        f"v{manifest['version'].split('-')[0]}-debug",
+    }
     assert "name: Proflame2 Firmware Version" in base
 
 
@@ -206,6 +224,10 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "set_api_connected(false)" not in base
     assert "proflame2_tembed:" in base
     assert "id: proflame2_radio" in base
+    assert 'proflame2_rf_band: "315"' in base
+    assert "rf_band: ${proflame2_rf_band}" in base
+    assert "tx_frequency_hz:" not in base
+    assert "rx_frequency_hz:" not in base
     assert 'proflame2_payload_bit_length_override: "0"' in base
     assert "182\n  # bits for legacy remotes and 260 bits for supported extended remotes." in base
     assert "payload_bit_length_override: ${proflame2_payload_bit_length_override}" in base
@@ -215,7 +237,8 @@ def test_esphome_yaml_wires_external_component_and_tx_api() -> None:
     assert "native_group_timing_profile: ${proflame2_native_group_timing_profile_override}" in base
     assert 'proflame2_pre_burst_low_us_override: "834"' in base
     assert 'proflame2_pre_frame_low_us_override: "0"' in base
-    assert 'proflame2_diagnostic_repeat_count_override: "5"' in base
+    assert 'proflame2_diagnostic_repeat_count_override: "10"' in base
+    assert 'proflame2_tx_frequency_offset_hz: "0"' in base
     assert "pre_burst_low_us: ${proflame2_pre_burst_low_us_override}" in base
     assert "pre_frame_low_us: ${proflame2_pre_frame_low_us_override}" in base
     assert "diagnostic_repeat_count_override: ${proflame2_diagnostic_repeat_count_override}" in base
@@ -678,7 +701,7 @@ def test_rmt_rx_failure_paths_restore_or_report_errors() -> None:
     component = _read("components/proflame2_tembed/proflame2_tembed.cpp")
     receiver = _read("components/proflame2_tembed/rmt_ook_receiver.cpp")
 
-    queue_failure_start = component.index("if (xQueueSend(this->radio_runtime_->command_queue, &command, 0) != pdTRUE)")
+    queue_failure_start = component.index("if (!defer_until_retry_complete && xQueueSend(")
     queue_failure_end = component.index("  this->tx_in_progress_ = true;", queue_failure_start)
     queue_failure_block = component[queue_failure_start:queue_failure_end]
     assert "this->restore_rx_after_tx_if_needed_();" in queue_failure_block

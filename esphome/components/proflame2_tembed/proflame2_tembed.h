@@ -29,9 +29,12 @@
 #include "fifo_rx_controller.h"
 #include "proflame2_decoder.h"
 #include "radio_cc1101.h"
+#include "rf_band.h"
 #include "rmt_ook_receiver.h"
+#include "rmt_repeat_selection.h"
 #include "telemetry_publisher.h"
 #include "tx_controller.h"
+#include "wifi_diagnostics.h"
 
 namespace esphome {
 namespace sensor {
@@ -99,15 +102,44 @@ class Proflame2TEmbedComponent : public Component,
                                  public i2c::I2CDevice,
                                  public api::CustomAPIDevice {
 public:
+#ifdef USE_PROFLAME2_WAVEFORM_DIAGNOSTICS
+  void start_waveform_capture() {
+    this->abort_waveform_capture();
+    if (this->rmt_ook_receiver_.active())
+      return;
+    this->set_fifo_capture_enabled(false);
+    this->set_rmt_pulse_capture_enabled_(true);
+  }
+  void abort_waveform_capture() {
+#ifdef USE_PROFLAME2_BUFFERED_WAVEFORM_DIAGNOSTICS
+    // Stop acquisition, then let loop() drain and export the retained session.
+    this->rmt_ook_receiver_.end();
+#else
+    this->set_rmt_pulse_capture_enabled_(false);
+    // Retry an earlier failed shutdown even if the component's RX flag is clear.
+    this->rmt_ook_receiver_.end();
+#endif
+  }
+  void set_waveform_diagnostic_limits(bool rejected, uint16_t max_exports, uint32_t session_ms) {
+    RawCaptureLimits limits;
+    limits.capture_rejected = rejected;
+    limits.max_exports = max_exports;
+    limits.session_ms = session_ms;
+    this->rmt_ook_receiver_.set_diagnostic_limits(limits);
+  }
+#endif
   void setup() override;
   void loop() override;
   void dump_config() override;
+  /// Optional extra full burst after two seconds of quiet; starts disabled at boot.
+  void set_delayed_retransmission_enabled(bool value);
+  bool is_delayed_retransmission_enabled() const;
 
-  void set_tx_frequency_hz(uint32_t value) {
-    this->tx_frequency_hz_ = value;
+  void set_rf_band(RFBand value) {
+    this->rf_band_ = value;
   }
-  void set_rx_frequency_hz(uint32_t value) {
-    this->rx_frequency_hz_ = value;
+  void set_tx_frequency_offset_hz(int32_t value) {
+    this->tx_frequency_offset_hz_ = value;
   }
   void set_data_rate_bps(uint32_t value) {
     this->data_rate_bps_ = value;
@@ -248,6 +280,9 @@ public:
   void set_rx_dropped_packet_count_sensor(sensor::Sensor* sensor) {
     this->rx_dropped_packet_count_sensor_ = sensor;
   }
+  void set_rx_rmt_malformed_repeats_skipped_sensor(sensor::Sensor* sensor) {
+    this->rx_rmt_malformed_repeats_skipped_sensor_ = sensor;
+  }
   void set_rx_no_rf_capture_count_sensor(sensor::Sensor* sensor) {
     this->rx_no_rf_capture_count_sensor_ = sensor;
   }
@@ -358,6 +393,9 @@ public:
   uint32_t get_rx_dropped_packet_count() const {
     return this->rx_dropped_packet_count_;
   }
+  uint32_t get_rx_rmt_malformed_repeats_skipped() const {
+    return this->rx_rmt_malformed_repeats_skipped_;
+  }
   uint32_t get_rx_no_rf_capture_count() const {
     return this->rx_no_rf_capture_count_;
   }
@@ -411,6 +449,9 @@ public:
     this->mark_display_dirty_();
   }
   void set_wifi_connected(bool value);
+  const WifiDiagnostics& get_wifi_diagnostics() const {
+    return this->wifi_diagnostics_;
+  }
   void set_api_connected(bool value);
   void handle_api_client_connected(const std::string& client_info);
   void handle_api_client_disconnected(const std::string& client_info);
@@ -522,6 +563,10 @@ protected:
   void log_rf_path_for_test_pattern_(TestPatternMode mode, uint32_t duration_ms, uint32_t period_us) const;
   void process_pending_operation_();
   void consume_radio_runtime_events_();
+  void process_delayed_retransmission_();
+  void dispatch_deferred_tx_();
+  void cancel_delayed_retransmission_(const char* reason);
+  void pause_rx_for_tx_();
   void drain_deferred_debug_trace_();
   void store_deferred_debug_trace_(const TXTimingDiagnostics& timing, TXMode tx_mode);
   void clear_deferred_debug_trace_();
@@ -579,8 +624,11 @@ protected:
   void poll_battery_status_();
   uint8_t wifi_bars_from_rssi_(float dbm) const;
 
-  uint32_t tx_frequency_hz_{314973000};
-  uint32_t rx_frequency_hz_{314973000};
+  RFBand rf_band_{RFBand::BAND_315};
+  RFBandConfiguration rf_band_configuration_{314973000U, true, false, "315 MHz"};
+  int32_t tx_frequency_offset_hz_{0};
+  uint32_t tx_frequency_hz_{rf_band_configuration_.frequency_hz};
+  uint32_t rx_frequency_hz_{rf_band_configuration_.frequency_hz};
   uint32_t data_rate_bps_{2400};
   uint8_t tx_repeat_count_{5};
   uint32_t inter_frame_gap_us_{4450};
@@ -598,6 +646,7 @@ protected:
   std::string firmware_version_{"unknown"};
   uint32_t firmware_version_api_last_log_ms_{0};
   bool firmware_version_api_log_initialized_{false};
+  WifiDiagnostics wifi_diagnostics_{};
   AsyncTxDataPin async_tx_data_pin_{AsyncTxDataPin::GDO0};
 
   GPIOPin* board_power_enable_pin_{nullptr};
@@ -628,6 +677,7 @@ protected:
   sensor::Sensor* config_revision_sensor_{nullptr};
   sensor::Sensor* battery_percent_sensor_{nullptr};
   sensor::Sensor* rx_dropped_packet_count_sensor_{nullptr};
+  sensor::Sensor* rx_rmt_malformed_repeats_skipped_sensor_{nullptr};
   sensor::Sensor* rx_no_rf_capture_count_sensor_{nullptr};
   sensor::Sensor* rx_incomplete_fifo_count_sensor_{nullptr};
   sensor::Sensor* rx_decode_failed_count_sensor_{nullptr};
@@ -683,6 +733,7 @@ protected:
   uint8_t published_firmware_protocol_version_cache_{UINT8_MAX};
   uint8_t published_config_revision_cache_{UINT8_MAX};
   uint32_t published_rx_dropped_packet_count_cache_{UINT32_MAX};
+  uint32_t published_rx_rmt_malformed_repeats_skipped_cache_{UINT32_MAX};
   uint32_t published_rx_no_rf_capture_count_cache_{UINT32_MAX};
   uint32_t published_rx_incomplete_fifo_count_cache_{UINT32_MAX};
   uint32_t published_rx_decode_failed_count_cache_{UINT32_MAX};
@@ -720,6 +771,9 @@ protected:
   bool rx_active_listener_filter_configured_{false};
   bool rx_active_listener_use_rmt_{false};
   Proflame2DecodeProfile rx_active_listener_profile_{};
+  // Retain identity across HA's stop-RX / TX / resume-RX cycle. This is only
+  // retry invalidation history, never an active RX acceptance profile.
+  Proflame2DecodeProfile rx_active_listener_last_enabled_profile_{};
   ActiveListenerController active_listener_{};
 #if PROFLAME2_TEMBED_DEBUG
   std::string rx_fifo_profile_{"rfcat_fixed_none_rfcat_wide"};
@@ -727,6 +781,7 @@ protected:
   uint32_t rx_fifo_capture_session_index_{0};
   FifoRxController rx_fifo_{};
   uint32_t rx_dropped_packet_count_{0};
+  uint32_t rx_rmt_malformed_repeats_skipped_{0};
   uint32_t rx_no_rf_capture_count_{0};
   uint32_t rx_incomplete_fifo_count_{0};
   uint32_t rx_decode_failed_count_{0};

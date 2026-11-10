@@ -32,8 +32,20 @@ def test_documentation_url_uses_default_ref() -> None:
         f"/blob/{docs_urls.DEFAULT_DOCUMENTATION_REF}/docs/lilygo_cc1101_controller.md"
     )
     assert docs_urls.rtl433_manual_learning_url().endswith(
-        f"/blob/{docs_urls.DEFAULT_DOCUMENTATION_REF}/docs/rtl433_manual_learning.md"
+        f"/blob/{docs_urls.DEFAULT_DOCUMENTATION_REF}/docs/Using_rtl_433_for_learning.md"
     )
+    assert docs_urls.rtl433_manual_learning_url() == docs_urls.rtl433_learning_ids_url()
+
+
+def test_active_controller_guides_skip_the_retired_json_paste_page() -> None:
+    for name in ("lilygo_cc1101_controller.md", "yardstick_controller.md"):
+        text = (Path("docs") / name).read_text()
+        assert "](Using_rtl_433_for_learning.md)" in text
+        assert "rtl433_manual_learning.md" not in text
+    old_page = Path("docs/rtl433_manual_learning.md").read_text()
+    assert "](Using_rtl_433_for_learning.md)" in old_page
+    guide = Path(docs_urls.RTL433_LEARNING_IDS_DOC).read_text()
+    assert "## Older JSON-Paste Instructions" in guide
 
 
 def test_documentation_url_supports_env_override(monkeypatch) -> None:
@@ -44,6 +56,26 @@ def test_documentation_url_supports_env_override(monkeypatch) -> None:
     assert docs_urls.documentation_url("docs/example.md", "section") == (
         "https://github.com/jeffgregx2/HACS-Proflame2/blob/dev/docs/example.md#section"
     )
+
+
+def test_learning_id_links_match_real_documents_and_explicit_anchor(monkeypatch) -> None:
+    """Learning ID help must not silently fall back to the setup-options index."""
+    from urllib.parse import urlsplit
+
+    monkeypatch.setenv(docs_urls.DOCUMENTATION_REF_ENV, "dev")
+    section = urlsplit(docs_urls.learning_ids_url())
+    assert section.path.endswith("/blob/dev/docs/add_fireplace_profile.md")
+    assert section.fragment == "Using_learning_ids"
+    setup = Path(docs_urls.ADD_FIREPLACE_PROFILE_DOC).read_text()
+    assert "## Learn From rtl_433 Output" not in setup
+    assert "[Learn from rtl_433 output]" not in setup
+    assert '<a id="learn-from-rtl_433-output"></a>' in setup
+    assert f'<a id="{section.fragment}"></a>' in setup
+    assert f"]({Path(docs_urls.RTL433_LEARNING_IDS_DOC).name})" in setup
+    guide = Path(docs_urls.RTL433_LEARNING_IDS_DOC)
+    assert guide.is_file()
+    assert docs_urls.rtl433_learning_ids_url().endswith(f"/blob/dev/{guide.as_posix()}")
+    assert "add_fireplace_profile.md#Using_learning_ids" in guide.read_text()
 
 
 def test_manifest_documentation_matches_default_add_profile_url(monkeypatch) -> None:

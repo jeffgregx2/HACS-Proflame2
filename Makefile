@@ -1,5 +1,14 @@
-.PHONY: test firmware-unit-test lint-python format-python-check format-cpp-check esphome-setup esphome-stage esphome-config esphome-compile esphome-validate esphome-clean
+.PHONY: test firmware-unit-test lint-python format-python-check format-cpp-check esphome-setup esphome-config esphome-config-433 esphome-config-invalid-rf-band esphome-compile esphome-compile-433 esphome-validate esphome-clean _esphome-stage _esphome-config _esphome-config-433 _esphome-config-invalid-rf-band _esphome-compile _esphome-compile-433 _esphome-validate
 
+# Each ESPHome fixture shares a staged directory. Keep the validation fixtures
+# serial even when a caller invokes make with -j.
+.NOTPARALLEL: _esphome-validate
+
+TEST_BOOTSTRAP_PYTHON ?= python3
+OUTPUT_DIR ?=
+ARCHIVE ?=
+PACKAGE_ARGS ?=
+PYTEST_ARGS ?=
 PYTHON ?= ./.venv/bin/python
 BLACK ?= ./.venv/bin/black
 RUFF ?= ./.venv/bin/ruff
@@ -8,15 +17,28 @@ ESPHOME_PYTHON ?= ./.venv-esphome/bin/python
 ESPHOME_CLI ?= ./.venv-esphome/bin/esphome
 ESPHOME_EXAMPLE ?= esphome/validate_display_preset.yaml
 ESPHOME_STAGE_EXAMPLE ?= validate_display_preset.yaml
-ESPHOME_WORK_ROOT ?= /tmp/proflame2-esphome
+ESPHOME_433_FIXTURE ?= tests/fixtures/esphome/validate_display_preset_433.yaml
+ESPHOME_STAGE_433_EXAMPLE ?= validate_display_preset_433.yaml
+ESPHOME_INVALID_RF_BAND_FIXTURE ?= tests/fixtures/esphome/validate_display_preset_invalid_rf_band.yaml
+ESPHOME_STAGE_INVALID_RF_BAND_EXAMPLE ?= validate_display_preset_invalid_rf_band.yaml
+# Set only by the cleanup wrapper; direct internal targets must not share /tmp.
+ESPHOME_WORK_ROOT ?=
 ESPHOME_STAGE ?= $(ESPHOME_WORK_ROOT)/repo
 ESPHOME_STAGE_CLI ?= $(ESPHOME_WORK_ROOT)/esphome
 
 test:
-	$(PYTHON) -m pytest -q
+	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/run_tests.sh $(PYTEST_ARGS)
+
+.PHONY: learning-id-package learning-id-package-test
+learning-id-package:
+	@test -n "$(OUTPUT_DIR)" || { printf 'Specify OUTPUT_DIR outside the checkout, for example /tmp/proflame2-learning-id.\n' >&2; exit 1; }
+	PYTHONDONTWRITEBYTECODE=1 $(TEST_BOOTSTRAP_PYTHON) -B tools/learning_id/build_archive.py --output-dir "$(OUTPUT_DIR)" $(PACKAGE_ARGS)
+
+learning-id-package-test:
+	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/learning_id/test_archive.sh $(if $(ARCHIVE),--archive "$(ARCHIVE)",)
 
 firmware-unit-test:
-	$(PYTHON) -m pytest -q tests/test_esphome_cpp_unit.py
+	TEST_BOOTSTRAP_PYTHON="$(TEST_BOOTSTRAP_PYTHON)" bash tools/run_tests.sh $(PYTEST_ARGS) tests/test_esphome_cpp_unit.py tests/test_radio_register_trace.py tests/test_issue33_flame_zero.py
 
 lint-python:
 	$(RUFF) check custom_components tools tests
@@ -31,22 +53,39 @@ esphome-setup:
 	test -x $(ESPHOME_PYTHON) || python3 -m venv .venv-esphome
 	$(ESPHOME_PYTHON) -m pip install -r requirements-esphome.txt
 
-esphome-stage:
-	rm -rf "$(ESPHOME_WORK_ROOT)"
+esphome-config esphome-config-433 esphome-config-invalid-rf-band esphome-compile esphome-compile-433 esphome-validate: esphome-setup
+	+bash tools/run_esphome_validation.sh _$@
+
+_esphome-stage:
+	test -n "$(ESPHOME_WORK_ROOT)"
 	mkdir -p "$(ESPHOME_STAGE)"
 	cp -R esphome "$(ESPHOME_STAGE)/esphome"
+	cp "$(ESPHOME_433_FIXTURE)" "$(ESPHOME_STAGE)/esphome/$(ESPHOME_STAGE_433_EXAMPLE)"
+	cp "$(ESPHOME_INVALID_RF_BAND_FIXTURE)" "$(ESPHOME_STAGE)/esphome/$(ESPHOME_STAGE_INVALID_RF_BAND_EXAMPLE)"
 	ln -s ../components "$(ESPHOME_STAGE)/esphome/examples/components"
-	ln -s "$(CURDIR)/.venv-esphome/bin/esphome" "$(ESPHOME_STAGE_CLI)"
+	ln -s "$(abspath $(ESPHOME_CLI))" "$(ESPHOME_STAGE_CLI)"
 
-esphome-config: esphome-setup esphome-stage
+_esphome-config: _esphome-stage
 	cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" config $(ESPHOME_STAGE_EXAMPLE)
 
-esphome-compile: esphome-config
+_esphome-config-433: _esphome-stage
+	cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" config $(ESPHOME_STAGE_433_EXAMPLE)
+
+_esphome-config-invalid-rf-band: _esphome-stage
+	@if cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" config $(ESPHOME_STAGE_INVALID_RF_BAND_EXAMPLE); then \
+		echo "Expected invalid proflame2_rf_band configuration to fail"; \
+		exit 1; \
+	fi
+
+_esphome-compile: _esphome-config
 	find "$(ESPHOME_STAGE)/esphome/.esphome/external_components" -type d -path '*/esphome/components/proflame2_tembed' -prune -exec rm -rf {} \; -exec cp -R "$(ESPHOME_STAGE)/esphome/components/proflame2_tembed" {} \;
 	cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" compile $(ESPHOME_STAGE_EXAMPLE)
 
-esphome-validate: esphome-config esphome-compile
+_esphome-compile-433: _esphome-config-433
+	find "$(ESPHOME_STAGE)/esphome/.esphome/external_components" -type d -path '*/esphome/components/proflame2_tembed' -prune -exec rm -rf {} \; -exec cp -R "$(ESPHOME_STAGE)/esphome/components/proflame2_tembed" {} \;
+	cd "$(ESPHOME_STAGE)/esphome" && "$(ESPHOME_STAGE_CLI)" compile $(ESPHOME_STAGE_433_EXAMPLE)
+
+_esphome-validate: _esphome-config _esphome-config-433 _esphome-config-invalid-rf-band _esphome-compile _esphome-compile-433
 
 esphome-clean:
-	rm -rf "$(ESPHOME_WORK_ROOT)"
 	rm -rf .esphome esphome/.esphome esphome/examples/.esphome
