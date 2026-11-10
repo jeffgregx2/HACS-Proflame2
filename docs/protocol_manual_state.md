@@ -44,9 +44,24 @@ inferred from brand, band, identity, or protocol variant.
   it otherwise retains the selected level. This applies with either option
   setting. Explicit flame values and redundant ON requests bypass that rule.
   Power OFF, accessory edits, and received/restored states preserve flame exactly.
+- When CPI support is enabled, a changed CPI/IPI selection sends through the
+  normal command queue even with power OFF, for both legacy and extended
+  protocols. Keep power OFF and retain flame/accessory settings; do not ignite
+  the main burner. Other OFF-state feature edits remain retained without TX
+  unless they coalesce with a pending CPI change. Existing debounce and
+  controller arbitration still apply; redundant selections do not cause a send.
 - Learning IDs and legacy C/D integrity constants are unaffected. The option
   belongs to fireplace configuration, not remote identity.
 
 See the [extended protocol reference](issue_15_extended_protocol_design.md) for
 ten-word integrity and temperature fields. The new Issue #33 sequence establishes
 legacy behavior; it does not newly establish extended CPI semantics.
+The separate [extended Pilot evidence](issue_15_extended_protocol_design.md#pilot-mode-ipi-and-cpi)
+does establish W4 bit 7 as 0 = IPI and 1 = CPI. Receiving that mode selection
+and exposing HA control of it are distinct implementation responsibilities.
+
+Hardware validation on 2026-11-10 confirmed that YardStick sends a changed
+CPI/IPI selection while power remains OFF, including any previously staged
+light/fan settings. Native legacy remote captures also confirmed both pilot-mode
+selections with power OFF and flame 6 retained. This confirms transmission
+behavior; native-remote CPI tracking in HA was not explicitly reported.

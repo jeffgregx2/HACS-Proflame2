@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 
 from .variants import PROTOCOL_VARIANT_EXTENDED_10_WORD, PROTOCOL_VARIANT_LEGACY_7_WORD
 
-# Stored W4 flags include temperature units (bit 2) and retained bits 3/7.
-# Preserve them when encoding existing/imported profiles. New learning uses a
-# separate identity mask and canonical Celsius fields; bit 3 remains unknown.
+# Stored W4 flags include units (bit 2), unknown bit 3, and initial Pilot (bit 7).
+# The encoder retains bits 2/3 but takes Pilot from current command state.
+# New learning uses a separate identity mask and canonical Celsius fields.
 EXTENDED_W4_FIXED_MASK = 0x8C
 
 

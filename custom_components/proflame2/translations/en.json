@@ -47,7 +47,7 @@
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported"
+          "cpi": "CPI (Continuous Pilot Ignition) supported"
         }
       },
       "manual_esphome": {
@@ -81,7 +81,7 @@
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported"
+          "cpi": "CPI (Continuous Pilot Ignition) supported"
         }
       },
       "learn_failed": {
@@ -167,7 +167,7 @@
           "light": "Light supported",
           "front": "Front burner supported",
           "aux": "Aux supported",
-          "cpi": "CPI supported"
+          "cpi": "CPI (Continuous Pilot Ignition) supported"
         },
         "description": "Select the features your fireplace supports. Continue to configure optional settings; changes are saved on the next page."
       },

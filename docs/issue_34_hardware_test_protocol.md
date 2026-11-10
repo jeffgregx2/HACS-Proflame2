@@ -1,285 +1,263 @@
 # Issue #34 hardware validation protocol
 
-Status: H0 and H1 completed by the maintainer on 2026-11-06; H2–H6 pending.
-Hardware acceptance is partial. Testing will continue in a few days, starting
-with H2. Firmware shutdown work is deferred to v0.8.0. Created 2026-11-06;
-results updated 2026-11-06.
+Updated: 2026-11-09. Status: R1/R2 reports reviewed; automatic recovery is
+supported, with RF confirmation and a command-free reload check outstanding.
 
-Validates the HA integration's offline logging and automatic LilyGO display
-recovery described in the [design](issue_34_offline_display_sync_design.md).
-**No firmware update is required. Use released beta6 LilyGO firmware when
-validating the v0.7.0 integration.** The experimental center-button shutdown aid,
-its notification and OTA-confirmation changes are excluded from v0.7.0; see the
-[deferred v0.8.0 design](controller_shutdown_design.md).
+This procedure checks that Proflame2 automatically recovers its LilyGO display
+connection and active listening after Home Assistant startup or an ESPHome entry
+reload. Run preparation, R1, R2 and cleanup in that order. No other hardware test
+cases are required by this protocol.
 
-Install the HA integration containing the fix before testing. A firmware version
-or an integration version label alone does not prove that this local fix is
-installed; record the installed source revision and any local changes.
+Allow approximately **10–20 minutes for R1 and R2 after preparation**, assuming
+HA restarts in a few minutes and neither case fails. This is a provisional
+estimate with moderate confidence; installation, logging setup and investigation
+of failures are additional time. Do not extend outages just to fill that time.
+
+## Equipment and software
+
+- Test Home Assistant with the Proflame2 integration containing the issue #34
+  recovery fix. Record the installed source revision: a version label alone may
+  not distinguish development builds.
+- A configured, learned Test LilyGO with a working display and Wi-Fi connection.
+- A native remote or another transmitter matching the learned profile and RF band.
+- A way to turn the Test LilyGO fully off and back on.
+
+No firmware update is needed for the integration fix. Released beta6 firmware is
+sufficient, but does not have a center-button shutdown gesture. An already
+installed shutdown-enabled test build may be used; record its version.
+
+Leave Production unchanged. RF commands addressed to a physical fireplace can
+operate it, even when the receiving LilyGO belongs to Test HA. Use your designated
+test fireplace/profile and keep the test area attended.
 
 ## Preparation
 
-1. Use the Test HA instance and its linked Test LilyGO. Leave Production unchanged.
-   Record HA version, integration revision, LilyGO firmware version, active
-   listening setting and test time zone. Record the fireplace configuration entry
-   ID from the logs so messages from different entries are not mixed.
-2. Start with a known, synchronized HA state and a visible LilyGO display. Keep
-   fireplace power OFF for outage tests. Record the displayed settings; do not
-   change them during an outage or its recovery. This tests recovery even when
-   the intended display state has not changed.
-3. Set refresh to zero, disable optional delayed retransmission, and suspend
-   automations targeting this test fireplace. Let previous commands finish.
-   Keep other transmitters quiet during the display-only checks. Record settings
-   to restore afterward. A later listening check deliberately uses RF commands.
-4. Enable **Debug logging** for the Proflame2 integration in HA. Keep it enabled
-   throughout each case; disabling it downloads the log. ESPHome firmware DEBUG
-   logging and waveform Start/Stop capture are not needed for these tests.
-5. Optionally enable **PCM Payload Logging** to identify HA `direction=TX`
-   records. An rtl_433 receiver tuned to the configured band provides additional
-   RF evidence. Ambient RF by itself does not identify the transmitter.
-6. Allow at least 90 seconds of healthy operation before starting. Do not run
-   guided learning, edit settings or issue commands during a recovery measurement.
+1. Identify the Test Proflame2 fireplace entry and its **linked ESPHome entry**
+   under **Settings → Devices & services**. Record both names and the Proflame2
+   `config_entry_id` from the HA log. All log checks below refer to that ID.
+2. In **Edit fireplace settings**, enable **active listening**, set refresh to
+   zero, enable **Enable packet debug log**, and save. That option is required
+   for the transport's `display_state_update invoke` messages; YAML logger levels
+   alone do not enable them. Disable optional delayed retransmission on the LilyGO device.
+   Suspend automations targeting the test fireplace and let pending commands
+   finish. Record settings to restore after testing. Do not run guided learning.
+3. Ensure integration DEBUG logging will be enabled **from HA startup**. In HA's
+   `configuration.yaml`, merge the following into the existing `logger` section;
+   do not create duplicate `logger` or `logs` sections or replace unrelated values:
 
-Keep one timed notebook of actions alongside the downloaded HA log. Record
-controller power restoration and HA's ESPHome availability separately: boot and
-Wi-Fi connection time are outside the integration's 15-second polling interval.
-Keep downloaded logs and device-specific results private; do not commit them.
+   ```yaml
+   logger:
+     logs:
+       custom_components.proflame2: debug
+   ```
 
-## What to measure
+   Validate the configuration and restart Test HA to apply it if needed. Keep a
+   copy of the original logging configuration for cleanup. This preparation
+   restart is separate from the restart performed in R1. Do not rely solely on
+   the integration's temporary **Enable debug logging** control surviving a
+   restart. Firmware DEBUG logging and waveform capture are not needed.
+   To verify the YAML logger setting after startup, search the full log for
+   `Proflame2 version information:` at DEBUG level. Power-change messages need
+   not be DEBUG. A view showing only warnings/errors cannot verify this setting.
+4. Confirm that the Test LilyGO is online and its display agrees with HA. Using
+   the matching transmitter, send one command and confirm HA follows it. Return
+   the fireplace to Power OFF and let its state settle. There is no fixed
+   baseline waiting period.
+5. Use Docker Compose logs for collection. HA's System Logs view may omit INFO
+   and DEBUG messages even when the integration emits them. From the Test HA
+   Compose directory, run the following after the container is running:
 
-Count only messages beginning with these display synchronization stems for the
-selected configuration entry:
+   ```bash
+   docker compose logs --follow --no-color homeassistant 2>&1 | tee "issue-34-$(date -u +%Y%m%dT%H%M%SZ).log"
+   ```
 
-| Log message stem | Expected behavior within one failure episode |
+   Replace `homeassistant` if your Compose service has a different name. This
+   prints retained container logs and then follows new messages; do not add
+   `--tail 0`, which would omit startup evidence. Keep the terminal open through
+   the test. Press Ctrl+C after collection to stop following; it does not stop HA.
+   Keep the saved file private. Record action times and the time zone separately.
+   A Compose down/up replaces the container and ends an existing follower: start
+   a new capture immediately after up, before restoring LilyGO power. Save logs
+   before another down/up removes the container that holds them.
+
+Optional: run rtl_433 on the matching band, or enable **PCM Payload Logging**, to
+help investigate a missed receive. Neither is required for a passing run.
+
+### How to power the test controller off and on
+
+- **Without a battery:** unplug USB to turn it off; reconnect USB to turn it on.
+- **With shutdown-enabled test firmware and a battery:** disconnect USB, then
+  hold the center button. The shutdown prompt appears after about four seconds;
+  keep holding until it shuts down at approximately ten seconds total. Release
+  the button. Reconnect USB to restart. Release early to cancel the countdown.
+  If the screen says **Cannot shut down / Disconnect USB**, release the button,
+  disconnect USB and start the hold again.
+- **With a battery and firmware without shutdown support:** USB removal does not
+  turn it off. Do not dismantle the unit or change network settings for this
+  procedure. Record R1 as blocked if a full power interruption is not available;
+  R2 can still be performed.
+
+Confirm the screen actually turns off. Fireplace Power OFF is a fireplace
+command; it does not turn the LilyGO controller off. Controller shutdown does
+not change fireplace power.
+
+## R1 — HA starts while LilyGO is offline
+
+**Purpose:** verify that recovery continues after startup retries finish, and
+that the real radio and event subscription return without manual intervention.
+
+1. Fully power off Test LilyGO. Leave it off and restart **Test HA**. There is no
+   need to wait for HA to detect the outage before initiating this restart.
+   If using Compose down/up, start the Docker log capture once the new container
+   is running, using the command in preparation. Keep LilyGO off during capture.
+2. After HA starts, confirm the Proflame2 fireplace entry is loaded rather than
+   showing a setup failure. Record the HA fireplace state now: this is the state
+   the LilyGO display should show when it returns. Do not assume that HA restored
+   exactly the state shown before the restart.
+3. Keep LilyGO off until the log for this fireplace shows
+   `Proflame2 startup display sync still waiting` with `delay=30.0s`.
+   This is the last bounded startup retry. The successive waits are 5, 15 and
+   30 seconds, about 50 seconds plus action time after the initial
+   `Proflame2 startup display sync deferred` warning. There is no separate
+   retry-exhausted message. Record the final retry's timestamp.
+4. Reconnect LilyGO power. Record when its ESPHome entry becomes available in HA.
+   **Do not issue a HA fireplace command, edit settings or reload an integration.**
+5. Before sending another RF command, confirm the LilyGO display automatically
+   shows the state recorded in step 2. Record the restoration time. The display
+   should recover on an eligible check, normally within 15 seconds plus API
+   connection/action time after ESPHome is ready.
+6. Look for `Proflame2 active listening resumed`. Then use the matching transmitter
+   to send two distinct known states, at least five seconds apart, and confirm
+   HA follows both. Record each transmitted state and corresponding HA update.
+   Listening retries can take up to 30 seconds plus API time; do not apply the
+   display's 15-second interval to listening. If no resume message appears,
+   test reception once ESPHome has been available for 30 seconds; record whether
+   actual reception works. A resume message alone is not proof of RF reception.
+7. Save the HA log and your action times. Proceed to R2 as soon as both received
+   states have been confirmed; no separate stable-recovery wait is needed here.
+
+**Pass:** the fireplace entry loads while LilyGO is offline; the final startup
+retry occurs before power restoration; the display returns automatically; and
+both RF commands update HA without a HA command or Proflame2 reload.
+
+If display restoration or listening has not returned within two minutes of
+ESPHome becoming available, stop and collect the failure evidence described
+below. This is an investigation threshold, not a required waiting period.
+
+## R2 — Replace the linked ESPHome runtime
+
+**Purpose:** verify that the running Proflame2 entry reconnects to the new real
+ESPHome runtime and receives events without being reloaded itself.
+
+1. Start with Test LilyGO online, active listening ON and the HA/display state
+   synchronized. If R1 could not be performed, establish this condition using
+   preparation. Keep HA and the Proflame2 entry running throughout R2.
+2. Under **Settings → Devices & services → ESPHome**, find the linked Test LilyGO
+   configuration entry, open its three-dot menu, and choose **Reload**.
+   Reload **only that ESPHome entry**, not Proflame2 and not the entire HA server.
+   Record the reload time.
+3. Wait for ESPHome to become available again. Before issuing HA control commands
+   or transmitting RF, look for `display_state_update invoke` for the linked
+   entry in the full HA log. This transport diagnostic is emitted at WARNING
+   level when **Enable packet debug log** is enabled. Record its timestamp and preserve any following
+   exception. This records an automatic display action attempt; the log line
+   alone does not establish that the action succeeded.
+4. Use the matching transmitter to send two distinct known states, at least
+   five seconds apart. Confirm HA follows both and the LilyGO display follows
+   the observed state. Record each transmitted state and HA update. Do not use
+   a HA command or reload Proflame2 to make recovery happen.
+5. At the end of the test, leave the connection healthy while reviewing/saving
+   the log. If a display synchronization interruption was logged, confirm that
+   it eventually has one `Proflame2 display synchronization recovered` INFO.
+   This requires at least 60 seconds of healthy observations and a successful
+   display confirmation. Investigate if it is still absent two minutes after
+   display restoration. A fast reload may fall between display checks and
+   produce no interruption episode; in that case no recovery INFO is required.
+
+**Pass:** the existing Proflame2 entry automatically reconnects, attempts display
+synchronization, and processes both received states with matching HA/display
+updates. No manual Proflame2 reload or HA fireplace command is needed. Retained
+screen contents alone do not establish successful synchronization.
+
+If the display action or listening has not returned within two minutes of
+ESPHome becoming available, stop and collect failure evidence.
+
+## Log checks for the test group
+
+Use timestamps and the selected fireplace entry ID to separate entries and runs.
+Count only the following display messages together:
+
+| Message | Expected behavior |
 | --- | --- |
-| `Proflame2 display synchronization interrupted` | One WARNING for an ordinary offline episode. An unexpected exception may separately produce one ERROR with a traceback; preserve it for investigation. |
-| `Proflame2 display synchronization still interrupted` | DEBUG summaries no more often than once per 60 seconds. |
-| `Proflame2 display synchronization recovered` | One INFO after actual display synchronization and at least 60 seconds of healthy observations, followed by successful confirmation. |
+| `Proflame2 display synchronization interrupted` | One WARNING per ordinary failure episode. |
+| `Proflame2 display synchronization still interrupted` | DEBUG summaries no more often than once per 60 seconds. A short episode may have none. |
+| `Proflame2 display synchronization recovered` | One INFO after an actual display update and at least 60 seconds of healthy observations followed by successful confirmation. |
 
-ESPHome's own connection logs, startup synchronization messages and active-listener
-interruption messages are separate paths. They do not count against these bounds.
-An expected disconnection should not generate display ERROR tracebacks.
+A disconnect before stable confirmation keeps the same episode open; it must
+not cause repeated display warnings or premature recovery announcements. No
+additional timed disconnect cycles are required. ESPHome connection messages,
+startup retry messages and active-listener messages are separate log paths and
+must not be counted as display warnings. Expected disconnections should not
+produce display ERROR tracebacks.
 
-Useful operation should resume on an eligible check after the native API is ready,
-normally within 15 seconds plus connection/action time. The 60-second stability
-window delays the recovery announcement, **not** display restoration or listening.
-For an idle, known-state test, flag no display restoration within two minutes of
-ESPHome becoming available for investigation. After restoration, allow up to two
-minutes for the stable recovery INFO. These are investigation thresholds, not
-claims that reconnection always takes that long.
+The 60-second healthy window delays the recovery announcement, not listening,
+display restoration, user commands or reconnect attempts.
 
-An outage entirely between polling checks may go unobserved. Each offline phase
-below must last long enough for HA to report ESPHome unavailable and for at least
-one subsequent display check. Do not infer success from power cycling alone.
+## Results to report
 
-## H0 — Repeatable linked-entry outage without firmware changes
+Record the HA version, integration source revision, firmware version, time zone
+and test duration with the following results. Keep raw logs and device IDs
+private. Results in this document will be updated from the tester's reports;
+blank fields are unmeasured, not passes.
 
-This provides a reproducible runtime-unavailable fault when a battery prevents
-USB removal from turning LilyGO off. It does not establish physical power-loss
-or cold-boot behavior.
+| Case | Fault/restart time | ESPHome available | Display action/restoration | RF state A: sent → HA | RF state B: sent → HA | Recovery INFO / errors | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| R1 | Startup deferral 08:38:45; final startup retry 08:39:35 | Not separately timed; firmware version available 08:45:28; tester reports about 45 seconds to return | Tester confirms correct display; initial restoration not timed | Not documented separately | Not documented separately | Listening resumed 08:45:49; display recovery 08:46:30; one display warning; DEBUG summaries about 60 seconds apart; no ERROR in excerpts | Startup/display recovery supported; RF-state checks treated as not performed after tester clarification |
+| R2 | Reload-related listener interruption 08:50:42; binding-change display warning 08:50:45 | Not separately timed; listening resumed 08:50:46 | Tester confirms display tracked RF; invocation record not supplied | YardStick light 6 → LilyGO/HA accepted 08:52:30 | YardStick fan 6 → LilyGO/HA accepted 08:52:46 | Display recovery 08:52:15; one display warning; no ERROR in excerpts | Reception and display tracking confirmed; direct LilyGO HA Power ON occurred before RX checks, so command-free recovery acceptance remains partial |
 
-1. Leave the Proflame2 fireplace entry loaded. Disable only its linked **Test
-   LilyGO ESPHome configuration entry** in HA. Do not disable the Proflame2 entry,
-   since that would stop the recovery task being tested.
-2. Confirm HA reports the linked ESPHome device unavailable. Hold the entry
-   disabled for five minutes after the first display interruption warning.
-   Expect one display warning and DEBUG summaries no more often than once per
-   minute, as described above.
-3. Enable the same ESPHome entry again. Do not issue a fireplace command or
-   reload Proflame2. Verify automatic display synchronization and one stable
-   recovery INFO after the healthy window.
-4. Run with active listening OFF and ON, verifying reception after the enabled
-   run. Repeat short observed disable/enable cycles using H3's timing to test
-   flapping. Record the fault type as **ESPHome entry disabled**, not power loss.
+The maintainer supplied these results on 2026-11-09. Exact installed source
+revision, HA version and time zone were not recorded. Labels were integration
+`0.7.0-beta6` and firmware `v0.7.0-debug`. Counts refer to unique supplied records,
+not duplicate occurrences in overlapping excerpts. The captured interval spans
+about 14 minutes 25 seconds; total test duration was not separately measured.
+Original reports and device-specific evidence are preserved privately.
 
-If the linked entry does not become unavailable, preserve the log and report
-that observation; do not treat the attempt as a successful outage test.
+R1's final startup retry and automatic display recovery are established. Its
+the tester subsequently indicated that the two-command instruction in step 6
+may have been missed. Record that RF check as not performed; do not mark the
+whole case passed. No repeat of the long startup outage is requested.
 
-## H1 — Sustained power loss, listening OFF
+For R2, the listener resumed before the direct HA Power ON, but the actual RF
+checks occurred afterward. A HA send can re-establish radio configuration, so
+this does not fully isolate command-free reception. Repeat only R2, using two
+YardStick commands while leaving the LilyGO fireplace's HA controls untouched.
+No LilyGO power operation is part of R2. The Power ON noted above was an
+additional action seen in the submitted log, not an instruction in this
+protocol. Use two distinct light/fan settings on the transmitting YardStick
+profile for the receive check; leave the receiving LilyGO profile untouched.
+There is no need to repeat a long outage or add fault types.
 
-With released beta6 firmware there is no controller shutdown gesture. For a
-USB-only unit, unplug USB. If a battery keeps it running, use H0 for reproducible
-runtime-outage coverage and leave physical power-loss acceptance pending until a
-real power interruption is available. No access-point changes are required for
-H0. Fireplace Power OFF changes the fireplace state, not controller power.
+If anything fails, preserve the log **before** restarting or reloading anything.
+Record the failed step, actual/expected state, timestamps, ESPHome availability,
+LilyGO display, any pending transmission or learning activity, and the first
+traceback. For a missed RF update, retain any available independent rtl_433 or
+PCM evidence so an RF loss can be distinguished from a reconnect failure.
+Do not repeat the whole protocol just to reproduce one missing packet.
 
-1. Disable active listening, save settings, and establish the healthy baseline.
-2. Fully switch the LilyGO off. Removing USB may leave it powered by its battery;
-   verify the controller actually shuts down and HA reports it unavailable.
-3. Record the first display interruption warning. Leave the controller offline
-   for **five minutes after that warning**. Look for repeated warnings, ERRORs or
-   tracebacks and check DEBUG summary spacing.
-4. Restore power. Do not issue a HA command, restart HA, reload an integration or
-   alter the fireplace settings. Record when ESPHome becomes available and when
-   the LilyGO display returns to the recorded HA state.
-5. Leave it healthy for at least two minutes after display restoration. Record
-   the recovery INFO and verify that it occurs once.
+## Cleanup and completion
 
-**Pass:** display restores automatically despite unchanged HA state; one ordinary
-display interruption warning; bounded DEBUG summaries; one stable recovery INFO;
-no RF fireplace command caused by display recovery. This case specifically proves
-that recovery does not depend on active listening or a user command.
+1. Save the HA logs and action notebook. Ensure the collection covers HA startup
+   and both recovery cases, including DEBUG messages. Use timestamps to avoid
+   counting overlapping Docker captures twice.
+2. Restore the original logger configuration, packet debug logging, refresh, delayed retransmission
+   and automation settings. Apply logging configuration changes with the usual
+   HA configuration validation/restart after evidence is saved.
+3. Leave LilyGO powered on with USB connected for normal operation. Return the
+   test fireplace to its intended final state.
 
-## H2 — Sustained power loss, listening ON
-
-1. Enable active listening and establish a healthy baseline.
-2. Repeat H1 without changing any other configuration during the episode.
-3. After stable recovery, use a transmitter matching the learned test profile to
-   send three known, distinct states, spaced several seconds apart. Use your
-   established safe test arrangement; RF commands using the real fireplace's
-   identity can also operate that fireplace. Record transmitted state and HA's
-   observed state for each. An independent rtl_433 capture helps distinguish RF
-   reception failures from API recovery failures.
-
-**Pass:** H1's display and logging criteria hold, and active listening resumes
-automatically. Investigate any missing state with its RF/PCM evidence rather than
-assuming that every RF loss is a reconnect defect.
-
-## H3 — Repeated flapping within one episode
-
-Run with listening OFF first, then repeat with listening ON. Saving that setting
-starts a separate run; do not edit it during the run.
-
-1. Switch the controller off until HA reports it unavailable and the display
-   interruption warning appears.
-2. Restore it and wait for ESPHome availability and display restoration. Keep it
-   online for only **20–30 seconds after restoration**, then switch it off again.
-3. Keep each following offline period long enough for HA to show unavailable and
-   a display check to observe it, normally at least 30 seconds after HA's
-   unavailable indication. Repeat the restore/short-online/off sequence three
-   times. Record the actual times, not just planned delays.
-4. Finally restore power and leave the connection healthy for at least two
-   minutes after display restoration.
-
-**Pass:** display operation resumes during the short available periods, but no
-stable recovery INFO is announced before the final healthy window completes.
-The observed interruptions remain one episode with one ordinary warning and
-rate-limited DEBUG summaries. The final stable connection produces one recovery
-INFO. If an online interval accidentally exceeds the stability window, mark that
-run inconclusive for the single-episode criterion and repeat it.
-
-## H4 — A new outage after confirmed recovery
-
-1. Complete H1 or H3 and wait for its recovery INFO.
-2. Cause another observable power loss, hold it offline for at least one minute,
-   then restore power and wait for stable recovery again.
-
-**Pass:** the new episode gets its own single interruption warning and eventual
-single recovery INFO. Suppression must reset after confirmed recovery; the second
-outage must neither disappear from the log nor flood it.
-
-## H5 — HA starts while the controller is offline
-
-1. With the controller fully off, restart Test HA. Keep LilyGO off for at least
-   two minutes after HA startup to exercise the bounded startup retry path.
-2. Confirm the selected fireplace is loaded and preserve the startup messages.
-3. Restore LilyGO power without a fireplace command or another HA restart/reload.
-4. Wait for display restoration and stable recovery. Run once with listening OFF
-   and once with listening ON; for the latter, repeat H2's receive check.
-
-**Pass:** automatic recovery continues after the startup retries have finished.
-The display returns, and listening resumes when enabled. Startup messages are
-assessed separately from periodic display episode logs. HA restart creates new
-tasks, so warning counts from before and after the restart are separate.
-
-## H6 — Replace the linked ESPHome runtime
-
-1. Establish a healthy baseline. Reload only the **linked Test ESPHome entry** in
-   HA, leaving the Proflame2 entry loaded. Do not reload both together: that would
-   hide a stale-runtime binding problem by replacing the Proflame2 task too.
-2. Wait for ESPHome to return and for automatic synchronization/recovery.
-3. Repeat with listening disabled and enabled. In the enabled run, verify receive
-   operation as in H2 after reconnection.
-
-**Pass:** the existing Proflame2 task uses the returning ESPHome runtime without
-requiring a Proflame2 reload or command. Existing display contents alone do not
-prove a new display action occurred, because an ESPHome entry reload need not
-clear the screen. Preserve the log for review and treat this case as supporting
-evidence alongside H1/H2's visible display restoration. The automated transport
-tests explicitly verify runtime replacement and the successful update action.
-
-## Optional stress — Connectivity loss without a controller reboot
-
-If existing network controls allow it, temporarily disconnect **only Test
-LilyGO** from the local network while leaving it powered. A per-client Wi-Fi
-disconnect/block can provide this fault. Blocking Internet access alone does not
-disconnect HA's local ESPHome API. A rule that blocks only new connections may
-also leave an established API connection intact.
-
-Verify that HA actually reports the selected ESPHome device unavailable, then
-repeat H1 and H3's observation/recovery sequence. Restore the original network
-setting after the test. If no suitable per-device control exists, mark this case
-not run; the power-loss cases remain usable without new equipment or network
-changes. Very short interruptions may exercise API races but cannot guarantee a
-particular timeout or exception. Unexpected programming exceptions remain covered
-by software fault injection rather than a required hardware reproduction.
-
-## Recording results and investigating a failure
-
-
-Maintain the results in this document as the maintainer supplies reports. Use
-one row per run; split listening ON and OFF runs. Keep raw logs, device
-identifiers and the original completed notebooks private. Record unmeasured
-items explicitly rather than inferring a full pass from selected log excerpts.
-
-The H0/H1 results below come from the maintainer's 2026-11-06 power-cycle
-notebook. Times are as reported; the time zone and exact installed source
-revision were not recorded. The logged integration label was `0.7.0-beta5`
-and firmware label was `v0.7.0-debug`; these labels do not identify the installed
-development changes. H0/H1 are recorded as completed, with the evidence limits
-below. They do not need to be repeated before proceeding to H2.
-
-| Case / listening | Fault and unavailable times | Available / display-restored times | Warning / ERROR / recovery counts | DEBUG spacing | Unintended TX | Result / log file |
-| --- | --- | --- | --- | --- | --- | --- |
-| H0 / initial run | Linked ESPHome entry disabled; summaries cover more than five minutes offline | Re-enabled about 16:23:47; recovery INFO 16:25:02; display restoration not separately timed | Initial warning outside excerpt; one recovery INFO shown | Approximately 60 seconds | Not independently measured | Completed by maintainer; bounded logging and automatic recovery supported by notebook |
-| H0 / ON | Active listening enabled 16:25:46; sustained runtime outage observed 16:26:31 | Firmware availability logged 16:32:08; settings changed for H1 at 16:32:30 | One display interruption shown for sustained outage; final stable recovery not included before settings change | Display summaries approximately 60 seconds; listener retries continue with backoff up to 30 seconds | Not independently measured | Completed as part of H0 report; post-recovery receive and flapping acceptance remain for later cases |
-| H1 / OFF | Power OFF 16:32:45; ESPHome unavailable 16:35:38; display interruption 16:35:45; outage exceeded two hours | Firmware availability 18:43:19; recovery INFO 18:44:32; HA controls returned relatively quickly, not timed | One display warning and one recovery INFO shown; maintainer reports no further entries after several minutes; excerpts are not a full-log count | Approximately 60 seconds | Not independently measured | Completed by maintainer; automatic recovery with listening OFF and bounded logging supported by notebook |
-| H2 / ON | | | | | | Pending |
-| H3 / OFF | | | | | | Pending |
-| H3 / ON | | | | | | Pending |
-| H4 | | | | | | Pending |
-| H5 / OFF | | | | | | Pending |
-| H5 / ON | | | | | | Pending |
-| H6 / OFF | | | | | | Pending |
-| H6 / ON | | | | | | Pending |
-| Optional network loss | | | | | | Not run |
-
-H1's delay between physical power-off and HA reporting ESPHome unavailable was
-about three minutes. The display interruption followed about seven seconds
-after that unavailable indication. This separates native API failure detection
-from the integration's periodic check. The approximately 73-second interval
-between availability and recovery INFO includes the intended 60-second healthy
-window; it does not measure how long controls or display restoration took.
-
-The maintainer saw no obvious connection/disconnection indication on the LilyGO
-display. Automatic display restoration was not separately timed, and the report
-does not independently establish the absence of RF transmissions during recovery.
-These observations do not currently establish a new defect. Remaining cases
-will add listening, flapping, startup and runtime-replacement coverage.
-
-If recovery stalls, preserve evidence **before** issuing a command, reloading or
-restarting anything. Record ESPHome availability, HA state, LilyGO display state,
-the last successful update time and any pending send/learning activity. A real
-uncertain TX request intentionally fences background display work; ordinary
-disconnects without such a request must recover automatically. Do not bypass a
-send fence to make a test pass.
-
-Disable Debug logging to download the log after the case or uninterrupted group
-of cases. Downloads can overlap earlier log content; use recorded time ranges
-and entry IDs rather than counting entire files twice. Keep the first traceback
-if one occurs. Restore the recorded configuration and network settings afterward.
-
-H1–H6 passing establishes hardware acceptance for the exercised recovery paths;
-record optional cases and fault types separately. H0 alone does not prove
-cold-boot or physical power-loss recovery.
-
-## Validation status
-
-After the release split, the HA-only `dev` suite passed **2,170 tests**, with
-seven external helper/decoder checks skipped and one deselected. Real ESPHome
-configuration checks were enabled and passed. Firmware files match the committed
-baseline. Hardware acceptance of the v0.7.0 recovery change is partially complete:
-the maintainer completed H0 and H1, with the results and evidence limits recorded
-above. H2–H6 remain pending. The reported runs used debug firmware; released-beta6
-firmware coverage is not established by those version labels. The separate
-shutdown observations and possible OTA rollback investigation are preserved in
-the v0.8.0 shutdown design and do not establish v0.7.0 recovery acceptance.
+Acceptance for this protocol requires R1 and R2 to pass with their evidence
+recorded. Mark blocked or inconclusive steps explicitly; do not substitute a
+manual reconnect for automatic recovery. Automated tests cover detailed logging
+boundaries, repeated failure injection and recovery with listening disabled;
+this hardware protocol focuses on actual HA startup, API/runtime replacement,
+display operation and received-state updates.

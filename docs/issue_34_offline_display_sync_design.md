@@ -240,7 +240,23 @@ implementation unexpectedly touches firmware; that scope change needs review.
 ## Implementation status
 
 T1–T6 are implemented locally. T7 is partially complete: the maintainer completed
-H0/H1; H2–H6 remain pending in the [hardware protocol](issue_34_hardware_test_protocol.md).
+H0/H1. The 2026-11-09 risk review reduced remaining hardware acceptance to R1
+(startup offline, then automatic display and listening recovery) and R2 (actual
+ESPHome runtime replacement with listening ON) in the
+[standalone hardware protocol](issue_34_hardware_test_protocol.md). It contains
+setup, power-control instructions, R1/R2, pass criteria and results reporting;
+the superseded matrix and reported results are preserved privately. Existing
+H1 listening-OFF evidence and automated OFF/ON, flapping, logging and episode-reset
+checks remove the need for repeated long outages and manual timing-policy tests.
+The maintainer's 2026-11-09 R1/R2 report confirms startup retry exhaustion followed
+by automatic display recovery, automatic listener reconnection after runtime
+replacement, and two accepted extended RF states with matching HA/display updates.
+T7 remains partial: R1's RF-state checks are treated as not performed following
+tester clarification, and R2 included a
+direct LilyGO HA Power ON before its receive checks. A short command-free R2
+reload/receive check remains; another long outage is not required. Supplied
+excerpts show one display warning/recovery per episode, minute-spaced outage
+summaries and no ERROR tracebacks. Exact installed source revision is unrecorded.
 There is no deployed release for this fix yet; no firmware change is required.
 
 Implemented boundaries:

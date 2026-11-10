@@ -8,6 +8,9 @@ Celsius (0), W6 is the whole-degree setpoint, and `(W8 << 8) | W7` is room
 temperature in tenths of the selected scale. W8 is not reserved or a fixed
 remote characteristic. W4 bit 3 remains unknown. See the
 [current field mapping](issue_15_extended_protocol_design.md#temperature-fields-and-units).
+Pilot mode is also defined: W4 bit 7 is 0 for IPI and 1 for CPI, established by
+Issue #32's controlled captures 25/26. See the
+[Pilot reference](issue_15_extended_protocol_design.md#pilot-mode-ipi-and-cpi).
 The dated observations and original investigation tasks below are retained as
 the historical record; their earlier uncertainty does not override this mapping.
 
@@ -188,9 +191,10 @@ the unedited enable-to-disable log block.
 
 - [ ] **4.1 Exercise unobserved controls.** Capture all fan levels and any
   front/rear blower, split-flow, or other available remote controls.
-- [ ] **4.2 Isolate pilot mode.** Capture CPI/IPI changes with identical
-  power, flame, light, and thermostat state, then repeat one changed state in
-  each pilot mode.
+- [ ] **4.2 Additional pilot validation.** The bit mapping is already established
+  by Issue #32's controlled IPI/CPI pair; it is not awaiting its first capture.
+  Any further cross-state or cross-remote validation should preserve identical
+  power, flame, light, and thermostat state across the mode switch.
 - [ ] **4.3 Isolate `W7`.** Capture the exact same visible state before and
   after each suspected triggering operation: power cycle, pilot toggle,
   thermostat mode change, long idle interval, and battery/restart only if

@@ -1605,7 +1605,7 @@ async def test_flame_zero_service_entity_profile_and_coalescing(hass, extended):
         blocking=True,
     )
     zero = runtime_current_state(runtime)
-    assert zero == FireplaceState(True, flame=0, fan=3, light=6, aux=True)
+    assert zero == FireplaceState(True, flame=0, fan=3, light=6, aux=True, cpi=extended)
     assert runtime.backend.sent_packets[-1].frame.cmd1 & 1
     assert runtime.backend.sent_packets[-1].frame.cmd2 & 7 == 0
     await hass.services.async_call(
@@ -1618,17 +1618,17 @@ async def test_flame_zero_service_entity_profile_and_coalescing(hass, extended):
         "switch", "turn_on", {"entity_id": _switch_entity_id(entry.title, "Power")}, blocking=True
     )
     await asyncio.sleep(0.05)
-    assert runtime_current_state(runtime) == FireplaceState(True, flame=0, fan=6, light=2, aux=True)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=0, fan=6, light=2, aux=True, cpi=extended)
     for packet in runtime.backend.sent_packets:
         assert packet.state.flame == 0 and packet.state.power
         assert decode_state(packet.frame, runtime.remote_profile) == packet.state
     await hass.services.async_call(DOMAIN, "apply_profile", {"profile_id": "lights"}, blocking=True)
-    assert runtime_current_state(runtime) == FireplaceState(True, flame=0, fan=3, light=2, aux=True)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=0, fan=3, light=2, aux=True, cpi=extended)
     await hass.services.async_call(
         "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 4}, blocking=True
     )
     await asyncio.sleep(0.05)
-    assert runtime_current_state(runtime) == FireplaceState(True, flame=4, fan=3, light=2, aux=True)
+    assert runtime_current_state(runtime) == FireplaceState(True, flame=4, fan=3, light=2, aux=True, cpi=extended)
 
 
 @pytest.mark.parametrize("value", [-1, 7, 0.5, "0.5", True])

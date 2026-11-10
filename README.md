@@ -15,7 +15,7 @@ features you enable during setup.
 - Light level
 - Front burner
 - Aux output
-- CPI / pilot mode
+- [CPI / pilot mode](docs/add_fireplace_profile.md#cpi-and-ipi-pilot-modes)
 - Saved fireplace profiles
 
 ## Supported Controllers

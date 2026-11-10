@@ -56,7 +56,8 @@ EXTENDED = RemoteProfile(
 def records(profile, count=7):
     result = []
     for index in range(count):
-        frame = encode_state(FireplaceState(True, flame=1 + index % 6, light=index % 7), profile)
+        cpi = bool(profile.extended_template and profile.extended_template.w4_base & 0x80)
+        frame = encode_state(FireplaceState(True, flame=1 + index % 6, light=index % 7, cpi=cpi), profile)
         row = dict(
             model="Proflame2-Remote", protocol_variant=profile.protocol_variant, raw_words=bytes(frame.wire_words).hex()
         )

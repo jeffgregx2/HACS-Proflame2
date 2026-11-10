@@ -48,7 +48,8 @@ def encode_state(
     if profile.is_extended:
         template = profile.extended_template
         assert template is not None
-        w4 = (template.w4_base & EXTENDED_W4_FIXED_MASK) | cmd1
+        # Pilot mode is current command state, not a permanently retained flag.
+        w4 = (template.w4_base & EXTENDED_W4_FIXED_MASK & ~0x80) | cmd1
         w5 = cmd2
         w9, w10 = build_extended_integrity_words(profile.serial_id, w4, w5, template.w6, template.w7, template.w8)
         return ProflameFrame(

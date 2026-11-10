@@ -45,7 +45,9 @@ PROFILE = RemoteProfile(
 
 
 def packet(flame=3, light=0, profile=PROFILE, power=True):
-    result = encode_packet(FireplaceState(power, flame=flame, light=light), profile)
+    # Synthetic native traffic follows the mode recorded in this profile.
+    cpi = bool(profile.extended_template and profile.extended_template.w4_base & 0x80)
+    result = encode_packet(FireplaceState(power, flame=flame, light=light, cpi=cpi), profile)
     result.transmission_plan = build_transmission_plan(result.frame)
     return result
 

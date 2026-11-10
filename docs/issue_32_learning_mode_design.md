@@ -150,7 +150,9 @@ For newly learned extended profiles:
 - Continue requiring one serial ID and one protocol variant.
 - Derive retained flags from manual ON frames using W4 mask `0x88` (bits 3
   and 7). Preserve and check those flags consistently. Bit 3 remains unknown;
-  this fix does not change extended CPI handling for bit 7.
+  bit 7 is the defined IPI/CPI selection (0/1), not an unknown flag. This learning
+  fix retains the observed selection; it does not add extended CPI control. See
+  the [Pilot mapping](issue_15_extended_protocol_design.md#pilot-mode-ipi-and-cpi).
 - Exclude W4 bit 2 and W6/W7/W8 from identity consistency checks. They describe
   units, setpoint, and room temperature, not fixed remote identity. Allow them
   to change without discarding prior evidence or restarting learning.

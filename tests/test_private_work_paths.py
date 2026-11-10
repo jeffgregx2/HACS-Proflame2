@@ -28,9 +28,15 @@ def test_capture_output_overrides(tmp_path, monkeypatch) -> None:
     assert Path(_build_parser().parse_args(["--output-root", str(explicit)]).output_root) == explicit
 
 
-def test_analysis_invalidation_uses_relocated_archive(monkeypatch) -> None:
+def test_analysis_invalidation_uses_external_archive(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("PROFLAME2_ANALYSIS_ARCHIVE_ROOT", raising=False)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("sys.argv", ["mark_invalidated_analysis", "--dry-run"])
-    assert Path(parse_args().root) == Path("docs/private/analysis/live")
+    assert Path(parse_args().root) == tmp_path / "proflame2/private-archive/analysis/live"
+    monkeypatch.setenv("PROFLAME2_ANALYSIS_ARCHIVE_ROOT", str(tmp_path / "archive"))
+    assert Path(parse_args().root) == tmp_path / "archive"
+    monkeypatch.setattr("sys.argv", ["mark_invalidated_analysis", "--dry-run", "--root", str(tmp_path / "explicit")])
+    assert Path(parse_args().root) == tmp_path / "explicit"
 
 
 def test_yardstick_probe_uses_external_output_without_hardware(tmp_path, monkeypatch) -> None:

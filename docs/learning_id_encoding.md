@@ -77,6 +77,11 @@ decoded body including checksum is nine bytes.
 | 6 | 1 byte | W8: `0x00` |
 | 7 | 4 bytes | CRC32 checksum |
 
+W4 bit 7 stores the learned initial IPI/CPI selection (0/1). Runtime CPI
+control uses the current state rather than forcing this stored value into every
+frame. Toggling CPI does not rewrite the profile or change its Learning ID;
+this keeps the existing ID layout and import/export compatibility.
+
 The payload is seven bytes; the full decoded body including checksum is eleven
 bytes. Live power, thermostat, and light bits are removed from W4. W5 comes from
 the requested command; W9/W10 are recomputed using the remote ID and command and

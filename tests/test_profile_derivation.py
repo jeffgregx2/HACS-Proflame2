@@ -33,8 +33,9 @@ EXTENDED = RemoteProfile(
 
 
 def frames(profile):
+    cpi = bool(profile.extended_template and profile.extended_template.w4_base & 0x80)
     return [
-        encode_state(FireplaceState(True, flame=flame, light=light), profile)
+        encode_state(FireplaceState(True, flame=flame, light=light, cpi=cpi), profile)
         for flame, light in ((1, 0), (2, 0), (2, 1))
     ]
 
@@ -97,7 +98,7 @@ def test_extended_temperature_settings_do_not_change_identity():
     observations = []
     for index, (flags, setpoint, room) in enumerate(((0x84, 79, 767), (0x80, 26, 245), (0x84, 78, 768))):
         profile = replace(EXTENDED, extended_template=ExtendedFrameTemplate(flags, setpoint, room & 255, room >> 8))
-        observations.append(encode_state(FireplaceState(True, flame=index + 1), profile))
+        observations.append(encode_state(FireplaceState(True, flame=index + 1, cpi=True), profile))
     expected = replace(EXTENDED, extended_template=ExtendedFrameTemplate(0x80, 20, 0xC8, 0))
     original = tuple(frame.wire_words for frame in observations)
     for ordered in permutations(observations):
@@ -111,7 +112,7 @@ def test_units_switches_cannot_supply_command_diversity():
     observations = []
     for flags, setpoint in ((0x80, 26), (0x84, 79), (0x80, 25)):
         profile = replace(EXTENDED, extended_template=ExtendedFrameTemplate(flags, setpoint, 200, 0))
-        observations.append(encode_state(FireplaceState(True, flame=2), profile))
+        observations.append(encode_state(FireplaceState(True, flame=2, cpi=True), profile))
     assert derive_remote_profile(observations, FEATURES).profile is None
 
 

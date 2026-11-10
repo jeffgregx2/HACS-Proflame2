@@ -25,10 +25,10 @@ def lane(values):
     return value
 
 
-def commands(count=7, extended=False):
+def commands(count=7, extended=False, cpi=True):
     records = []
     for index in range(count):
-        cmd1, cmd2 = (0x81 if extended else 1) | ((index % 7) << 4), 1 + index % 6
+        cmd1, cmd2 = ((0x81 if cpi else 1) if extended else 1) | ((index % 7) << 4), 1 + index % 6
         words = [0x12, 0x34, 0x56, cmd1, cmd2]
         if extended:
             words += [0x15, 0xC8, 0]
@@ -285,13 +285,29 @@ def test_extended_unknown_pilot_is_accepted():
     assert "Confirmed" in result.stderr
 
 
-@pytest.mark.parametrize("pilot", [0, 1, -2, True, "-1"])
-def test_extended_pilot_cannot_claim_an_unestablished_mapping(pilot):
+@pytest.mark.parametrize("pilot", [-2, 2, True, False, 0.0, 1.0, "-1", "0", None])
+def test_extended_invalid_pilot_is_rejected(pilot):
     records = commands(7, True)
     records[-1]["pilot"] = pilot
     result = run(records)
     assert result.returncode != 0
     assert not result.stdout
+
+
+@pytest.mark.parametrize("pilot", [0, 1])
+def test_extended_known_pilot_preserves_learning_id(pilot):
+    records = commands(7, True, cpi=bool(pilot))
+    historical = run(records)
+    assert historical.returncode == 0, historical.stderr
+    for record in records:
+        record["pilot"] = pilot
+    current = run(records)
+    assert current.returncode == 0, current.stderr
+    assert current.stdout == historical.stdout
+    records[-1]["pilot"] = 1 - pilot
+    conflict = run(records)
+    assert conflict.returncode != 0
+    assert not conflict.stdout
 
 
 def test_named_file_and_regular_stdin_defaults(tmp_path):

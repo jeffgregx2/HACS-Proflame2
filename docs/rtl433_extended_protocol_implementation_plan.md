@@ -64,7 +64,7 @@ mean that the remaining integration and live acceptance tasks here have passed.
    create and reload entries, and verify reconstructed profiles and regenerated
    diagnostic IDs. Compare supported manual TX encodings using simulated
    backends, not RF transmission. Test invalid input, feature independence,
-   unknown extended pilot, ownership conflicts, and unchanged guided/legacy
+   historical unknown-Pilot compatibility, ownership conflicts, and unchanged guided/legacy
    setup behavior.
 8. [x] **T8 Reconcile end-user documentation.** Update setup menus, translations,
    links, and the dedicated rtl_433 guide. Explain the helper/decoder separation,
@@ -311,13 +311,21 @@ the parsing loop inside legacy and extended branches.
   `0x23/0x65`, and do not apply learned legacy C/D derivation to extended words.
 - [x] **D5 Map semantics by variant.** Reuse established power, light,
   thermostat, flame, fan, auxiliary, and burner mappings. Preserve power and
-  flame zero independently. Interpret the pilot field only where established
-  for that variant; extended W4 bit 7 must not be presented as legacy pilot.
-  Emit extended `pilot=-1` to explicitly mean unknown. Once a capture-backed
-  extended pilot mapping is established, update the decoder and consumers to
-  report validated `0/1` values. The sentinel is not a mapped pilot state.
+  flame zero independently. **Protocol correction, 2026-11-10:** extended
+  Pilot is now established as W4 bit 7: `0` = IPI, `1` = CPI. The previous
+  `pilot=-1` requirement is obsolete; it describes historical output, not an
+  undefined field. See the [controlled Pilot evidence](issue_15_extended_protocol_design.md#pilot-mode-ipi-and-cpi).
   Retain W6-W8 as raw fields; additional temperature/setpoint output requires
   its own capture-backed mapping and tests.
+- [ ] **D5a Correct extended Pilot output and consumers.** Decode bit 7 only
+  after existing frame/integrity validation. Update rtl_433 comments/output
+  regressions with synthetic IPI/CPI fixtures; preserve legacy behavior. Accept
+  consistent extended `pilot=0/1` in consumers while retaining compatibility
+  with historical missing/`-1` values. Reject conflicts with raw W4. No changes
+  to Learning ID encoding or HA Pilot controls are implied. Source corrections
+  remain pending in rtl_433. The shared HA/helper consumer correction is now
+  implemented: it accepts matching integer `0/1`, rejects contradictory or
+  invalid Pilot values, and retains missing/`-1` compatibility.
 - [x] **D6 Emit the agreed output.** Update `output_fields`, source protocol
   documentation, and JSON/CSV tests together. Return the appropriate rtl_433
   rejection category for length, framing, or integrity failures. Preserve the
@@ -365,16 +373,19 @@ from the left margin. Keep these sections and column anchors for both variants:
   `W8`, `W9`, `W10` in columns 1-3 on the next line.
 - Controls: `Pilot`, `Light`, `Thermostat`, `Power` occupy columns 1-4;
   `Front`, `Fan`, `Aux`, `Flame` occupy columns 1-4 on the next line.
-  Extended `Pilot` is `-1` (unknown), preserving this same layout.
+  Extended `Pilot` is `0` for IPI or `1` for CPI, preserving this same layout.
+  Historical builds may still emit `-1`; the decoder correction is pending.
 - Final line: `Integrity` in column 1 and `Raw words` in column 3, aligned
   exactly beneath `Aux`.
 
 This layout applies to the pretty key/value formatter for explicitly marked
 Proflame2 records. Other devices retain their normal formatting. JSON/CSV field
-names, types, and values remain unchanged except for the added extended
-`pilot=-1` field. Consumers accept prior extended records that omit `pilot`,
-and accept the integer `-1` sentinel when present. They must not interpret W4
-bit 7 as a known pilot state or accept `0/1` until the mapping is validated.
+names and types remain unchanged. The corrected extended `pilot` value is the
+integer decoded from W4 bit 7. Consumers must accept `0/1` consistent with raw
+W4 and continue accepting prior records that omit `pilot` or supply integer
+`-1` as unknown. Do not treat historical unknown output as IPI or CPI. Updating
+the consumers' validation is implemented; the rtl_433 decoder portion of D5a
+remains separately coordinated.
 
 Exit gate: the C decoder passes the captured corpus, malformed-input cases,
 sanitizers, and rtl_433's applicable tests without shared slicer changes.
@@ -647,7 +658,7 @@ being installed as a running service.
 | C memory bounds | Captured extended overflow regression; maximum capacity; oversized rows; address and undefined-behavior sanitizers. |
 | C framing | Legacy and extended complete rows; permitted terminal low-bit omission; incorrect sync, Manchester, padding, parity, guards, and gap boundaries; eight/nine/eleven words; invalid extended tail cannot fall back to legacy. |
 | C integrity | Both extended identifiers and all 120 accepted raw rows; malformed fixture rows remain rejected; single-bit mutations across all ten words; identifier changes affect integrity. |
-| C semantics and output | Exact wire words and fields; independent power/flame-zero values; no invented extended pilot value; legacy compatibility; JSON numeric types and CSV fields. |
+| C semantics and output | Exact wire words and fields; independent power/flame-zero values; extended Pilot 0/1 from W4 bit 7 using synthetic IPI/CPI fixtures; legacy compatibility; JSON numeric types and CSV fields. |
 | Actual rtl_433 pipeline | Offline replay through pulse detection, PCM slicing, and the real Proflame2 C decoder; silence/noise negatives; legacy regressions; repeated frames and row boundaries. |
 | Pure Python derivation | Existing legacy and extended learning cases unchanged; stable template requirements; sufficient distinct observations; mixed identities/variants and invalid integrity rejected. |
 | Standalone packaging | Build and install the helper/library into a clean environment without HA or rtl_433; no HA imports, source loading tricks, or duplicate codec implementations. |

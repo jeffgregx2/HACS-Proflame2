@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 INVALIDATED_DIR_NAMES = {
@@ -121,7 +122,14 @@ def render_invalidation_index(root: Path, invalidated: list[Path], *, reason: st
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Mark invalidated Stage 5 analysis outputs without deleting raw data.")
-    parser.add_argument("--root", default="docs/private/analysis/live", help="Root directory to scan.")
+    archive = (
+        Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "proflame2/private-archive/analysis/live"
+    )
+    parser.add_argument(
+        "--root",
+        default=os.environ.get("PROFLAME2_ANALYSIS_ARCHIVE_ROOT", str(archive)),
+        help="External historical analysis directory to scan (or PROFLAME2_ANALYSIS_ARCHIVE_ROOT).",
+    )
     parser.add_argument(
         "--reason", default="stage5q_yardstick_whole_stream_not_packet_normalized", help="Invalidation reason."
     )

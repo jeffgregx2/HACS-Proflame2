@@ -60,6 +60,7 @@ from .display_sync import (
 )
 from .packet_debug import get_packet_debug_logger
 from .protocol.encoder import encode_packet
+from .protocol.models import FireplaceState
 from .refresh import (
     SOURCE_REFRESH,
     RefreshSkipped,
@@ -246,10 +247,29 @@ def _log_control_event(
         get_packet_debug_logger().log(level, "control: " + prefixed_message, *args)
 
 
+def _retain_extended_cpi(
+    runtime_entry: Proflame2RuntimeEntry,
+    requested_state: FireplaceState,
+    base_state: FireplaceState | None,
+    changes: dict[str, Any],
+) -> FireplaceState:
+    """Preserve Pilot mode unless an enabled extended CPI control changes it."""
+
+    if (
+        runtime_entry.remote_profile.is_extended
+        and base_state is not None
+        and (not runtime_entry.features.cpi or CONF_CPI not in changes)
+    ):
+        return replace(requested_state, cpi=base_state.cpi)
+    return requested_state
+
+
 def _is_retained_off_control_edit(
     current_state: Any,
     desired_state: Any,
     changes: dict[str, Any],
+    *,
+    cpi_enabled: bool,
 ) -> bool:
     """Return whether an OFF-state feature edit should be retained without TX."""
 
@@ -258,6 +278,9 @@ def _is_retained_off_control_edit(
         and not current_state.power
         and not desired_state.power
         and set(changes).issubset(_RETAINED_OFF_CONTROL_KEYS)
+        # CPI changes must reach the receiver even with the main burner OFF.
+        # A coalesced accessory edit must not discard an unsent CPI change.
+        and (not cpi_enabled or current_state.cpi == desired_state.cpi)
     )
 
 
@@ -361,6 +384,7 @@ async def async_stage_control_change(
     except StateValidationError as exc:
         raise HomeAssistantError(str(exc)) from exc
 
+    desired_state = _retain_extended_cpi(runtime_entry, desired_state, base_state, changes)
     intents = runtime_entry.control_intents
     expected_state = intents.in_flight.state if intents.in_flight is not None else current_state
     if expected_state is not None and desired_state == expected_state:
@@ -383,7 +407,9 @@ async def async_stage_control_change(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         return
 
-    if intents.in_flight is None and _is_retained_off_control_edit(current_state, desired_state, changes):
+    if intents.in_flight is None and _is_retained_off_control_edit(
+        current_state, desired_state, changes, cpi_enabled=runtime_entry.features.cpi
+    ):
         if intents.pending is not None:
             _finish_intent(intents.pending, HomeAssistantError("Request superseded by a retained control change."))
             intents.pending = None
@@ -1317,6 +1343,7 @@ async def async_execute_set_state(
     )
     try:
         retain_off_flame = False
+        base_state = runtime_entry.desired_state or runtime_current_state(runtime_entry)
         if CONF_POWER in data and CONF_FLAME not in data and source != "saved_profile":
             # A power request without a flame uses existing settings. Explicit
             # full-state commands and saved profiles retain their own values.
@@ -1334,6 +1361,7 @@ async def async_execute_set_state(
             allow_flame_off_when_on=runtime_entry.allow_flame_off_when_on,
             allow_power_off_flame=retain_off_flame,
         )
+        requested_state = _retain_extended_cpi(runtime_entry, requested_state, base_state, data)
     except StateValidationError as exc:
         runtime_entry.last_error = str(exc)
         _log_control_event(

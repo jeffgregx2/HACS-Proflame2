@@ -327,6 +327,13 @@ async def async_bootstrap_runtime_state_from_entry_data(
     )
 
 
+def _initial_cpi(profile: RemoteProfile) -> bool:
+    """Seed extended Pilot mode from its template only before state is known."""
+
+    template = profile.extended_template
+    return template is not None and bool(template.w4_base & 0x80)
+
+
 async def async_initialize_safe_default_runtime_state(
     hass: HomeAssistant, runtime_entry: Proflame2RuntimeEntry
 ) -> None:
@@ -342,7 +349,7 @@ async def async_initialize_safe_default_runtime_state(
         light=0,
         front=False,
         aux=False,
-        cpi=False,
+        cpi=_initial_cpi(runtime_entry.remote_profile),
     )
     runtime_entry.last_packet = encode_packet(
         safe_state,
@@ -662,7 +669,7 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
                 light=0,
                 front=False,
                 aux=False,
-                cpi=False,
+                cpi=_initial_cpi(remote_profile),
             ),
             remote_profile,
             source="fake_default",

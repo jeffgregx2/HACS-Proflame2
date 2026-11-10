@@ -50,10 +50,10 @@ def normalize_rtl433_record(record: object) -> Rtl433Frame | None:
     tail = ("w6", "w7", "w8", "w9", "w10") if extended else ("err1", "err2")
     if extended and any(key in record for key in ("err1", "err2")):
         raise ValueError("Extended records must not contain legacy error fields.")
-    # Extended pilot meaning is not yet established. Preserve compatibility
-    # with earlier records that omit it; never infer its value from W4 bit 7.
-    if extended and "pilot" in record and (type(record["pilot"]) is not int or record["pilot"] != -1):
-        raise ValueError("Extended pilot must be -1 (unknown) until its mapping is established.")
+    # Historical extended output omitted Pilot or reported -1 (unknown).
+    # Current output reports bit 7; validate it against the frame below.
+    if extended and "pilot" in record and (type(record["pilot"]) is not int or record["pilot"] not in (-1, 0, 1)):
+        raise ValueError("Extended pilot must be -1 (unknown), 0 (IPI), or 1 (CPI).")
     if not extended and any(key in record for key in ("w6", "w7", "w8", "w9", "w10")):
         raise ValueError("Extended fields require an explicit extended protocol format.")
     expected_mic = "DIGEST" if extended else "PARITY"
@@ -92,7 +92,7 @@ def normalize_rtl433_record(record: object) -> Rtl433Frame | None:
         aux=(words[4] & 8) >> 3,
         flame=words[4] & 7,
     )
-    if not extended:
+    if not extended or record.get("pilot") != -1:
         semantics["pilot"] = words[3] >> 7
     for key, value in semantics.items():
         if key in record and _number(record, key, 255, False) != value:
