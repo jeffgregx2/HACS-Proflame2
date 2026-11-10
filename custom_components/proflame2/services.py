@@ -1876,11 +1876,13 @@ async def _async_finish_send_confirmation_policy(
         return
 
     if runtime_entry.active_listening_enabled:
-        runtime_entry.operational_status = OPERATIONAL_STATUS_CONFIRMING
+        # Backend success confirms local TX completion, not fireplace execution.
+        # Keep requested confidence while the listener awaits remote observations.
+        runtime_entry.operational_status = OPERATIONAL_STATUS_READY
         await async_start_active_listener(hass, runtime_entry)
         _log_control_event(
             runtime_entry,
-            "send execution entering active listening confirmation state=%s",
+            "send execution complete; ready with active listening state=%s",
             _state_summary(prepared_request.requested_state),
         )
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
