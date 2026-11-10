@@ -375,7 +375,8 @@ no confirmation task. A later valid remote packet updates the state to Observed
 without another transmission. Both regressions reproduced the original defect
 and pass after the fix. The full default suite passed: **2,220 passed, 34 skipped,
 one deselected**; Python lint, formatting and source preflight passed. The fix is
-local on dev, uncommitted and unreleased. No additional hardware test is required.
+committed on dev as `7ec38d0` and awaits release. No additional hardware test
+is required.
 
 ## References
 
