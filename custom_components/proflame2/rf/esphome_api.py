@@ -129,7 +129,8 @@ class ESPHomeAPIBackend(RFBackend):
         self.remote_profile = remote_profile
         self.active_listening_profile = remote_profile
         self.debug_logging_enabled = debug_logging_enabled
-        self.connected = False
+        self._connected = False
+        self._connection_listeners: dict[object, Callable[[bool], None]] = {}
         self.display_sync_generation = 0
         self.last_endpoint_status: ESPHomeEndpointStatusReport | None = None
         self.last_tx_response: ESPHomeTXResponse | None = None
@@ -145,6 +146,35 @@ class ESPHomeAPIBackend(RFBackend):
         observe_pcm = getattr(transport, "set_pcm_event_logger", None)
         if callable(observe_pcm):
             observe_pcm(self._log_rx_pcm)
+
+    @property
+    def connected(self) -> bool:
+        """Return whether backend setup has completed successfully."""
+
+        return self._connected
+
+    @connected.setter
+    def connected(self, value: bool) -> None:
+        value = bool(value)
+        if value == self._connected:
+            return
+        self._connected = value
+        for listener in tuple(self._connection_listeners.values()):
+            try:
+                listener(value)
+            except Exception:
+                _LOGGER.exception("Proflame2 backend connection listener failed")
+
+    def add_connection_listener(self, callback: Callable[[bool], None]) -> Callable[[], None]:
+        """Observe value transitions without coupling transport work to HA."""
+
+        token = object()
+        self._connection_listeners[token] = callback
+
+        def unsubscribe() -> None:
+            self._connection_listeners.pop(token, None)
+
+        return unsubscribe
 
     @property
     def controller_available(self) -> bool | None:

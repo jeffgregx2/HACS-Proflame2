@@ -27,6 +27,75 @@ in [Measured Proflame2 Waveform Notes](diagnostics/proflame2_waveform_observatio
 In particular, distinguish observed native repeat gaps from decoder acceptance
 thresholds; they are not necessarily the same rule.
 
+## Native API Connection and Availability
+
+At runtime, Home Assistant's ESPHome integration connects directly to LilyGO
+through the native API. ESPHome Builder compiles/installs firmware and provides
+a log viewer; it is not an intermediary required for normal fireplace operation.
+Restarting Builder alongside HA does not invalidate an HA startup/recovery test.
+
+### Heartbeat and offline detection
+
+The native API already has a ping/pong heartbeat. Source verification for
+Home Assistant **2026.11.1**, which pins **aioesphomeapi 46.25.0**, found:
+
+| Setting | Default | Owner |
+| --- | --- | --- |
+| Ping interval | 20 seconds | HA's native API client library |
+| Timeout after the first unanswered ping | 90 seconds (4.5 times the interval) | HA's native API client library |
+| Possible detection time after silent connection loss | Approximately 90–110 seconds | Depends on where loss occurs within the ping interval |
+
+If LilyGO loses power without closing its connection cleanly, HA can wait up to
+20 seconds before the next ping, then allow 90 seconds for a response. A clean
+disconnect or a socket/network error can be detected sooner. These defaults are
+version-specific, not a guaranteed detection deadline for every installation.
+
+The maintainer measured **1 minute 50 seconds** from controller power-off to the
+fireplace sensor's `operational_status` becoming `unavailable`, without changing
+settings or sending commands. That is consistent with the default heartbeat
+window. It does not independently prove the precise ping/timeout sequence;
+matching native API logs would be needed for that attribution. An earlier test
+that became unavailable after a rejected setting edit does not establish that
+such an edit is required for detection.
+
+### Configuration limits
+
+- There is no documented native API YAML heartbeat/keepalive interval setting.
+  HA's standard ESPHome integration does not expose a keepalive interval option
+  in its configuration UI; it creates the client with the library default.
+- The Python API client accepts a `keepalive` argument, but HA owns this shared
+  client. Proflame2 does not create a separate API connection or modify HA's
+  client internals to shorten the timeout.
+- `api.reboot_timeout` controls rebooting a running device when no API client
+  connects. It does not control how quickly HA detects a powered-off controller.
+- RF active listening, delayed retransmission and inactivity refresh are separate
+  from this network heartbeat. Changing them is not a supported way to tune
+  HA's native API disconnect timeout.
+
+### Connection detection versus sensor publication
+
+The [issue #36 publication fix](issue_36_connection_state_publication_design.md),
+targeted for v0.7.1, notifies entities after Proflame2's backend connection flag
+changes. Its fixed 100 ms one-shot coalesces notifications; it does not shorten
+upstream connection-loss detection or delay reconnection/control work. Entities
+publish their current derived status rather than forcing `ready` on recovery.
+A connection transition does not change fireplace state or state confidence.
+
+For support, distinguish these two phases: **detect the lost/recovered API
+connection**, then **publish the current status in HA**. A roughly two-minute
+silent-loss interval can be consistent with the heartbeat defaults; remaining
+`unavailable` after the backend has recovered is the stale-publication problem
+addressed by #36. `ready` means the integration is ready for operation, not that
+the physical fireplace has acknowledged a command.
+
+### Upstream references
+
+- [Native API configuration and reboot_timeout](https://esphome.io/components/api/#configuration-variables)
+- [HA 2026.11.1 ESPHome dependency versions](https://github.com/home-assistant/core/blob/2026.11.1/homeassistant/components/esphome/manifest.json)
+- [HA 2026.11.1 shared API client creation](https://github.com/home-assistant/core/blob/2026.11.1/homeassistant/components/esphome/manager.py)
+- [aioesphomeapi 46.25.0 ping default and keepalive argument](https://github.com/esphome/aioesphomeapi/blob/v46.25.0/aioesphomeapi/client_base.py)
+- [aioesphomeapi 46.25.0 timeout ratio and scheduling](https://github.com/esphome/aioesphomeapi/blob/v46.25.0/aioesphomeapi/connection.py)
+
 ## Hardware Defaults
 
 The production ESPHome package configures the controller for:
