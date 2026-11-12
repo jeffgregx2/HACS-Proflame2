@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
+from .connection_updates import ConnectionStatePublisher
 from .const import (
     BACKEND_ESPHOME,
     BACKEND_FAKE,
@@ -131,6 +132,7 @@ class Proflame2RuntimeEntry:
     control_intents: ControlIntents = field(default_factory=ControlIntents)
     control_task: asyncio.Task[None] | None = None
     control_disconnect_unsub: Callable[[], None] | None = None
+    connection_updates_unsub: Callable[[], None] | None = None
     operational_status: str = OPERATIONAL_STATUS_READY
     state_confidence: str = STATE_CONFIDENCE_UNKNOWN
     active_profile_state: FireplaceState | None = None
@@ -681,9 +683,25 @@ async def async_setup_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     if runtime_entry.last_packet is None:
         await async_initialize_safe_default_runtime_state(hass, runtime_entry)
     async_get_runtime_entries(hass)[entry.entry_id] = runtime_entry
+    connection_updates = ConnectionStatePublisher(
+        hass,
+        backend,
+        is_current=lambda: (
+            not runtime_entry.shutting_down
+            and async_get_runtime_entries(hass).get(entry.entry_id) is runtime_entry
+            and runtime_entry.backend is backend
+        ),
+        publish=lambda: async_notify_runtime_entry_updated(hass, entry.entry_id),
+    )
+    runtime_entry.connection_updates_unsub = connection_updates.close
+    entry.async_on_unload(connection_updates.close)
     from .services import async_observe_controller_connection
 
-    async_observe_controller_connection(hass, runtime_entry)
+    try:
+        async_observe_controller_connection(hass, runtime_entry)
+    except BaseException:
+        connection_updates.close()
+        raise
     return runtime_entry
 
 
@@ -721,6 +739,9 @@ async def async_unload_runtime_entry(hass: HomeAssistant, entry: ConfigEntry) ->
     runtime_entry = async_get_runtime_entries(hass).pop(entry.entry_id, None)
     if runtime_entry:
         runtime_entry.shutting_down = True
+        if runtime_entry.connection_updates_unsub is not None:
+            runtime_entry.connection_updates_unsub()
+            runtime_entry.connection_updates_unsub = None
         if runtime_entry.control_disconnect_unsub is not None:
             runtime_entry.control_disconnect_unsub()
             runtime_entry.control_disconnect_unsub = None
@@ -773,6 +794,9 @@ async def async_handle_homeassistant_stop(hass: HomeAssistant) -> None:
     runtime_entries = list(async_get_runtime_entries(hass).values())
     for runtime_entry in runtime_entries:
         runtime_entry.shutting_down = True
+        if runtime_entry.connection_updates_unsub is not None:
+            runtime_entry.connection_updates_unsub()
+            runtime_entry.connection_updates_unsub = None
         if runtime_entry.control_disconnect_unsub is not None:
             runtime_entry.control_disconnect_unsub()
             runtime_entry.control_disconnect_unsub = None

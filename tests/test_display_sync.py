@@ -98,16 +98,19 @@ async def test_display_rebinds_replaced_runtime_without_active_listening(hass):
     linked = _add_linked_esphome_entry(hass, old)
     entry = _add_entry(hass, options={CONF_ESPHOME_ENTRY_ID: linked.entry_id})
     runtime = await async_setup_runtime_entry(hass, entry)
-    runtime.last_packet = encode_packet(FireplaceState(True, flame=3), runtime.remote_profile)
-    await services.async_sync_runtime_display_state(hass, runtime, force=True)
-    old_calls = len(old.client.calls)
-    replacement = _fake_esphome_runtime_data()
-    linked.runtime_data = replacement
-    old.available = False
-    await services.async_sync_runtime_display_state(hass, runtime, force=True)
-    assert any(name == "proflame2_display_state_update" for name, _ in replacement.client.calls)
-    assert not any(name == "proflame2_tx_stateful" for name, _ in replacement.client.calls)
-    assert len(old.client.calls) == old_calls
+    try:
+        runtime.last_packet = encode_packet(FireplaceState(True, flame=3), runtime.remote_profile)
+        await services.async_sync_runtime_display_state(hass, runtime, force=True)
+        old_calls = len(old.client.calls)
+        replacement = _fake_esphome_runtime_data()
+        linked.runtime_data = replacement
+        old.available = False
+        await services.async_sync_runtime_display_state(hass, runtime, force=True)
+        assert any(name == "proflame2_display_state_update" for name, _ in replacement.client.calls)
+        assert not any(name == "proflame2_tx_stateful" for name, _ in replacement.client.calls)
+        assert len(old.client.calls) == old_calls
+    finally:
+        await async_unload_runtime_entry(hass, entry)
 
 
 async def test_known_offline_skips_api_and_bounds_debug_summaries(hass, monkeypatch, caplog):
@@ -282,22 +285,25 @@ async def test_availability_uses_only_fresh_in_memory_state(hass, kind):
     linked = _add_linked_esphome_entry(hass, old)
     entry = _add_entry(hass, options={CONF_ESPHOME_ENTRY_ID: linked.entry_id})
     runtime = await async_setup_runtime_entry(hass, entry)
-    await runtime.backend.connect()
-    transport = runtime.backend.transport
-    old_calls = len(old.client.calls)
-    if kind == "missing_entry":
-        transport.linked_entry_id = "synthetic-missing-entry"
-    elif kind == "missing_runtime":
-        linked.runtime_data = None
-    elif kind == "offline":
-        old.available = False
-    else:
-        old.available = False
-        linked.runtime_data = _fake_esphome_runtime_data()
-    for _ in range(10):
-        assert transport.device_available is (kind == "replacement")
-        assert not transport.connection_is_current
-    assert len(old.client.calls) == old_calls
+    try:
+        await runtime.backend.connect()
+        transport = runtime.backend.transport
+        old_calls = len(old.client.calls)
+        if kind == "missing_entry":
+            transport.linked_entry_id = "synthetic-missing-entry"
+        elif kind == "missing_runtime":
+            linked.runtime_data = None
+        elif kind == "offline":
+            old.available = False
+        else:
+            old.available = False
+            linked.runtime_data = _fake_esphome_runtime_data()
+        for _ in range(10):
+            assert transport.device_available is (kind == "replacement")
+            assert not transport.connection_is_current
+        assert len(old.client.calls) == old_calls
+    finally:
+        await async_unload_runtime_entry(hass, entry)
 
 
 @pytest.mark.parametrize(
@@ -332,14 +338,17 @@ async def test_unknown_state_is_deferred_without_fake_display_success(hass):
     linked = _add_linked_esphome_entry(hass, _fake_esphome_runtime_data())
     entry = _add_entry(hass, options={CONF_ESPHOME_ENTRY_ID: linked.entry_id})
     runtime = await async_setup_runtime_entry(hass, entry)
-    runtime.last_packet = None
-    assert await services.async_sync_runtime_display_state(hass, runtime, force=True) is DisplaySyncOutcome.DEFERRED
-    assert runtime.last_display_sync_signature is None
-    assert runtime.last_display_sync_monotonic is None
-    assert not any(
-        name in ("proflame2_tx_stateful", "proflame2_display_state_update")
-        for name, _ in linked.runtime_data.client.calls
-    )
+    try:
+        runtime.last_packet = None
+        assert await services.async_sync_runtime_display_state(hass, runtime, force=True) is DisplaySyncOutcome.DEFERRED
+        assert runtime.last_display_sync_signature is None
+        assert runtime.last_display_sync_monotonic is None
+        assert not any(
+            name in ("proflame2_tx_stateful", "proflame2_display_state_update")
+            for name, _ in linked.runtime_data.client.calls
+        )
+    finally:
+        await async_unload_runtime_entry(hass, entry)
 
 
 async def test_new_user_intent_during_prepare_defers_policy_and_display(hass):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -86,6 +87,11 @@ class RFBackend(ABC):
     # does not change when a capable controller temporarily disconnects.
     supports_active_listening: ClassVar[bool] = False
     pcm_logging_enabled = False
+
+    def add_connection_listener(self, callback: Callable[[bool], None]) -> Callable[[], None]:
+        """Subscribe to connection transitions where supported by the backend."""
+
+        return lambda: None
 
     def set_pcm_logging_enabled(self, enabled: bool) -> None:
         """Enable payload-only diagnostics independently of verbose debugging."""
