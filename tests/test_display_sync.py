@@ -7,6 +7,7 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+from esphome_public_helpers import install_public_endpoint
 from test_esphome_runtime import _add_entry, _add_linked_esphome_entry, _fake_esphome_runtime_data
 
 from custom_components.proflame2 import services
@@ -103,8 +104,9 @@ async def test_display_rebinds_replaced_runtime_without_active_listening(hass):
         await services.async_sync_runtime_display_state(hass, runtime, force=True)
         old_calls = len(old.client.calls)
         replacement = _fake_esphome_runtime_data()
-        linked.runtime_data = replacement
         old.available = False
+        linked.runtime_data = replacement
+        install_public_endpoint(hass, linked, replacement)
         await services.async_sync_runtime_display_state(hass, runtime, force=True)
         assert any(name == "proflame2_display_state_update" for name, _ in replacement.client.calls)
         assert not any(name == "proflame2_tx_stateful" for name, _ in replacement.client.calls)
@@ -260,6 +262,7 @@ async def test_full_periodic_recovery_uses_current_actions_without_tx(hass, monk
     def online():
         linked.runtime_data = current
         current.available = True
+        install_public_endpoint(hass, linked, current)
 
     try:
         await run_display_loop(hass, monkeypatch, runtime, [offline, offline, online, lambda: None], None)
@@ -280,7 +283,7 @@ async def test_full_periodic_recovery_uses_current_actions_without_tx(hass, monk
 
 
 @pytest.mark.parametrize("kind", ["missing_entry", "missing_runtime", "offline", "replacement"])
-async def test_availability_uses_only_fresh_in_memory_state(hass, kind):
+async def test_availability_uses_only_fresh_public_state(hass, kind):
     old = _fake_esphome_runtime_data()
     linked = _add_linked_esphome_entry(hass, old)
     entry = _add_entry(hass, options={CONF_ESPHOME_ENTRY_ID: linked.entry_id})
@@ -290,14 +293,16 @@ async def test_availability_uses_only_fresh_in_memory_state(hass, kind):
         transport = runtime.backend.transport
         old_calls = len(old.client.calls)
         if kind == "missing_entry":
-            transport.linked_entry_id = "synthetic-missing-entry"
+            transport._endpoint.entry_id = "synthetic-missing-entry"
         elif kind == "missing_runtime":
             linked.runtime_data = None
+            install_public_endpoint(hass, linked, None)
         elif kind == "offline":
             old.available = False
         else:
             old.available = False
             linked.runtime_data = _fake_esphome_runtime_data()
+            install_public_endpoint(hass, linked, linked.runtime_data)
         for _ in range(10):
             assert transport.device_available is (kind == "replacement")
             assert not transport.connection_is_current

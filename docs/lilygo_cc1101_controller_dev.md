@@ -29,6 +29,30 @@ thresholds; they are not necessarily the same rule.
 
 ## Native API Connection and Availability
 
+The v0.7.2 HA transport uses registered `esphome.<node>_<action>` services and
+public HA entity states. It does not reuse ESPHome's private runtime, API client
+or state maps. The advertised minimum is HA 2025.8.0, matching the existing
+options-flow helper requirement; unchanged released v0.7.1 LilyGO firmware is
+the compatibility baseline. RF encoding, repeat counts and firmware timing are
+unchanged.
+
+Before the first TX after controller boot, the last-request-ID entity can be
+`unknown`: firmware suppresses publication of its initially empty ID. This value
+is permitted during readiness checks, while the enabled entity itself and other
+live critical telemetry remain required. It cannot confirm a transmission;
+confirmation still needs the new matching ID and fresh completion counter.
+
+Endpoint bindings are scoped to the selected ESPHome entry/controller. Registry,
+service and public availability events invalidate cached bindings. TX completion
+uses matching request identity plus fresh success/failure counters and terminal
+telemetry; return from a public HA action call alone does not establish local
+TX completion or fireplace reception. Required telemetry disabled by the user
+must be re-enabled in HA; there is no fallback to private ESPHome data.
+
+See the [transport design](issue_22_v0_7_2_public_transport_design.md) and
+[hardware validation protocol](issue_22_v0_7_2_hardware_validation.md) for the
+compatibility/release gates and the remaining real-hardware qualification.
+
 At runtime, Home Assistant's ESPHome integration connects directly to LilyGO
 through the native API. ESPHome Builder compiles/installs firmware and provides
 a log viewer; it is not an intermediary required for normal fireplace operation.
@@ -95,6 +119,44 @@ the physical fireplace has acknowledged a command.
 - [HA 2026.11.1 shared API client creation](https://github.com/home-assistant/core/blob/2026.11.1/homeassistant/components/esphome/manager.py)
 - [aioesphomeapi 46.25.0 ping default and keepalive argument](https://github.com/esphome/aioesphomeapi/blob/v46.25.0/aioesphomeapi/client_base.py)
 - [aioesphomeapi 46.25.0 timeout ratio and scheduling](https://github.com/esphome/aioesphomeapi/blob/v46.25.0/aioesphomeapi/connection.py)
+
+## HA Device Registry Compatibility
+
+### Tested upgrade and firmware combinations
+
+The v0.7.2 candidate was hardware-tested with ESPHome Builder 2026.6.0 firmware
+on HA 2025.8.0, 2026.1.0, 2026.8.0, 2026.9.0 and 2026.11.2. The same HA
+configuration passed both the staged chain and a direct restored-baseline
+2025.8.0 to 2026.11.2 upgrade, retaining identities and TX/RX operation. A
+separate smoke test passed on HA 2026.11.2 with firmware built from the released
+v0.7.1 source tag using Builder 2026.6.0. These are sampled tested combinations,
+not qualification of every intermediate release or historical firmware binary.
+
+ESPHome 2026.7 removes the legacy object-ID discovery fallback. Older HA
+clients cannot reconstruct the missing IDs, causing duplicate unique IDs and
+missing entities before Proflame2 can bind telemetry. HA 2026.1 includes that
+reconstruction support; HA 2026.8 additionally migrates the entity registry
+to the newer unique-ID format. Keep Builder 2026.6.x for HA 2025.8–2025.12,
+and upgrade HA before installing firmware built with Builder 2026.7 or newer.
+The package's Builder 2026.6.0 minimum expresses existing build requirements;
+the transport migration does not require an existing controller to be reflashed.
+
+### Registry adapter
+
+HA 2025.8.0 remains the integration minimum. Registry lookups and ownership
+reads go through `DeviceRegistryCompatibility`. Its legacy implementation is
+selected before HA 2026.8 and preserves the existing public lookup and ownership
+set. The modern implementation uses entry-scoped identifier lookup and the
+single owning entry. Selection uses HA's public major/minor version constants;
+modern failures do not trigger a hidden legacy fallback.
+
+The same interface is used by identity migration and controller-device event
+filtering. Existing migration safeguards preserve registry identity and reject
+shared legacy ownership. This is HA-only compatibility code; firmware actions,
+telemetry and RF behavior are unchanged. V08-03 removes deprecated entity
+parent hints; the existing runtime maintains the parent through the selected
+controller registry device ID on both supported HA versions. Entity registration
+therefore cannot override that link through a global identifier lookup.
 
 ## Hardware Defaults
 

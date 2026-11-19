@@ -61,6 +61,7 @@ i2c:
   scan: true
 
 esphome:
+  min_version: 2026.6.0
   build_flags:
     - -DPROFLAME2_RADIO_TRACE=1
   on_boot:

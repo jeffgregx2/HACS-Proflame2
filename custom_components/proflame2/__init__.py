@@ -36,6 +36,7 @@ from .const import (
     DOMAIN,
 )
 from .controller_assignment import controller_assignments
+from .device_registry_compat import device_registry_compatibility
 from .identity import (
     fireplace_device_identifier,
     legacy_fireplace_device_identifier,
@@ -127,10 +128,11 @@ async def _async_migrate_registry_identity(hass: HomeAssistant, entry: ConfigEnt
         )
 
     device_registry = dr.async_get(hass)
+    registry_compat = device_registry_compatibility(device_registry)
     new_identifier = fireplace_device_identifier(entry.entry_id)
-    existing_target_device = device_registry.async_get_device(identifiers={new_identifier})
+    existing_target_device = registry_compat.get_device(new_identifier, entry.entry_id)
     for old_identifier in ((DOMAIN, old_remote_hex), legacy_fireplace_device_identifier(entry.entry_id)):
-        old_device = device_registry.async_get_device(identifiers={old_identifier})
+        old_device = registry_compat.get_device(old_identifier, entry.entry_id)
         if old_device is None:
             continue
         if existing_target_device is not None:
@@ -143,12 +145,13 @@ async def _async_migrate_registry_identity(hass: HomeAssistant, entry: ConfigEnt
                 existing_target_device.id,
             )
             continue
-        if set(old_device.config_entries) != {entry.entry_id}:
+        owner_ids = registry_compat.config_entry_ids(old_device)
+        if owner_ids != {entry.entry_id}:
             _LOGGER.warning(
                 "Proflame2 identity migration skipped device identifier change for config_entry_id=%s because legacy device %s is attached to multiple config entries: %s",
                 entry.entry_id,
                 old_device.id,
-                sorted(old_device.config_entries),
+                sorted(owner_ids),
             )
             continue
         try:
@@ -212,11 +215,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entry or recreate it using a different controller. No profiles have been deleted."
         )
 
-    from .rf.esphome.transport import ESPHomeControllerUnavailableError
+    from .rf.esphome_api import is_display_connection_error
     from .runtime import (
         async_refresh_runtime_device_link,
         async_retry_runtime_device_link,
         async_setup_runtime_entry,
+        async_unload_runtime_entry,
     )
     from .services import (
         async_register_services,
@@ -255,15 +259,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await async_sync_runtime_display_state(hass, runtime_entry, action_label="Startup sync")
     except RuntimeError as exc:
-        message = str(exc)
-        if (
-            isinstance(exc, ESPHomeControllerUnavailableError)
-            or "Linked ESPHome entry is not loaded or has no runtime_data" in message
-        ):
+        if is_display_connection_error(exc):
             _LOGGER.warning(
                 "Proflame2 startup display sync deferred for config_entry_id=%s because linked ESPHome entry is not ready yet: %s",
                 entry.entry_id,
-                message,
+                str(exc),
             )
 
             async def _async_retry_display_sync() -> None:
@@ -275,22 +275,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         async_refresh_runtime_device_link(hass, runtime_entry, entry)
                         await async_sync_runtime_display_state(hass, runtime_entry, action_label="Startup sync")
                     except RuntimeError as retry_exc:
-                        retry_message = str(retry_exc)
-                        if (
-                            isinstance(retry_exc, ESPHomeControllerUnavailableError)
-                            or "Linked ESPHome entry is not loaded or has no runtime_data" in retry_message
-                        ):
+                        if is_display_connection_error(retry_exc):
                             _LOGGER.debug(
                                 "Proflame2 startup display sync still waiting for linked ESPHome entry config_entry_id=%s delay=%ss reason=%s",
                                 entry.entry_id,
                                 delay,
-                                retry_message,
+                                str(retry_exc),
                             )
                             continue
                         _LOGGER.warning(
                             "Proflame2 startup display sync skipped for config_entry_id=%s after retry failure: %s",
                             entry.entry_id,
-                            retry_message,
+                            str(retry_exc),
                         )
                         return
                     except Exception:
@@ -312,7 +308,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.warning(
                 "Proflame2 startup display sync skipped for config_entry_id=%s: %s",
                 entry.entry_id,
-                message,
+                str(exc),
             )
     except Exception:
         _LOGGER.exception(
@@ -321,7 +317,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     await async_start_display_sync_listener(hass, runtime_entry)
     await async_start_active_listener(hass, runtime_entry)
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except BaseException:
+        # Older supported HA versions do not run all entry unload callbacks
+        # after failed setup. Release our observers/tasks in every version.
+        await async_unload_runtime_entry(hass, entry)
+        raise
     from .refresh import async_start_refresh
 
     async_start_refresh(hass, runtime_entry)

@@ -364,8 +364,8 @@ async def test_setup_entry_defers_display_sync_when_linked_esphome_not_ready(
     async def _raise_not_ready(*args, **kwargs):
         if typed_unavailable:
             raise ESPHomeControllerUnavailableError("Linked ESPHome controller is offline")
-        raise RuntimeError(
-            "ESPHome backend is unavailable: Linked ESPHome entry is not loaded or has no runtime_data: abc123"
+        raise RuntimeError("ESPHome backend is unavailable") from ESPHomeControllerUnavailableError(
+            "Linked ESPHome entry is not loaded"
         )
 
     created = []

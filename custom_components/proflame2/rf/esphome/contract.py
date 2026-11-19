@@ -28,6 +28,10 @@ DEFAULT_ESPHOME_DATA_RATE_BPS = DEFAULT_PROTOCOL_PROFILE.data_rate_bps
 DEFAULT_ESPHOME_INTER_FRAME_GAP_MS = DEFAULT_PROTOCOL_PROFILE.inter_frame_gap_ms
 
 
+class ESPHomeTXConfirmationError(RuntimeError):
+    """The action ran, but fresh controller TX completion was not received."""
+
+
 class ESPHomeEndpointStatus(StrEnum):
     """Lifecycle/status values exposed by a T-Embed endpoint."""
 

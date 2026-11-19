@@ -9,6 +9,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import MAX_LENGTH_STATE_STATE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -207,7 +208,6 @@ class _Proflame2BaseSensor(SensorEntity):
             manufacturer=MANUFACTURER,
             name=self._runtime_entry.title,
             model=f"Backend: {self._runtime_entry.backend_type}",
-            via_device=self._runtime_entry.controller_device_identifier,
         )
 
     async def async_added_to_hass(self) -> None:
@@ -242,7 +242,7 @@ class Proflame2PrimaryFireplaceSensor(_Proflame2BaseSensor):
     def native_value(self) -> str:
         """Return the human-readable fireplace summary."""
 
-        return _summary_value(self._runtime_entry)
+        return _bounded_sensor_state(_summary_value(self._runtime_entry))
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
@@ -278,7 +278,14 @@ class Proflame2RuntimeSensor(_Proflame2BaseSensor):
     def native_value(self) -> Any:
         """Return the current runtime-derived value."""
 
-        return self.entity_description.value_fn(self._runtime_entry)
+        return _bounded_sensor_state(self.entity_description.value_fn(self._runtime_entry))
+
+
+def _bounded_sensor_state(value: Any) -> Any:
+    """Keep a useful string state instead of HA replacing it with unknown."""
+    if isinstance(value, str) and len(value) > MAX_LENGTH_STATE_STATE:
+        return value[: MAX_LENGTH_STATE_STATE - 3] + "..."
+    return value
 
 
 def _status_value(runtime: Proflame2RuntimeEntry) -> str:

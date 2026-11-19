@@ -415,6 +415,27 @@ async def test_last_issue_updates_after_failed_service_call(hass, monkeypatch) -
     assert issue.state == "Transmit failed because RF backend is unavailable; controls reverted to last known state."
 
 
+async def test_long_sensor_states_are_truncated_without_losing_error_attributes(hass):
+    from custom_components.proflame2.runtime import async_notify_runtime_entry_updated
+
+    entry = _add_entry(hass, title="Synthetic long issue", remote_id=0x123456)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    message = "Missing required telemetry: " + ", ".join(f"synthetic_field_{i}" for i in range(30)) + "."
+    runtime.last_error = message
+    # Exercise the primary error-summary path as well as Last Issue.
+    runtime.last_packet = None
+    async_notify_runtime_entry_updated(hass, entry.entry_id)
+    await hass.async_block_till_done()
+    issue = hass.states.get(_secondary_entity_id(entry.title, "Last Issue"))
+    primary = hass.states.get(_primary_entity_id(entry.title))
+    assert len(issue.state) == 255
+    assert issue.state == message[:252] + "..."
+    assert len(primary.state) <= 255
+    assert primary.state != "unknown"
+    assert primary.attributes["last_issue"] == message
+
+
 async def test_primary_entity_shows_active_profile_only_after_apply_profile(hass) -> None:
     """The primary entity should show a profile only when it was explicitly applied."""
 
@@ -624,6 +645,8 @@ async def test_legacy_serial_scoped_registry_entries_migrate_when_unambiguous(ha
         device_id=old_device.id,
         original_name="Last Issue",
     )
+    original_primary_id = entity_registry.async_get_entity_id("sensor", DOMAIN, "3b3f02")
+    original_issue_id = entity_registry.async_get_entity_id("sensor", DOMAIN, "3b3f02_last_issue")
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -636,9 +659,12 @@ async def test_legacy_serial_scoped_registry_entries_migrate_when_unambiguous(ha
     assert last_issue is not None
     assert primary.unique_id == f"{entry.entry_id}_primary"
     assert last_issue.unique_id == f"{entry.entry_id}_last_issue"
+    assert primary_entity_id == original_primary_id
+    assert last_issue_entity_id == original_issue_id
 
     migrated_device = device_registry.async_get(primary.device_id)
     assert migrated_device is not None
+    assert migrated_device.id == old_device.id
     assert migrated_device.identifiers == {(DOMAIN, f"fireplace:{entry.entry_id}")}
 
 

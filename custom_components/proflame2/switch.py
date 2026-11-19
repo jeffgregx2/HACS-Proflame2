@@ -66,7 +66,6 @@ class Proflame2SwitchEntity(SwitchEntity):
             manufacturer=MANUFACTURER,
             name=self._runtime_entry.title,
             model=f"Backend: {self._runtime_entry.backend_type}",
-            via_device=self._runtime_entry.controller_device_identifier,
         )
 
     async def async_added_to_hass(self) -> None:

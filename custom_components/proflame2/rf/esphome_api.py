@@ -26,6 +26,7 @@ from .esphome.contract import (
     ESPHomeEndpointStatusReport,
     ESPHomeRadioConfig,
     ESPHomeRXEvent,
+    ESPHomeTXConfirmationError,
     ESPHomeTXRequest,
     ESPHomeTXResponse,
 )
@@ -307,7 +308,7 @@ class ESPHomeAPIBackend(RFBackend):
                 self.transport.send_tx(request),
                 timeout=self._send_timeout_seconds,
             )
-        except TimeoutError:
+        except (TimeoutError, ESPHomeTXConfirmationError):
             raise
         except Exception as exc:
             raise RuntimeError(f"ESPHome backend send failed: {exc}") from exc

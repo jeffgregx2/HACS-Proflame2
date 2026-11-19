@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
-
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ESPHOME_ROOT = REPO_ROOT / "esphome"
@@ -154,11 +151,9 @@ def test_firmware_logs_the_stamped_version_at_info_level() -> None:
     assert re.search(
         r'^  proflame2_firmware_version: "v\d+\.\d+\.\d+(?:-(?:(?:alpha|beta)\d+|debug))?"$', base, re.MULTILINE
     )
-    manifest = json.loads((REPO_ROOT / "custom_components/proflame2/manifest.json").read_text(encoding="utf-8"))
-    assert yaml.load(base, Loader=yaml.BaseLoader)["substitutions"]["proflame2_firmware_version"] in {
-        f"v{manifest['version']}",
-        f"v{manifest['version'].split('-')[0]}-debug",
-    }
+    # HA-only releases intentionally retain older compatible firmware.
+    # Validate its independent version format above, rather than requiring
+    # equality with the integration's version or local debug stamp.
     assert "name: Proflame2 Firmware Version" in base
 
 

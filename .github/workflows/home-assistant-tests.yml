@@ -1,0 +1,57 @@
+name: Home Assistant Compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - homeassistant: "2025.8.0"
+            python: "3.13"
+            plugin: "0.13.269"
+            api: "37.2.2"
+            cares: "pycares<5"
+          - homeassistant: "2026.9.0"
+            python: "3.14"
+            plugin: "0.13.363"
+            api: "46.2.0"
+            cares: "pycares>=5,<6"
+          - homeassistant: "2026.8.0"
+            python: "3.14"
+            plugin: "0.13.354"
+            api: "45.6.1"
+            cares: "pycares>=5,<6"
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install matching Home Assistant test stack
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -r requirements.txt -r tools/waveform/requirements-waveform.txt \
+            "homeassistant==${{ matrix.homeassistant }}" \
+            "pytest-homeassistant-custom-component==${{ matrix.plugin }}" \
+            "aioesphomeapi==${{ matrix.api }}" \
+            pytest-cov jsonschema "${{ matrix.cares }}"
+      - name: Run default suite without RF hardware
+        run: |
+          python -m pytest -q \
+            -o "cache_dir=$RUNNER_TEMP/proflame2-pytest-cache" \
+            --cov-report=term-missing \
+            --cov-report="xml:$RUNNER_TEMP/proflame2-coverage.xml"

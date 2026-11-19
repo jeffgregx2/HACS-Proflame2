@@ -4,9 +4,8 @@ This module defines the async boundary used by the Proflame2 HA backend to talk
 to a T-Embed endpoint.  It includes:
 
 - a deterministic in-memory mock transport for unit tests
-- a Home Assistant-linked transport that reuses the runtime client/service
-  catalog of an existing ESPHome config entry and calls the device's
-  ``proflame2_tx_stateful`` action over the real native API path
+- a Home Assistant-linked transport using public HA actions, entity states
+  and lifecycle events for the selected ESPHome controller
 """
 
 from __future__ import annotations
@@ -28,9 +27,11 @@ from .contract import (
     ESPHomeEndpointStatusReport,
     ESPHomeRadioConfig,
     ESPHomeRXEvent,
+    ESPHomeTXConfirmationError,
     ESPHomeTXRequest,
     ESPHomeTXResponse,
 )
+from .public_endpoint import ESPHomeControllerUnavailableError, PublicESPHomeEndpoint
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -215,10 +216,6 @@ class _TelemetrySnapshot:
     rx_last_rejection_snapshot: str | None = None
 
 
-class ESPHomeControllerUnavailableError(RuntimeError):
-    """The current linked ESPHome runtime is absent or explicitly offline."""
-
-
 class HomeAssistantESPHomeTransport:
     """Transport that reuses a linked Home Assistant ESPHome config entry."""
 
@@ -251,7 +248,41 @@ class HomeAssistantESPHomeTransport:
         self.last_error: str | None = None
         self.last_snapshot: _TelemetrySnapshot | None = None
         self._linked_entry = None
-        self._runtime_data = None
+        self._endpoint = PublicESPHomeEndpoint(
+            hass,
+            linked_entry_id,
+            (
+                ESPHOME_STATUS_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_ERROR_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_TX_RESULT_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_REQUEST_ID_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_TX_PATH_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_PAYLOAD_LENGTH_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_REQUEST_REPEAT_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_TX_ELAPSED_MS_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_PAYLOAD_HEX_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_MARCSTATE_BEFORE_TX_ENTITY_OBJECT_ID,
+                ESPHOME_LAST_MARCSTATE_AFTER_TX_ENTITY_OBJECT_ID,
+                ESPHOME_CC1101_PARTNUM_ENTITY_OBJECT_ID,
+                ESPHOME_CC1101_VERSION_ENTITY_OBJECT_ID,
+                ESPHOME_TX_SUCCESS_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_TX_FAILURE_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_PACKET_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_DROPPED_PACKET_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_NO_RF_CAPTURE_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_INCOMPLETE_FIFO_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_DECODE_FAILED_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_PROFILE_MISMATCH_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_ACCEPTED_PACKET_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_TX_SUPPRESSED_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_TRANSPORT_UNAVAILABLE_COUNT_ENTITY_OBJECT_ID,
+                ESPHOME_RX_LAST_REJECTION_SNAPSHOT_ENTITY_OBJECT_ID,
+                ESPHOME_FIRMWARE_PROTOCOL_VERSION_ENTITY_OBJECT_ID,
+                ESPHOME_FIRMWARE_VERSION_ENTITY_OBJECT_ID,
+                ESPHOME_CONFIG_REVISION_ENTITY_OBJECT_ID,
+            ),
+        )
+        self._binding_generation = -1
         self._service = None
         self._display_state_service = None
         self._rx_policy_service = None
@@ -265,28 +296,23 @@ class HomeAssistantESPHomeTransport:
         self._rx_event_transport_ready = False
         self.can_receive = False
 
-    def _current_runtime(self) -> Any | None:
-        """Resolve fresh state; a cached runtime may outlive an ESPHome reload."""
-        entry = self.hass.config_entries.async_get_entry(self.linked_entry_id)
-        if entry is None or entry.domain != "esphome":
-            return None
-        return getattr(entry, "runtime_data", None)
-
     @property
     def device_available(self) -> bool:
-        runtime = self._current_runtime()
-        return runtime is not None and bool(getattr(runtime, "available", False))
+        return self._endpoint.available
 
     @property
     def connection_is_current(self) -> bool:
-        runtime = self._current_runtime()
         return (
             self.connected
             and self.configured
-            and runtime is not None
-            and runtime is self._runtime_data
-            and bool(getattr(runtime, "available", False))
+            and self.device_available
+            and self._binding_generation == self._endpoint.generation
         )
+
+    async def _invoke_action(self, action: str, payload: dict[str, Any]) -> None:
+        self._endpoint.require_ready()
+        service = self._endpoint.action(action, required=True)
+        await self.hass.services.async_call("esphome", service, payload, blocking=True)
 
     async def connect(self) -> None:
         self._log_debug(
@@ -300,29 +326,15 @@ class HomeAssistantESPHomeTransport:
             raise RuntimeError(f"Linked ESPHome entry not found: {self.linked_entry_id}")
         if self._linked_entry.domain != "esphome":
             raise RuntimeError(f"Linked entry is not an ESPHome config entry: {self.linked_entry_id}")
-        runtime_data = getattr(self._linked_entry, "runtime_data", None)
-        if runtime_data is None:
-            raise RuntimeError(f"Linked ESPHome entry is not loaded or has no runtime_data: {self.linked_entry_id}")
-
-        service = _find_user_service(getattr(runtime_data, "services", None), self.action_name)
-        if service is None:
-            raise RuntimeError(f"Linked ESPHome entry does not expose action {self.action_name!r}")
-
-        self._runtime_data = runtime_data
-        self._service = service
-        self._display_state_service = _find_user_service(
-            getattr(runtime_data, "services", None), ESPHOME_DISPLAY_STATE_UPDATE_ACTION
-        )
-        self._rx_policy_service = _find_user_service(
-            getattr(runtime_data, "services", None), ESPHOME_RX_SET_ACTIVE_LISTENING_ACTION
-        )
-        self._rx_stop_service = _find_user_service(getattr(runtime_data, "services", None), ESPHOME_RX_STOP_ACTION)
-        self._rx_end_confirmation_service = _find_user_service(
-            getattr(runtime_data, "services", None), ESPHOME_RX_END_CONFIRMATION_ACTION
-        )
-        self._learn_mode_update_service = _find_user_service(
-            getattr(runtime_data, "services", None), ESPHOME_LEARN_MODE_UPDATE_ACTION
-        )
+        self._endpoint.require_ready()
+        self._service = self._endpoint.action(self.action_name, required=True)
+        self._display_state_service = self._endpoint.action(ESPHOME_DISPLAY_STATE_UPDATE_ACTION)
+        self._rx_policy_service = self._endpoint.action(ESPHOME_RX_SET_ACTIVE_LISTENING_ACTION)
+        self._rx_stop_service = self._endpoint.action(ESPHOME_RX_STOP_ACTION)
+        self._rx_end_confirmation_service = self._endpoint.action(ESPHOME_RX_END_CONFIRMATION_ACTION)
+        self._learn_mode_update_service = self._endpoint.action(ESPHOME_LEARN_MODE_UPDATE_ACTION)
+        self._endpoint.start()
+        self._binding_generation = self._endpoint.generation
         self._linked_controller_device_id = self._resolve_linked_controller_device_id()
         self._rx_event_transport_ready = (
             self._linked_controller_device_id is not None
@@ -375,7 +387,6 @@ class HomeAssistantESPHomeTransport:
     async def send_tx(self, request: ESPHomeTXRequest) -> ESPHomeTXResponse:
         if not self.connected or not self.configured:
             raise RuntimeError("ESPHome backend is unavailable; transport is not configured.")
-        assert self._runtime_data is not None
         assert self._service is not None
 
         repeat_count = request.repeat_count
@@ -432,7 +443,7 @@ class HomeAssistantESPHomeTransport:
             repeat_count,
             request.air_payload_hex,
         )
-        await self._runtime_data.client.execute_service(self._service, payload)
+        await self._invoke_action(self.action_name, payload)
 
         observed = await self._wait_for_request_confirmation(
             request.request_id,
@@ -474,7 +485,7 @@ class HomeAssistantESPHomeTransport:
 
     async def recover_send_readiness(self, request_id: str | None) -> bool:
         """Require explicit readiness and, when requested, matching completion."""
-        if self._runtime_data is None or not getattr(self._runtime_data, "available", False):
+        if not self.connected or not self.device_available or self._binding_generation != self._endpoint.generation:
             return False
         snapshot = self._collect_snapshot()
         # Recovery must not infer readiness from API availability alone when
@@ -489,7 +500,6 @@ class HomeAssistantESPHomeTransport:
     async def update_display_state(self, display_state: ESPHomeDisplayState) -> None:
         if not self.connected or not self.configured:
             raise RuntimeError("ESPHome backend is unavailable; transport is not configured.")
-        assert self._runtime_data is not None
         if self._display_state_service is None:
             raise RuntimeError(f"Linked ESPHome entry does not expose action {ESPHOME_DISPLAY_STATE_UPDATE_ACTION!r}")
         payload = {
@@ -513,13 +523,12 @@ class HomeAssistantESPHomeTransport:
             ESPHOME_DISPLAY_STATE_UPDATE_ACTION,
             payload,
         )
-        await self._runtime_data.client.execute_service(self._display_state_service, payload)
+        await self._invoke_action(ESPHOME_DISPLAY_STATE_UPDATE_ACTION, payload)
         self.last_snapshot = self._collect_snapshot()
 
     async def set_active_listening(self, enabled: bool, profile: Any | None = None) -> None:
         if not self.connected or not self.configured:
             raise RuntimeError("ESPHome backend is unavailable; transport is not configured.")
-        assert self._runtime_data is not None
         if self._rx_policy_service is None:
             raise RuntimeError(
                 f"Linked ESPHome entry does not expose action {ESPHOME_RX_SET_ACTIVE_LISTENING_ACTION!r}"
@@ -543,14 +552,13 @@ class HomeAssistantESPHomeTransport:
             "c2": int(getattr(ecc, "c2", 0) or 0),
             "d2": int(getattr(ecc, "d2", 0) or 0),
         }
-        await self._runtime_data.client.execute_service(self._rx_policy_service, payload)
+        await self._invoke_action(ESPHOME_RX_SET_ACTIVE_LISTENING_ACTION, payload)
         self.last_snapshot = self._collect_snapshot()
         self.can_receive = self._rx_event_transport_ready
 
     async def stop_rx(self) -> None:
         if not self.connected or not self.configured:
             return
-        assert self._runtime_data is not None
         if self._rx_stop_service is None:
             return
         self._log_debug(
@@ -559,7 +567,7 @@ class HomeAssistantESPHomeTransport:
             self.linked_entry_id,
             ESPHOME_RX_STOP_ACTION,
         )
-        await self._runtime_data.client.execute_service(self._rx_stop_service, {})
+        await self._invoke_action(ESPHOME_RX_STOP_ACTION, {})
         self._active_listening_enabled = False
         self._drain_rx_queue()
         self.last_snapshot = self._collect_snapshot()
@@ -567,8 +575,7 @@ class HomeAssistantESPHomeTransport:
     async def end_confirmation_rx(self) -> None:
         if not self.connected or not self.configured:
             return
-        assert self._runtime_data is not None
-        if self._rx_end_confirmation_service is None:
+        if self._endpoint.action(ESPHOME_RX_END_CONFIRMATION_ACTION) is None:
             return
         self._log_debug(
             "rx end confirmation invoke controller_id=%s linked_entry_id=%s action_name=%s",
@@ -576,7 +583,7 @@ class HomeAssistantESPHomeTransport:
             self.linked_entry_id,
             ESPHOME_RX_END_CONFIRMATION_ACTION,
         )
-        await self._runtime_data.client.execute_service(self._rx_end_confirmation_service, {})
+        await self._invoke_action(ESPHOME_RX_END_CONFIRMATION_ACTION, {})
         self.last_snapshot = self._collect_snapshot()
 
     async def update_learning_mode(
@@ -589,7 +596,6 @@ class HomeAssistantESPHomeTransport:
     ) -> None:
         if not self.connected or not self.configured:
             raise RuntimeError("ESPHome backend is unavailable; transport is not configured.")
-        assert self._runtime_data is not None
         if self._learn_mode_update_service is None:
             raise RuntimeError(f"Linked ESPHome entry does not expose action {ESPHOME_LEARN_MODE_UPDATE_ACTION!r}")
         payload = {
@@ -605,19 +611,21 @@ class HomeAssistantESPHomeTransport:
             ESPHOME_LEARN_MODE_UPDATE_ACTION,
             payload,
         )
-        await self._runtime_data.client.execute_service(self._learn_mode_update_service, payload)
+        await self._invoke_action(ESPHOME_LEARN_MODE_UPDATE_ACTION, payload)
 
     async def get_status(self) -> ESPHomeEndpointStatusReport:
-        if self._runtime_data is None:
+        if not self.connected:
             raise RuntimeError("ESPHome transport is not connected.")
         snapshot = self._collect_snapshot()
         self.last_snapshot = snapshot
-        status = _status_from_snapshot(snapshot, getattr(self._runtime_data, "available", False))
+        status = _status_from_snapshot(snapshot, True) if self.device_available else ESPHomeEndpointStatus.FAULT
         self.can_receive = self._rx_event_transport_ready
-        firmware_version = None
-        device_info = getattr(self._runtime_data, "device_info", None)
-        if device_info is not None:
-            firmware_version = getattr(device_info, "esphome_version", None)
+        device = (
+            dr.async_get(self.hass).async_get(self._linked_controller_device_id)
+            if self._linked_controller_device_id
+            else None
+        )
+        firmware_version = device.sw_version if device else None
 
         return ESPHomeEndpointStatusReport(
             status=status,
@@ -636,20 +644,36 @@ class HomeAssistantESPHomeTransport:
     async def receive_rx_event(self, timeout: float | None = None) -> ESPHomeRXEvent | None:
         if not self.connected or not self.configured or not self._rx_event_transport_ready:
             return None
-        entry = self.hass.config_entries.async_get_entry(self.linked_entry_id)
-        current_runtime = getattr(entry, "runtime_data", None)
-        if current_runtime is not self._runtime_data or not getattr(current_runtime, "available", False):
-            # Cached action/state objects are not evidence of a live connection.
-            # Let the owning RX loop reconnect and reapply policy to the current
-            # runtime rather than silently polling an obsolete queue forever.
+        if not self.connection_is_current:
             self.connected = False
-            raise RuntimeError("Linked ESPHome runtime is unavailable or changed; reconnect required.")
+            raise ESPHomeControllerUnavailableError(
+                "Linked ESPHome controller changed or is offline; reconnect required."
+            )
+        packet_task = asyncio.create_task(self._rx_queue.get())
+        self._endpoint.changed.clear()
+        changed_task = asyncio.create_task(self._endpoint.changed.wait())
+        deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
         try:
-            if timeout is None:
-                return await self._rx_queue.get()
-            return await asyncio.wait_for(self._rx_queue.get(), timeout=timeout)
-        except asyncio.TimeoutError:
-            return None
+            while True:
+                remaining = None if deadline is None else max(0, deadline - asyncio.get_running_loop().time())
+                done, _ = await asyncio.wait(
+                    {packet_task, changed_task}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+                )
+                if not self.connection_is_current:
+                    self.connected = False
+                    raise ESPHomeControllerUnavailableError(
+                        "Linked ESPHome controller changed or is offline; reconnect required."
+                    )
+                if packet_task in done:
+                    return packet_task.result()
+                if not done:
+                    return None
+                self._endpoint.changed.clear()
+                changed_task = asyncio.create_task(self._endpoint.changed.wait())
+        finally:
+            packet_task.cancel()
+            changed_task.cancel()
+            await asyncio.gather(packet_task, changed_task, return_exceptions=True)
 
     async def close(self) -> None:
         if self._rx_unsub is not None:
@@ -657,7 +681,7 @@ class HomeAssistantESPHomeTransport:
             self._rx_unsub = None
         self.connected = False
         self.configured = False
-        self._runtime_data = None
+        self._endpoint.close()
         self._linked_entry = None
         self._service = None
         self._display_state_service = None
@@ -680,9 +704,7 @@ class HomeAssistantESPHomeTransport:
             "controller_id": self.controller_id,
             "linked_entry_id": self.linked_entry_id,
             "linked_entry_loaded": linked_entry is not None,
-            "linked_entry_available": (
-                getattr(self._runtime_data, "available", None) if self._runtime_data is not None else None
-            ),
+            "linked_entry_available": self.device_available,
             "action_name": self.action_name,
             "connected": self.connected,
             "configured": self.configured,
@@ -735,86 +757,54 @@ class HomeAssistantESPHomeTransport:
     ) -> _TelemetrySnapshot:
         deadline = asyncio.get_running_loop().time() + self.observation_timeout_seconds
         while True:
+            self._endpoint.changed.clear()
+            self._endpoint.require_ready()
+            if self._binding_generation != self._endpoint.generation:
+                raise ESPHomeControllerUnavailableError("ESPHome endpoint changed during transmission")
             snapshot = self._collect_snapshot()
-            if (
-                snapshot.last_request_id == request_id
-                and snapshot.last_payload_length == expected_payload_length
-                and (
-                    snapshot.tx_success_count > pre_snapshot.tx_success_count
-                    or snapshot.tx_failure_count > pre_snapshot.tx_failure_count
-                    or snapshot.last_tx_result_text == "ok"
-                    or (snapshot.last_tx_result_text is not None and snapshot.last_tx_result_text.startswith("error:"))
+            if snapshot.last_request_id == request_id:
+                success = (
+                    snapshot.last_tx_result_text == "ok"
+                    and snapshot.tx_success_count > pre_snapshot.tx_success_count
+                    and snapshot.last_payload_length == expected_payload_length
                 )
+                failed = (
+                    bool(snapshot.last_tx_result_text)
+                    and snapshot.last_tx_result_text.startswith("error:")
+                    and snapshot.tx_failure_count > pre_snapshot.tx_failure_count
+                )
+                if success or failed:
+                    return snapshot
+            if (
+                snapshot.tx_success_count < pre_snapshot.tx_success_count
+                or snapshot.tx_failure_count < pre_snapshot.tx_failure_count
             ):
-                if (
-                    snapshot.last_request_repeat_count is not None
-                    and snapshot.last_request_repeat_count != 0
-                    and snapshot.last_request_repeat_count != expected_repeat_count
-                ):
-                    self._log_debug(
-                        "send_tx confirmation tolerated repeat-count telemetry mismatch controller_id=%s request_id=%s expected_repeat_count=%s observed_repeat_count=%s",
-                        self.controller_id,
-                        request_id,
-                        expected_repeat_count,
-                        snapshot.last_request_repeat_count,
-                    )
-                return snapshot
-            if asyncio.get_running_loop().time() >= deadline:
-                raise RuntimeError("ESPHome TX action executed but endpoint telemetry did not confirm the request.")
-            await asyncio.sleep(self.poll_interval_seconds)
+                raise ESPHomeControllerUnavailableError("ESPHome completion counters reset during transmission")
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise ESPHomeTXConfirmationError(
+                    "ESPHome TX action executed but endpoint telemetry did not confirm the request."
+                )
+            try:
+                await asyncio.wait_for(self._endpoint.changed.wait(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise ESPHomeTXConfirmationError(
+                    "ESPHome TX action executed but endpoint telemetry did not confirm the request."
+                ) from exc
 
     def proflame2_firmware_version(self) -> str | None:
-        """Read live release telemetry without requiring a working action API.
-
-        A disconnected endpoint's stored value is not proof of its current
-        firmware. Resolve fresh runtime data after reconnect instead of using
-        this transport's last connected runtime or ESPHome's compiler version.
-        """
-        entry = self.hass.config_entries.async_get_entry(self.linked_entry_id)
-        runtime_data = getattr(entry, "runtime_data", None)
-        if runtime_data is None or not getattr(runtime_data, "available", False):
+        """Read the public project-version entity without issuing any action."""
+        entry = self._endpoint.entry
+        if entry is None:
             return None
-        value = self._collect_snapshot(runtime_data).proflame2_firmware_version
-        if value is None or value.strip().lower() in {"", "unknown", "unavailable"}:
-            return None
-        return " ".join(value.split())
+        value = self._endpoint.text(ESPHOME_FIRMWARE_VERSION_ENTITY_OBJECT_ID)
+        return " ".join(value.split()) if value and value.strip() else None
 
-    def _collect_snapshot(self, runtime_data: Any | None = None) -> _TelemetrySnapshot:
-        if runtime_data is None:
-            runtime_data = self._runtime_data
-        if runtime_data is None:
-            return _TelemetrySnapshot()
-
-        info_by_key: dict[Any, Any] = {}
-        for info_map in getattr(runtime_data, "info", {}).values():
-            if isinstance(info_map, Mapping):
-                for key, info in info_map.items():
-                    # Home Assistant 2026.9 keys ESPHome states by
-                    # (device_id, entity_key), matching the info map. Older
-                    # releases key states by entity_key alone, so retain both
-                    # forms while they remain supported.
-                    info_by_key[key] = info
-                    entity_key = key[1] if isinstance(key, tuple) else getattr(info, "key", key)
-                    info_by_key.setdefault(entity_key, info)
-
+    def _collect_snapshot(self) -> _TelemetrySnapshot:
         def text_value(object_id: str) -> str | None:
-            state = _find_state_for_object_id(runtime_data, info_by_key, object_id)
-            if state is None:
-                return None
-            value = getattr(state, "state", None)
-            if value is None:
-                return None
-            text = str(value)
-            return text or None
+            return self._endpoint.text(object_id) or None
 
-        def int_value(object_id: str) -> int | None:
-            value = text_value(object_id)
-            if value is None:
-                return None
-            try:
-                return int(float(value))
-            except ValueError:
-                return None
+        int_value = self._endpoint.integer
 
         return _TelemetrySnapshot(
             status_text=text_value(ESPHOME_STATUS_ENTITY_OBJECT_ID),
@@ -848,20 +838,8 @@ class HomeAssistantESPHomeTransport:
         )
 
     def _resolve_linked_controller_device_id(self) -> str | None:
-        registry = dr.async_get(self.hass)
-        devices = dr.async_entries_for_config_entry(registry, self.linked_entry_id)
-        if not devices:
-            return None
-        ranked = sorted(
-            devices,
-            key=lambda device: (
-                0 if device.via_device_id is None else 1,
-                0 if device.connections else 1,
-                0 if device.identifiers else 1,
-                device.name_by_user or device.name or "",
-            ),
-        )
-        return ranked[0].id
+        self._endpoint.resolve()
+        return self._endpoint.device_id
 
     def _subscribe_rx_events(self) -> None:
         if self._rx_unsub is not None:
@@ -1210,30 +1188,6 @@ def _float_from_event_value(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _find_user_service(services: Any, action_name: str) -> Any | None:
-    if isinstance(services, Mapping):
-        service_iterable = services.values()
-    else:
-        service_iterable = services or ()
-    for service in service_iterable:
-        if getattr(service, "name", None) == action_name:
-            return service
-    return None
-
-
-def _find_state_for_object_id(runtime_data: Any, info_by_key: dict[Any, Any], object_id: str) -> Any | None:
-    for state_map in getattr(runtime_data, "state", {}).values():
-        if not isinstance(state_map, Mapping):
-            continue
-        for key, state in state_map.items():
-            info = info_by_key.get(key)
-            if info is None:
-                continue
-            if getattr(info, "object_id", None) == object_id:
-                return state
-    return None
 
 
 def _status_from_snapshot(snapshot: _TelemetrySnapshot, available: bool) -> ESPHomeEndpointStatus:

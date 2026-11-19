@@ -53,6 +53,8 @@ Setup guide: [YardStick controller](docs/yardstick_controller.md)
 
 ## Installation
 
+Requires **Home Assistant 2025.8.0 or newer**.
+
 There are two ways you can install the Proflame2 integration: [HACS](https://www.hacs.xyz) or manual.  The preferred approach is HACS since you will be notified of updates and can apply them easily through the HACS user interface.
 
 ### HACS

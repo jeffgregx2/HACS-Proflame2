@@ -58,6 +58,19 @@ def rtl433_samples() -> dict:
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
+@pytest.fixture(autouse=True)
+def cleanup_synthetic_esphome_entries(request):
+    """The fake endpoint publishes states but never loads the ESPHome component."""
+    hass = request.getfixturevalue("hass") if "hass" in request.fixturenames else None
+    yield
+    if hass is not None:
+        from homeassistant.config_entries import ConfigEntryState
+
+        for entry in hass.config_entries.async_entries("esphome"):
+            if getattr(entry, "_proflame2_public_fixture", False):
+                entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
+
+
 @pytest.fixture
 def remote_profile() -> RemoteProfile:
     """Return the capture-derived remote profile."""

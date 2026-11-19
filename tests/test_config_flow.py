@@ -108,7 +108,11 @@ def _form_schema_fields(data_schema):
 @pytest.mark.parametrize("edit_short_name", [False, True])
 def test_refresh_form_is_serializable_and_requires_whole_minutes(edit_short_name):
     from homeassistant.helpers import config_validation as cv
-    from probatio import to_field_list
+
+    try:
+        from probatio import to_field_list
+    except ImportError:  # HA 2025.8 uses the original voluptuous schemas.
+        from voluptuous_serialize import convert as to_field_list
 
     from custom_components.proflame2.config_flow import (
         FEATURE_SELECTION_SCHEMA,

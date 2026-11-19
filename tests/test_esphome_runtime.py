@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 
 import pytest
+from esphome_public_helpers import install_public_endpoint
 
 homeassistant = pytest.importorskip("homeassistant")
 pytest.importorskip("pytest_homeassistant_custom_component")
@@ -103,6 +104,11 @@ class _FakeESPHomeInfo:
 
 
 class _FakeESPHomeState:
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value)
+        if name == "state" and hasattr(self, "_publish"):
+            self._publish(value)
+
     def __init__(self, key: int, state) -> None:
         self.key = key
         self.state = state
@@ -234,7 +240,13 @@ def _fake_esphome_runtime_data(
     info_map = {(0, state.key): _FakeESPHomeInfo(object_id, state.key) for object_id, state in object_states.items()}
     state_map = {((0, state.key) if device_entity_state_keys else state.key): state for state in object_states.values()}
 
-    runtime_data = SimpleNamespace(
+    class FakeRuntime(SimpleNamespace):
+        def __setattr__(self, name, value):
+            super().__setattr__(name, value)
+            if name == "available" and hasattr(self, "_public_availability_changed"):
+                self._public_availability_changed(value)
+
+    runtime_data = FakeRuntime(
         services={
             1: _FakeESPHomeService("proflame2_tx_stateful"),
             2: _FakeESPHomeService("proflame2_display_state_update"),
@@ -271,12 +283,17 @@ def _add_linked_esphome_device(
         manufacturer="ESPHome",
         name=entry.title,
         model="T-Embed",
+        sw_version="2025.5.2",
     )
     if identifier is not None:
         create_kwargs["identifiers"] = {identifier}
     if connection is not None:
         create_kwargs["connections"] = {connection}
     device = registry.async_get_or_create(**create_kwargs)
+    from homeassistant.helpers import entity_registry as er
+
+    for entity in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id):
+        er.async_get(hass).async_update_entity(entity.entity_id, device_id=device.id)
     return device.id
 
 
@@ -288,6 +305,7 @@ def _add_linked_esphome_entry(hass, runtime_data) -> MockConfigEntry:
     )
     entry.runtime_data = runtime_data
     entry.add_to_hass(hass)
+    install_public_endpoint(hass, entry, runtime_data)
     return entry
 
 
@@ -1294,8 +1312,10 @@ async def test_active_listener_recovers_real_transport_and_receives_without_user
         native.active_listening_enabled = False
     if failure == "runtime_not_ready":
         linked.runtime_data = None
+        install_public_endpoint(hass, linked, None)
     elif failure == "missing_action":
         native.services = {}
+        install_public_endpoint(hass, linked, native)
     elif failure == "disconnected":
         native.client.execute_error = "Not connected to test-controller"
     elif failure == "offline_after_connect":
@@ -1306,6 +1326,7 @@ async def test_active_listener_recovers_real_transport_and_receives_without_user
         expected_services = dict(native.services)
         native.services = {}
         linked.runtime_data = native
+        install_public_endpoint(hass, linked, native)
     else:
         from unittest.mock import AsyncMock
 
@@ -1327,8 +1348,10 @@ async def test_active_listener_recovers_real_transport_and_receives_without_user
         task = runtime.active_listener_task
         assert task is not None and not task.done()
         linked.runtime_data = native
+        install_public_endpoint(hass, linked, native)
         native.available = True
         native.services = expected_services
+        install_public_endpoint(hass, linked, native)
         native.client.execute_error = None
         if failure == "timeout":
             native.client.execute_service = original
