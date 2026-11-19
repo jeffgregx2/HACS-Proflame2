@@ -103,3 +103,12 @@ The original acceptance requirements remain below:
 - Keep this maintenance separate from RF/protocol changes. These deprecations
   currently emit warnings; the logs do not identify them as the cause of the
   missing `proflame2_tx_stateful` action.
+
+## Consistent service state merging — v0.8.0 (V8-15)
+
+Approved for v0.8.0; implementation has not started. The service currently uses
+separate merging/default rules depending on whether flame is supplied. Unify
+partial requests and pilot retention without changing full saved-profile
+application. See the [service state design](service_state_merge_design.md) for
+the agreed transition rules, implementation tasks and acceptance cases. Create
+the tracking issue after v0.7.2; this is outside the v0.7.2 code change.
