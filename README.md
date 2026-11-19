@@ -34,9 +34,6 @@ LilyGO is a full-featured Proflame2 controller with a built-in display that show
 ![LilyGO Controller](docs/images/LilyGO-Display.png)
 
 Note: ESPHome Builder is required in order to configure the LilyGO firmware.
-Current LilyGO firmware uses the ESP-IDF framework. When upgrading an existing
-device, check `esp32.framework.type` in its device YAML; changing the package
-reference alone does not update that setting.
 The LilyGO setup guide includes a browser YAML helper that updates the ESPHome
 Builder generated YAML for Proflame2.
 
@@ -187,17 +184,34 @@ for details and the LilyGO firmware update requirement.
 
 ### Service Interface
 
-Power OFF preserves the current flame setting. Turning power from OFF to ON
-uses the current level, raising 0 to 1 so the burner lights. A service call
-that explicitly supplies `flame` uses that value instead; ON/flame 0 requires
-**Allow flame OFF while power is ON**. Repeating Power ON while already ON
-does not raise a zero flame.
+Automations and scripts can call `proflame2.set_state` to send settings to a
+fireplace immediately. Target the fireplace device and provide the settings
+under `data`. Unlike individual dashboard controls, the service does not wait
+to combine several changes into one command.
 
-A `proflame2.set_state` call without `flame` uses the current settings for any
-omitted fields. This supports power-only requests. Calls that specify `flame`
-keep the full-state behavior described below.
+| Parameter | Values | Required |
+| --- | --- | --- |
+| `power` | `true` or `false` | Yes |
+| `flame` | 0–6; ON with flame 0 requires Allow flame OFF while power is ON | No |
+| `fan`, `light` | 0–6 | No |
+| `front`, `aux`, `cpi` | `true` or `false` | No |
 
-Individual dashboard controls briefly wait before sending so multiple setting changes can be combined into one fireplace command. When an automation or script already knows the full desired fireplace state, use the `proflame2.set_state` service to send it immediately. For example:
+Supplied attributes use the values you specify. Omitted attributes retain their
+current saved values, including the pilot mode (`cpi`). You only need to include
+the settings you want to change.
+
+For example, this power-only request turns the fireplace OFF while retaining
+its current settings:
+
+```yaml
+service: proflame2.set_state
+target:
+  device_id: YOUR_FIREPLACE_DEVICE_ID
+data:
+  power: false
+```
+
+To set several attributes together, include them in the same call:
 
 ```yaml
 service: proflame2.set_state
@@ -275,29 +289,6 @@ At this time, one controller can only control one fireplace.
 A LilyGO controller can use only one radio band at a time. Use separate
 LilyGO controllers for fireplaces that use different bands, such as 315 MHz
 and 433.92 MHz.
-
-## Developer Tests
-
-Run `make test` for the Python suite or `make firmware-unit-test` for the C++
-unit checks. Each command creates a fresh Python environment in `/tmp`, installs
-`requirements-dev.txt` for the current machine, and removes the environment on
-exit. The shared `.venv` is neither used nor replaced, so ARM and x86_64 machines
-can test the same checkout without carrying native packages between them.
-Dependency installation requires package-index access on each run.
-
-The bootstrap defaults to the current machine's `python3`; select another native
-interpreter with `TEST_BOOTSTRAP_PYTHON=/path/to/python3`. Pass pytest options with
-`PYTEST_ARGS`, for example `make test PYTEST_ARGS="-k learning_id"`.
-
-Build and test the inspectable Learning ID download:
-
-```sh
-make learning-id-package OUTPUT_DIR=/tmp/proflame2-learning-id
-make learning-id-package-test ARCHIVE=/tmp/proflame2-learning-id/proflame2-learning-id.pyz
-```
-
-See [Learning ID packaging](docs/learning_id_packaging.md) for development and
-release automation details.
 
 ## More Information
 

@@ -1,6 +1,6 @@
 # DevOps Notes
 
-This document captures project-specific release operations for maintainers.
+This document covers development testing and release operations for maintainers.
 
 ## Repository Access
 
@@ -39,19 +39,28 @@ repository. If a workflow requires authenticated GitHub writes, stop and confirm
 the intended credential path instead of guessing. Prefer GitHub Actions for
 release operations.
 
-## Python Environment
+## Developer Tests
 
-Use the repository virtual environment for Python commands:
+Run `make test` for the Python suite or `make firmware-unit-test` for the C++
+unit checks. Each command creates a fresh Python environment in `/tmp`, installs
+`requirements-dev.txt` for the current machine, and removes the environment on
+exit. The shared `.venv` is neither used nor replaced, so ARM and x86_64 machines
+can test the same checkout without carrying native packages between them.
+Dependency installation requires package-index access on each run.
 
-```bash
-./.venv/bin/python -m pytest -q
-./.venv/bin/ruff check custom_components tools tests
-./.venv/bin/black --check custom_components tools tests
+The bootstrap defaults to the current machine's `python3`; select another native
+interpreter with `TEST_BOOTSTRAP_PYTHON=/path/to/python3`. Pass pytest options with
+`PYTEST_ARGS`, for example `make test PYTEST_ARGS="-k learning_id"`.
+
+Build and test the inspectable Learning ID download:
+
+```sh
+make learning-id-package OUTPUT_DIR=/tmp/proflame2-learning-id
+make learning-id-package-test ARCHIVE=/tmp/proflame2-learning-id/proflame2-learning-id.pyz
 ```
 
-The Makefile already defaults `PYTHON`, `RUFF`, and `BLACK` to `./.venv/bin/*`,
-so `make test`, `make lint-python`, and `make format-python-check` are safe
-entrypoints.
+See [Learning ID packaging](learning_id_packaging.md) for development and
+release automation details.
 
 The default suite includes the offline RF capture tests. The check for local
 `rtl_433` source instrumentation is opt-in because it requires the separately
@@ -59,11 +68,21 @@ modified development source tree, not a standard `rtl_433` checkout:
 
 ```bash
 PROFLAME2_RTL433_SOURCE=/path/to/instrumented/rtl_433 \
-  ./.venv/bin/python -m pytest -q -m rtl433_source tests/test_rtl433_compare.py
+  make test PYTEST_ARGS="-m rtl433_source tests/test_rtl433_compare.py"
 ```
 
 When explicitly selected, this check fails if the source tree or required
 instrumentation is missing.
+
+## Python Environment
+
+Use a virtual environment created for the current machine for linting and
+formatting. The Makefile defaults these tools to `./.venv/bin/*`:
+
+```bash
+make lint-python
+make format-python-check
+```
 
 ESPHome validation uses a separate virtual environment:
 
