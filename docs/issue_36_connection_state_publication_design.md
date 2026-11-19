@@ -1,8 +1,8 @@
 # Issue #36: publish backend connection transitions
 
-Status: implemented; automated and maintainer hardware validation passed.
+Status: implemented; automated and manual hardware validation passed.
 Target release v0.7.1 is not yet published.
-Created 2026-11-12. Owner-assigned target: **v0.7.1**, on `dev` from the
+Created 2026-11-12. Assigned target: **v0.7.1**, on `dev` from the
 v0.7.0 GA baseline (`ad047a5`). v0.8.0 shutdown work is excluded.
 
 ## Problem and evidence
@@ -215,7 +215,7 @@ explicit handoff to that loop.
 | Poll the sensor or add a readiness-check loop | Adds ongoing work, delays publication until the next check, and masks missing state-change ownership. Reject. |
 | Notify explicitly after listener recovery | Small patch, but misses first-attempt startup success, display-only recovery, close and other writers. Reject as the complete solution. |
 | Publish synchronously inside the backend setter | Couples entity writes to connection execution and can expose partially updated state or subscriber failures to the backend. Avoid. |
-| Queue one publication on the next event-loop turn | Valid alternative with less latency, but may publish multiple intermediate states across asynchronous setup steps. The owner agreed to a short one-shot for additional coalescing. |
+| Queue one publication on the next event-loop turn | Valid alternative with less latency, but may publish multiple intermediate states across asynchronous setup steps. A short one-shot was agreed for additional coalescing. |
 | Transition event plus a fixed 100 ms one-shot | Recommended. Bounded latency, coalesced writes, explicit lifecycle cleanup, and no polling or delay to RF/control operations. |
 
 ## Risk assessment
@@ -268,7 +268,7 @@ transmission or GitHub reply is authorized by this design document itself.
 
 ## Implementation and validation — 2026-11-12
 
-Implemented on `dev`, based on v0.7.0 GA (`ad047a5`), for the owner-assigned
+Implemented on `dev`, based on v0.7.0 GA (`ad047a5`), for the assigned
 v0.7.1 target. No v0.8.0 firmware or shutdown-guide changes are included.
 
 - `rf/base.py` provides an optional no-op connection subscription contract.
@@ -299,7 +299,7 @@ observers, entry isolation, failed setup, shutdown and unload/reload. The 34
 external-tool/opt-in skips are unchanged from the maintenance baseline; this run
 is not a new physical-radio or reporter-installation certification. The normal
 release workflow will stamp version metadata. Commit and push are authorized
-separately by the owner; no GitHub support reply is part of this implementation.
+separately through manual testing; no GitHub support reply is part of this implementation.
 
 
 ## Maintainer hardware acceptance — 2026-11-12

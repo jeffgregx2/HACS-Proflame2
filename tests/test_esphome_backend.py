@@ -22,6 +22,7 @@ from custom_components.proflame2.rf.esphome.contract import (
     ESPHomeDisplayState,
     ESPHomeEndpointStatus,
     ESPHomeRXEvent,
+    ESPHomeTXConfirmationError,
     ESPHomeTXRequest,
     ESPHomeTXResponse,
 )
@@ -311,6 +312,22 @@ async def test_backend_wraps_transport_send_exception(
 
     with pytest.raises(RuntimeError, match="ESPHome backend send failed: send exploded"):
         await backend.send(_prepared_packet(remote_profile))
+
+
+async def test_backend_preserves_missing_confirmation_for_user_message(remote_profile) -> None:
+    error = ESPHomeTXConfirmationError("endpoint telemetry did not confirm the request")
+
+    class MissingConfirmationTransport(MockESPHomeTransport):
+        async def send_tx(self, request):
+            self.tx_requests.append(request)
+            raise error
+
+    transport = MissingConfirmationTransport()
+    backend = ESPHomeAPIBackend(transport=transport)
+    with pytest.raises(ESPHomeTXConfirmationError) as raised:
+        await backend.send(_prepared_packet(remote_profile))
+    assert raised.value is error
+    assert len(transport.tx_requests) == 1
 
 
 class _UnsuccessfulSendTransport(MockESPHomeTransport):

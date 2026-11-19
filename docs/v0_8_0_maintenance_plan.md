@@ -1,5 +1,24 @@
 # v0.8.0 stability and compatibility implementation plan
 
+## v0.7.2 delivery split — updated 2026-11-18
+
+A firmware-compatible v0.7.2 update was requested for the HACS review and
+subsequently approved V8-02's version-selected registry compatibility class.
+The [v0.7.2 plan](issue_22_v0_7_2_public_transport_design.md) records the local
+implementation and validation. V8-02, V8-03, V8-04 and the existing-firmware telemetry
+portion of V8-05 are now implemented locally for that patch. Publication and
+remaining focused communication acceptance are still pending; these are not
+released by the design or proof alone.
+
+V8-05's structured firmware response and capability detection remain
+unimplemented and are now tracked in [#20](https://github.com/jeffgregx2/HACS-Proflame2/issues/20)
+for v0.8.0, including the corresponding HA adapter. [#22](https://github.com/jeffgregx2/HACS-Proflame2/issues/22)
+now covers v0.7.2; no separate patch-release issue is needed. Keep the minimum
+at HA 2025.8.0, with HA 2026.8.0 selecting the modern registry implementation.
+Reuse the tested v0.7.2 changes in v0.8.0 rather than implementing them twice.
+
+## Inventory baseline
+
 Status: proposed; inventory reviewed 2026-11-10 against the repository, deferred
 branch and all 12 open GitHub issues. Implementation has not started under this
 plan. v0.7.0-beta7 is published; the final v0.7.0 baseline is not yet selected.
@@ -29,11 +48,11 @@ or assessment: it must not delay stability fixes or introduce disproportionate r
 
 | ID | Work item and reference | Current state | Proposed v0.8.0 scope and completion evidence | Priority |
 | --- | --- | --- | --- | --- |
-| V8-01 | Supported-version contract and validation | HACS declares HA 2025.1.0 minimum; HA tests pin 2026.9.0; ESPHome validation pins 2026.8.2. These are different facts, not a proven support matrix. | Establish the supported minimum/current HA and ESPHome combinations and both firmware contracts. Exercise representative supported versions; obtain approval before raising a minimum. Maintain the matrix and upgrade guidance with V8-12. | A |
-| V8-02 | Device lookup deprecations, [#34](https://github.com/jeffgregx2/HACS-Proflame2/issues/34), also reported in [#35](https://github.com/jeffgregx2/HACS-Proflame2/issues/35) | Two deprecated lookups remain in integration identity migration. | Use supported identifier/connection lookup APIs, handle missing/ambiguous matches, preserve ownership and identity migration. Test duplicate assignments, existing configurations and unrelated-device isolation. | A |
-| V8-03 | Parent-device deprecations, #34/#35 | Sensor, switch, number and button device-info construction still uses `via_device`; runtime reconciliation already uses device IDs in places. | Migrate the complete shared relationship path to supported APIs. Preserve LilyGO's ESPHome parent, YardStick's fireplace-only presentation and one controller per fireplace. Verify delayed parent discovery, reload and removal. | A |
-| V8-04 | Public HA/ESPHome transport, [#22](https://github.com/jeffgregx2/HACS-Proflame2/issues/22) | Action discovery/execution and telemetry still depend on ESPHome `runtime_data`. | Bind actions, devices and telemetry through public HA registries, services, states and events. Preserve RX event schema, #34 reconnect/logging behavior, version reporting, arbitration and unload cleanup. Remove private-runtime dependencies only after both supported firmware paths work. | A |
-| V8-05 | Request-correlated completion and firmware compatibility, #22; preserve [#17](https://github.com/jeffgregx2/HACS-Proflame2/issues/17) | Existing firmware exposes request/result telemetry; no Proflame2 structured TX-response contract is implemented. | Support installed firmware using public request-correlated telemetry and new firmware using an explicit capability marker plus a structured action response. Respond after local TX completes, never at enqueue. Never retransmit because a response is late. Keep #17 compatibility only while a live path needs it. | A |
+| V8-01 | Supported-version contract and validation | The v0.7.2 task corrects the declared HA minimum to approved 2025.8.0; HA tests pin 2026.9.0; ESPHome validation pins 2026.8.2. These are different facts, not a proven support matrix. | Establish the supported minimum/current HA and ESPHome combinations and both firmware contracts. Exercise representative supported versions; obtain approval before raising a minimum. Maintain the matrix and upgrade guidance with V8-12. | A |
+| V8-02 | Device lookup deprecations, [#34](https://github.com/jeffgregx2/HACS-Proflame2/issues/34), also reported in [#35](https://github.com/jeffgregx2/HACS-Proflame2/issues/35) | Implemented locally for v0.7.2 using legacy/modern registry classes selected at HA 2026.8.0. The legacy class preserves old lookups/ownership semantics; modern HA uses scoped lookups and config_entry_id. Full HA 2025.8.0 and 2026.9.0 suites pass (2,383 tests each); publication and final manual acceptance are pending. | Retain the version-selected lookup/ownership boundary and migration safeguards. Integrate the validated v0.7.2 implementation after publication; preserve existing IDs, shared-legacy-device rejection and unrelated-device isolation. | A |
+| V8-03 | Parent-device deprecations, #34/#35 | Implemented locally for v0.7.2: removed four deprecated entity parent hints; existing runtime device-ID linking owns the relationship on both supported HA versions. Automated coverage includes delayed discovery, reload/removal/replacement, duplicate identifiers across modern entries and unchanged YardStick presentation. Publication and final manual acceptance remain pending. | Migrate the complete shared relationship path to supported APIs. Preserve LilyGO's ESPHome parent, YardStick's fireplace-only presentation and one controller per fireplace. Verify delayed parent discovery, reload and removal. | A |
+| V8-04 | Public HA/ESPHome transport, [#22](https://github.com/jeffgregx2/HACS-Proflame2/issues/22) | The local v0.7.2-debug candidate replaces private runtime/client/catalog/state access with public HA actions, registries, states and lifecycle handling. Automated checks and manual v0.8.0-firmware control/recovery smoke passed; remaining focused compatibility checks and publication are pending. | Bind actions, devices and telemetry through public HA registries, services, states and events. Preserve RX event schema, #34 reconnect/logging behavior, version reporting, arbitration and unload cleanup. Remove private-runtime dependencies only after both supported firmware paths work. | A |
+| V8-05 | Request-correlated completion and firmware compatibility, #22 (v0.7.2 telemetry) / #20 (v0.8.0 structured response); preserve [#17](https://github.com/jeffgregx2/HACS-Proflame2/issues/17) | The public existing-firmware request/result/counter completion path is implemented locally for v0.7.2, including fresh matching confirmation and clearer missing-confirmation feedback. The new structured response/capability contract is not implemented. | Support installed firmware using public request-correlated telemetry and new firmware using an explicit capability marker plus a structured action response. Respond after local TX completes, never at enqueue. Never retransmit because a response is late. Keep #17 compatibility only while a live path needs it. | A |
 | V8-06 | Compact payload diagnostics, [#25](https://github.com/jeffgregx2/HACS-Proflame2/issues/25) | Diagnostic categories already shipped in beta2; schema defaults and package declarations have coverage. Compact presentation remains outstanding. | Design a compact HA-owned presentation with full payload evidence retained. Do not truncate firmware data or mutate ESPHome-owned entities. Review the entity/automation impact before implementation; do not repeat delivered classification work. | C |
 | V8-07 | Learning progress follow-up, [#32](https://github.com/jeffgregx2/HACS-Proflame2/issues/32) | Detection guidance, power prerequisites and numbered action headers shipped in beta7. | Assess whether meaningful packet/retry feedback is still needed after beta7. Only add feedback that explains a real wait using existing observations; preserve acceptance, deadlines and action numbering. Do not make cosmetic progress changes a release gate or promise fixed packet totals. | C |
 | V8-08 | LilyGO shutdown/USB restart, [design](controller_shutdown_design.md) | Functional commit `216785c` is on `feature/controller-shutdown-v0.8.0`, based on pre-beta7 code. Storage-guide changes are uncommitted on that branch. Some hardware behavior is confirmed; final checks remain. | Integrate the feature without losing v0.7.0 fixes or the pending guide. Complete both-band builds, USB/busy refusal, cancellation, notification-before-cutoff, early-OTA shutdown and repeated USB wake tests. Firmware update is required to obtain this optional feature. | B |
@@ -190,7 +209,7 @@ an old compile or one successful cutoff does not substitute for the remaining ch
 
 **Exit:** selected cleanup is independently reviewable and regression-free.
 Unselected cosmetic work does not block a stable compatibility release; record
-any proposed deferral for owner agreement instead of silently changing targets.
+any proposed deferral for explicit agreement instead of silently changing targets.
 
 ### Phase 6 — Combined qualification and release
 

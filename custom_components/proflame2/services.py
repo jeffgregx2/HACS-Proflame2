@@ -67,7 +67,8 @@ from .refresh import (
     current_refresh_state,
     record_received_activity,
 )
-from .rf.esphome.contract import ESPHomeDisplayState
+from .rf.esphome.contract import ESPHomeDisplayState, ESPHomeTXConfirmationError
+from .rf.esphome.public_endpoint import ESPHomeControllerOfflineError
 from .rf.esphome_api import is_display_connection_error
 from .rf.waveform import build_transmission_plan
 from .runtime import (
@@ -285,11 +286,37 @@ def _is_retained_off_control_edit(
 
 
 def _transmit_failure_message(
-    reason: str,
+    reason: str | Exception,
     *,
     rollback: bool = True,
 ) -> str:
     """Return a user-facing transmit failure message with the underlying cause."""
+
+    if isinstance(reason, ESPHomeTXConfirmationError):
+        message = (
+            "LilyGO did not confirm sending the command. "
+            "Check that LilyGO is powered on and connected to Wi-Fi. "
+            "The command may still have been sent; check the fireplace before trying again."
+        )
+        if rollback:
+            message += " Home Assistant restored the controls to their previous settings."
+        return message
+
+    cause = reason if isinstance(reason, Exception) else None
+    for _ in range(8):
+        if cause is None:
+            break
+        if isinstance(cause, ESPHomeControllerOfflineError):
+            message = (
+                "LilyGO is unavailable. It may be powered off or disconnected from the network. "
+                "Check its power and Wi-Fi/network connection."
+            )
+            if rollback:
+                message += " Home Assistant restored the controls to their previous settings."
+            return message
+        # Preserve the diagnosis through existing explicit backend wrappers.
+        # Do not reinterpret disabled entities or unrelated exception context.
+        cause = cause.__cause__
 
     normalized_reason = str(reason).strip().rstrip(".")
     suffix = "; controls reverted to last known state." if rollback else "."
@@ -1538,7 +1565,7 @@ async def _async_transmit_requested_state(
         async_notify_runtime_entry_updated(hass, runtime_entry.config_entry_id)
         raise
     except (NotImplementedError, RuntimeError) as exc:
-        _mark_send_failed(runtime_entry, _transmit_failure_message(str(exc)), expected_epoch=send_epoch)
+        _mark_send_failed(runtime_entry, _transmit_failure_message(exc), expected_epoch=send_epoch)
         _log_control_event(
             runtime_entry,
             "send execution failed source=%s exception=%s error=%s",

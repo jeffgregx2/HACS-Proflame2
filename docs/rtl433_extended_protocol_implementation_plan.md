@@ -26,8 +26,8 @@ mean that the remaining integration and live acceptance tasks here have passed.
    actual build used to generate fixture output, JSON field names/types,
    variant markers, integrity labels, and unknown-pilot semantics. Keep Learning
    IDs remote-only format v1. Coordinate any helper CLI or shared protocol change
-   before editing; request decoder/JSON changes from the rtl_433 owner.
-2. [x] **T2 Obtain decoder-generated JSON fixtures.** The rtl_433 owner runs
+   before editing; request decoder/JSON changes from the rtl_433 maintainer.
+2. [x] **T2 Obtain decoder-generated JSON fixtures.** The rtl_433 maintainer runs
    the real decoder on available representative legacy and extended captures
    and supplies its emitted JSON. Include at least one case per known captured
    remote and enough distinct commands/repeats per learnable remote to exercise
@@ -50,7 +50,7 @@ mean that the remaining integration and live acceptance tasks here have passed.
 5. [x] **T5 Confirm helper completion policy and installation.** Review the
    existing file-mode preliminary results at Gates 1/2 versus live-mode Gate 3
    completion, progress guidance, and timeout defaults. Document the agreed
-   behavior; coordinate any change with the helper owner. Verify clean wheel
+   behavior; coordinate any change with the helper maintainer. Verify clean wheel
    installation without HA or rtl_433 and provide reproducible source/wheel
    instructions without implying an unpublished PyPI package is available.
 6. [x] **T6 Finish the HA import transition.** Complete the HA-only adapter and
@@ -74,7 +74,7 @@ mean that the remaining integration and live acceptance tasks here have passed.
    continuing to recommend the removed paste UI.
 9. [ ] **T9 Run offline acceptance.** Run the native invocation-owned Python
    test environment, formatting/lint checks, installed-package tests, and HA
-   interoperability tests. The rtl_433 owner separately runs its decoder
+   interoperability tests. The rtl_433 maintainer separately runs its decoder
    regression suite and reports results. Record commands, revisions, passes,
    skips, and gaps. Confirm test scratch files are cleaned on exit/interruption.
 10. [ ] **T10 Perform live end-to-end acceptance.** On hardware-equipped test
@@ -107,7 +107,7 @@ final integration review T11. Live hardware is not required for T1-T9.
   generating revision, and replay classification accompany the fixture in
   `tests/fixtures/rtl433_helper_decoder_output.json` and its companion Markdown.
   This was read-only fixture generation, not a decoder implementation change or
-  a replacement for the decoder owner's full regression/pipeline suite.
+  a replacement for the decoder's full regression/pipeline suite.
 - Installed-package tests validate every exported record and preserve its wire
   words. Real extended sequences use consistent observed manual-mode templates
   and existing repeats, without synthesizing new evidence. The available legacy

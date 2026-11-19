@@ -21,18 +21,10 @@ def _records(caplog):
     return [r.getMessage() for r in caplog.records if r.name == LOGGER + ".version_logging"]
 
 
-def _case(hass, *, firmware="v0.7.0-beta4", tuple_keys=True):
+def _case(hass, *, firmware="v0.7.0-beta4"):
     linked = MockConfigEntry(domain="esphome", title="Controller")
     linked.add_to_hass(hass)
-    key = (0, 7) if tuple_keys else 7
     value = SimpleNamespace(state=firmware)
-    linked.runtime_data = SimpleNamespace(
-        available=True,
-        info={str: {key: SimpleNamespace(object_id="proflame2_firmware_version", key=7)}},
-        state={str: {key: value}},
-        services={},
-        device_info=SimpleNamespace(esphome_version="2026.9.0"),
-    )
     entry = MockConfigEntry(domain=DOMAIN, data={CONF_ESPHOME_ENTRY_ID: linked.entry_id})
     entry.add_to_hass(hass)
     transport = HomeAssistantESPHomeTransport(
@@ -40,40 +32,35 @@ def _case(hass, *, firmware="v0.7.0-beta4", tuple_keys=True):
     )
     runtime = SimpleNamespace(backend_type=BACKEND_ESPHOME, backend=SimpleNamespace(transport=transport))
     entity = er.async_get(hass).async_get_or_create(
-        "text_sensor",
+        "sensor",
         "esphome",
-        "version-" + linked.entry_id,
+        linked.entry_id + "-text_sensor-proflame2_firmware_version",
         config_entry=linked,
         suggested_object_id="renamed_controller_version",
     )
+    hass.states.async_set(entity.entity_id, firmware if firmware is not None else "unknown")
     return entry, linked, runtime, transport, value, entity.entity_id
 
 
-@pytest.mark.parametrize("tuple_keys", [False, True])
 @pytest.mark.parametrize(
     "value,expected",
     [("v0.7.0-beta4", "v0.7.0-beta4"), (None, None), ("", None), ("unknown", None), ("unavailable", None)],
 )
-async def test_firmware_reader_uses_live_proflame_telemetry_without_actions(hass, tuple_keys, value, expected):
-    entry, linked, runtime, transport, state, entity_id = _case(hass, firmware=value, tuple_keys=tuple_keys)
+async def test_firmware_reader_uses_live_proflame_telemetry_without_actions(hass, value, expected):
+    entry, linked, runtime, transport, state, entity_id = _case(hass, firmware=value)
     assert transport.proflame2_firmware_version() == expected
     assert not transport.connected
     assert not transport.configurations
     assert not transport.tx_requests
-    assert not linked.runtime_data.services
 
 
-async def test_firmware_reader_rejects_disconnected_cache_and_resolves_fresh_runtime(hass):
+async def test_firmware_reader_rejects_unavailable_cache_and_reads_fresh_public_state(hass):
     entry, linked, runtime, transport, value, entity_id = _case(hass)
-    old = linked.runtime_data
-    transport._runtime_data = old
-    old.available = False
+    hass.states.async_set(entity_id, "unavailable")
     assert transport.proflame2_firmware_version() is None
-    linked.runtime_data = SimpleNamespace(
-        available=True, info=old.info, state={str: {(0, 7): SimpleNamespace(state="v0.7.0-beta5")}}
-    )
+    hass.states.async_set(entity_id, "v0.7.0-beta5")
     assert transport.proflame2_firmware_version() == "v0.7.0-beta5"
-    linked.runtime_data = None
+    hass.states.async_remove(entity_id)
     assert transport.proflame2_firmware_version() is None
 
 
@@ -119,7 +106,6 @@ async def test_late_firmware_and_version_changes_are_reported_once_for_linked_en
         hass.states.async_set(other_entity, "changed")
         await hass.async_block_till_done()
         assert len(_records(caplog)) == 3
-        linked.runtime_data.available = False
         hass.states.async_set(entity_id, "unavailable")
         await hass.async_block_till_done()
         assert "proflame2_firmware=unavailable" in _records(caplog)[-1]

@@ -2,9 +2,14 @@
 
 ## Status
 
-Issue #17 has an immediate compatibility fix for Home Assistant 2026.9. That
-fix must be applied now. This document records the follow-up design work that
-is intentionally deferred until after travel.
+The immediate #17 compatibility fix is released. This document retains the
+longer-term design, including response-capable firmware planned for v0.8.0.
+
+For the HACS-requested migration using **unchanged v0.7.1 firmware**, follow the
+[v0.7.2 design and implementation plan](issue_22_v0_7_2_public_transport_design.md)
+and its [hardware protocol](issue_22_v0_7_2_hardware_validation.md). That narrow
+patch uses fresh public telemetry for completion. The firmware changes and
+structured-response requirement below do **not** apply to v0.7.2.
 
 The follow-up replaces Proflame2's dependency on ESPHome integration runtime
 objects with documented Home Assistant and ESPHome interfaces.

@@ -461,7 +461,7 @@ async def test_ha_guided_flow_learns_from_raw_yardstick_fifo(hass, enable_custom
 
 
 @pytest.mark.parametrize("worker", [False, True])
-async def test_cancelling_raw_mode_wait_releases_controller(hass, worker):
+async def test_cancelling_raw_mode_wait_releases_controller(hass, worker, monkeypatch):
     import asyncio
 
     from custom_components.proflame2.const import DATA_LEARNING_BACKEND_FACTORY, DOMAIN
@@ -476,11 +476,26 @@ async def test_cancelling_raw_mode_wait_releases_controller(hass, worker):
     lease = session.controller_lease
     try:
         assert await async_capture_next_learning_packet(session) is LearningModeTransition.MANUAL_REQUIRED
-        task = asyncio.create_task(async_capture_next_learning_packet(session))
-        await asyncio.sleep(0)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        receive_pending = asyncio.Event()
+
+        async def pending_radio_operation(*_args):
+            receive_pending.set()
+            await asyncio.Future()
+
+        # Empty fake reads can complete inline until the prompt deadline, without
+        # yielding to the cancelling task. Model pending radio I/O explicitly.
+        with monkeypatch.context() as patcher:
+            patcher.setattr(backend, "_async_in_executor", pending_radio_operation)
+            task = asyncio.create_task(async_capture_next_learning_packet(session))
+            try:
+                await asyncio.wait_for(receive_pending.wait(), timeout=5)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert not backend._operation_lock.locked()
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
     finally:
         await async_close_learning_session(session)
     assert lease.learning_owner is None

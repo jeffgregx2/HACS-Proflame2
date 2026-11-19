@@ -59,6 +59,21 @@ integration installed in Home Assistant. Setup has five main parts:
    USB; later updates should use Over-The-Air (OTA) updates via Wi-Fi.
 5. Add the LilyGO-backed fireplace in Home Assistant and run guided learning.
 
+### Home Assistant and ESPHome Builder versions
+
+For new LilyGO firmware builds, use these version combinations:
+
+| Home Assistant version | ESPHome Builder version | Guidance |
+| --- | --- | --- |
+| **2025.8 - 2025.12** | **2026.6.x** | **Builder must remain on 2026.6.x.** Firmware built with Builder 2026.7 or newer will not be discovered correctly by these HA versions. |
+| **2026.1 or newer** | **2026.6.0 or newer** | Upgrade HA first before installing firmware built with Builder 2026.7 or newer. |
+
+Our upgrade tests used **ESPHome Builder 2026.6.0**. Older Builder versions
+cannot build the current LilyGO firmware configuration.
+
+Existing v0.7.1 LilyGO firmware is compatible with the v0.7.2 Proflame2
+integration and does not require an upgrade.
+
 ## Create The ESPHome Device
 
 Using ESPHome Builder, add a new device so ESPHome creates the device YAML
@@ -286,6 +301,12 @@ Important behavior:
   controls if needed.
 
 ## Validation
+
+If Proflame2 reports that required telemetry entities are disabled, open
+**Settings → Devices & services → ESPHome**, select the linked LilyGO device,
+and enable the entities named in the error. Allow ESPHome to reload and reconnect.
+These diagnostic entities are enabled by default. Re-enabling them does not
+require re-learning the remote or updating the controller firmware.
 
 After setup, validate:
 

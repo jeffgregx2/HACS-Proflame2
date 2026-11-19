@@ -57,6 +57,11 @@ from custom_components.proflame2.protocol.ecc import build_extended_integrity_wo
 from custom_components.proflame2.protocol.models import FireplaceState
 from custom_components.proflame2.protocol.packet import ProflameFrame, ProflamePacket
 from custom_components.proflame2.rf.base import BackendCapabilities, SendResult
+from custom_components.proflame2.rf.esphome.contract import ESPHomeTXConfirmationError
+from custom_components.proflame2.rf.esphome.public_endpoint import (
+    ESPHomeControllerOfflineError,
+    ESPHomeControllerUnavailableError,
+)
 from custom_components.proflame2.rf.fake import FakeRFBackend
 from custom_components.proflame2.runtime import (
     _runtime_store,
@@ -1258,6 +1263,99 @@ async def test_send_failure_logs_backend_cause_without_packet_debug(hass, monkey
 
     assert "send execution failed" in caplog.text
     assert "RuntimeError: controller unavailable" in caplog.text
+
+
+async def test_missing_lilygo_confirmation_has_actionable_message_without_retry(hass, monkeypatch, caplog):
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0.0
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    previous_state = runtime_current_state(runtime)
+    previous_confidence = runtime.state_confidence
+    attempts = []
+
+    async def missing_confirmation(self, packet):
+        attempts.append(packet)
+        raise ESPHomeTXConfirmationError("endpoint telemetry did not confirm the request")
+
+    monkeypatch.setattr(FakeRFBackend, "send", missing_confirmation)
+    caplog.set_level(logging.ERROR, logger="custom_components.proflame2.services")
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 4}, blocking=True
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+    primary = hass.states.get(_sensor_entity_id(entry.title))
+    message = primary.attributes["last_issue"]
+    assert message.startswith("LilyGO did not confirm sending the command.")
+    assert "powered on and connected to Wi-Fi" in message
+    assert "may still have been sent; check the fireplace before trying again" in message
+    assert "Home Assistant restored the controls to their previous settings." in message
+    assert "ESPHome backend" not in message
+    assert "endpoint telemetry" not in message
+    assert len(message) <= 255  # HA also exposes this text as a sensor state.
+    assert "ESPHomeTXConfirmationError: endpoint telemetry did not confirm the request" in caplog.text
+    assert len(attempts) == 1
+    assert runtime_current_state(runtime) == previous_state
+    assert runtime.state_confidence == previous_confidence
+    assert runtime.desired_state is None
+    assert primary.attributes["operational_status"] == "failed"
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_offline_lilygo_guidance_preserves_rollback_and_technical_log(hass, monkeypatch, caplog, wrapped):
+    hass.data.setdefault(DOMAIN, {})[DATA_CONTROL_DEBOUNCE_SECONDS] = 0.01
+    hass.data.setdefault(DOMAIN, {})[DATA_CONFIRMATION_WINDOW_SECONDS] = 0.0
+    entry = _add_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    runtime = async_get_runtime_entries(hass)[entry.entry_id]
+    previous = runtime_current_state(runtime)
+    confidence = runtime.state_confidence
+    attempts = []
+
+    async def offline(self, packet):
+        attempts.append(packet)
+        error = ESPHomeControllerOfflineError(
+            "Linked ESPHome controller is offline; unavailable proflame2_last_payload_length"
+        )
+        if wrapped:
+            raise RuntimeError(f"ESPHome backend is unavailable: {error}") from error
+        raise error
+
+    monkeypatch.setattr(FakeRFBackend, "send", offline)
+    caplog.set_level(logging.ERROR, logger="custom_components.proflame2.services")
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": _number_entity_id(entry.title, "Flame"), "value": 4}, blocking=True
+    )
+    await asyncio.sleep(0.03)
+    await hass.async_block_till_done()
+    primary = hass.states.get(_sensor_entity_id(entry.title))
+    message = primary.attributes["last_issue"]
+    assert message.startswith("LilyGO is unavailable.")
+    assert "may be powered off" in message
+    assert "Wi-Fi/network connection" in message
+    assert "restored the controls to their previous settings" in message
+    assert "proflame2_last_payload_length" not in message
+    assert len(message) <= 255
+    assert "unavailable proflame2_last_payload_length" in caplog.text
+    assert len(attempts) == 1
+    assert runtime_current_state(runtime) == previous
+    assert runtime.state_confidence == confidence
+    assert runtime.desired_state is None
+    assert primary.attributes["operational_status"] == "failed"
+
+
+def test_disabled_telemetry_keeps_specific_error_instead_of_power_guidance():
+    from custom_components.proflame2.services import _transmit_failure_message
+
+    error = ESPHomeControllerUnavailableError("Enable the required telemetry entities: last_request_id (disabled)")
+    message = _transmit_failure_message(error)
+    assert "Enable the required telemetry entities" in message
+    assert "powered off" not in message
+    # An unrelated exception context is not an explicit backend wrapper.
+    error.__context__ = ESPHomeControllerOfflineError("offline")
+    assert _transmit_failure_message(error) == message
 
 
 async def test_debug_logging_enables_packet_debug_for_control_send_path(hass, monkeypatch) -> None:
