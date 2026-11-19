@@ -7,7 +7,7 @@ Adding an item here does not authorize implementation or a release.
 ## Device registry deprecations: removal in HA 2027.8.0
 
 Status: V08-02 lookup/ownership and V08-03 parent relationships are implemented
-locally for v0.7.2. Publication and final owner acceptance remain pending.
+locally for v0.7.2. Publication and final manual acceptance remain pending.
 Validation results are recorded below and in the v0.7.2 design.
 Address the remaining deprecations before HA 2027.8.0. These warnings
 were identified in the logs supplied for
@@ -74,7 +74,7 @@ one deselected). The extra minimum-version skip is the modern-only duplicate-
 identifier parent regression. Other skips are existing external/optional checks
 and the opposite native registry model. Ruff, Black, whitespace, relative
 Markdown links and source preflight passed. Firmware remains identical to
-v0.7.1. These results do not replace owner inspection of the actual registry or
+v0.7.1. These results do not replace manual inspection of the actual registry or
 remaining public-transport hardware acceptance. All changes remain local and
 uncommitted; no GitHub issue or release was changed.
 

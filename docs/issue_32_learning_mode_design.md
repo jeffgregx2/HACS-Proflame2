@@ -14,13 +14,13 @@ confusing return from "Press the Power button again" to the mode instructions.
 The pause already identifies thermostat packets and retains the current learning
 step; its text did not explicitly state that the remote's mode was detected.
 
-The owner requires that explanation before v0.7.0 GA. Keep this change limited to
+That explanation is required before v0.7.0 GA. Keep this change limited to
 the shared HA/LilyGO mode instruction: begin with **Thermostat or SMART mode
 detected.** on its own line (using a Markdown hard line break in HA), then retain
 the existing instructions for turning both modes off and automatic continuation.
 The first prompt only asks the user to press Power; it does not ask every user
 to turn thermostat/SMART off before any packet has identified the active mode.
-The owner additionally approved a small v0.7.0 presentation change: show a bold
+Approval was also given for a small v0.7.0 presentation change: show a bold
 header followed by a blank line and the instructions, keeping HA's existing
 centered progress layout for all text. Request numbers 1–4 use **Step 1
 of 4** through **Step 4 of 4**. Later requests use **Additional step 5**,

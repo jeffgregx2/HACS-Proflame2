@@ -3,7 +3,7 @@
 Status: implemented on a separate local branch; remaining hardware and final
 both-band firmware-build acceptance pending. Updated 2026-11-06.
 
-The owner explicitly deferred this work from v0.7.0 to v0.8.0 because the firmware
+This work was explicitly deferred from v0.7.0 to v0.8.0 because the firmware
 changes grew beyond the intended release risk. This is an approved exception to
 the maintenance release's original no-new-features boundary. It is not required
 for the HA-only issue #34 recovery fix. Issue #33 remains in v0.7.0, first shipped

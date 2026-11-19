@@ -8,7 +8,7 @@ The local implementation and source/test audit are complete on the approved
 task branch. The proof cases now exercise the production adapter; no separate
 proof adapter is installed. Hardware acceptance has not been performed.
 
-**Compatibility decision (2026-11-17):** the owner approved correcting the
+**Compatibility decision (2026-11-17):** explicit approval was given to correct the
 advertised minimum to **HA 2025.8.0**, because the already-released options flow
 requires `OptionsFlowWithReload`, introduced in that release. No legacy reload
 fallback/backport is in scope. Execute minimum-version tests on 2025.8.0;
@@ -46,7 +46,7 @@ Preserve RF encoding, timing, repeat counts, learned profiles, Learning IDs,
 radio-band configuration, control/coalescing policy, refresh, delayed
 retransmission, confidence semantics and the public Proflame2 service API.
 YardStick is outside the transport change; retain its existing tests and perform
-one hardware smoke test if available. The owner extended this scope on
+one hardware smoke test if available. The scope was extended on
 2026-11-18 to include V08-02 lookup/ownership compatibility using legacy and
 modern classes, then requested V08-03 parent-relationship cleanup. Shutdown
 firmware and new structured firmware responses remain outside this patch.
@@ -88,7 +88,7 @@ that a missing optional action makes all hardware unavailable.
 The proof executed on HA 2026.9.0. Source inspection found compatible service
 naming, stored node identity and public entity publication in HA 2025.1.0,
 2026.9.0 and 2026.11.1. This is feasibility evidence, not an executed runtime
-matrix. The owner-approved declared HA minimum is 2025.8.0. Implementation must execute
+matrix. The approved declared HA minimum is 2025.8.0. Implementation must execute
 the supported-version contract tests using compatible Python/dependency stacks;
 if the minimum cannot be supported, stop for a release decision.
 
@@ -254,7 +254,7 @@ not only elapsed time since power removal.
 | P72-04 | Replace snapshots and completion waiting with public states and event-driven fresh request-correlated evidence | Stale/queued/reordered/late/error/counter-reset sequences, timeout/cancellation, no replay or listener leaks |
 | P72-05 | Replace private availability, RX-liveness, status, diagnostic and version paths; integrate existing recovery/publication owners | Startup/reload/disconnect/flapping/quiet recovery, active listening, learning, display restoration and #17/#34/#36 regressions |
 | P72-06 | Execute default and version-matrix tests, review source for remaining private access, update technical/upgrade docs | All mandatory gates below; distinguish executed checks from source inspection and optional skips |
-| P72-07 | Owner executes the self-contained hardware protocol using unchanged v0.7.1 firmware | Physical fireplace, active listening, learning, power-cycle/startup recovery and timing acceptance recorded |
+| P72-07 | Execute the self-contained manual hardware protocol using unchanged v0.7.1 firmware | Physical fireplace, active listening, learning, power-cycle/startup recovery and timing acceptance recorded |
 | P72-08 | Review the final diff and prepare v0.7.2 release/HACS evidence | Separate authorization for commit/push/merge/release and re-requesting HACS review; do not claim acceptance before review |
 
 Keep production boundary changes and their tests together in reviewable commits;
@@ -269,7 +269,7 @@ as a second installable implementation.
 | --- | --- |
 | P72-01 through P72-05 | Implemented locally; production contract and existing recovery/state tests pass |
 | P72-06 | Source/test audit and local checks complete; GitHub HACS/Hassfest/compatibility workflows have not run on this uncommitted draft |
-| P72-07 | Not run; owner hardware acceptance with released v0.7.1 firmware is the next gate |
+| P72-07 | Not run; manual hardware acceptance with released v0.7.1 firmware is the next gate |
 | P72-08 | Local diff and review-concern mapping checked; commit, publication, release and HACS re-review are not authorized by these results |
 
 The audit scanned all 57 production Python modules, reviewed their HA imports
@@ -364,7 +364,7 @@ separately from the transport's response after HA detects readiness.
 
 ## Stop conditions and residual risk
 
-Stop and consult the owner if unchanged v0.7.1 firmware cannot provide the public
+Stop and request input if unchanged v0.7.1 firmware cannot provide the public
 contract; mandatory fields require a firmware change; identity cannot be bound
 safely without new user configuration; the declared HA minimum must rise; or a
 solution requires broader state/control/RF redesign. The first two conditions
@@ -379,7 +379,7 @@ it does not certify implementation or RF range/reliability.
 
 ## Cold-start hardware feedback and correction — 2026-11-17
 
-An owner test with the local 0.7.2-debug integration and v0.8.0 firmware failed
+A manual test with the local 0.7.2-debug integration and v0.8.0 firmware failed
 before dispatch because last-request-ID telemetry was rejected as unavailable.
 Both released v0.7.1 and the v0.8.0 branch initialize this ID and its publication
 cache to empty strings; the publisher suppresses unchanged text. HA can therefore
@@ -396,16 +396,16 @@ an unknown ID. Firmware and RF behavior are unchanged.
 
 The version-scaffold test also no longer assumes equal integration/firmware
 versions; it retains independent firmware version-format/logging checks. This
-supports the intended HA-only update and the owner's 0.7.2-debug local stamp.
+supports the intended HA-only update and the requested 0.7.2-debug local stamp.
 The current default suite passed 2,366 tests (34 optional/external skips, one
 deselected); all 282 targeted transport/runtime/recovery/scaffold tests also
-passed on HA 2025.8.0. Owner hardware retesting remains necessary; the v0.8.0 smoke report
+passed on HA 2025.8.0. Manual hardware retesting remains necessary; the v0.8.0 smoke report
 does not replace the unchanged-v0.7.1-firmware acceptance gate.
 
 
-## Owner smoke feedback and confirmation-message refinement — 2026-11-17
+## Manual smoke-test feedback and confirmation-message refinement — 2026-11-17
 
-The owner reports that smoke testing found no functional or timing difference.
+Manual smoke testing found no functional or timing difference.
 After powering Test LilyGO off, an attempted command produced a missing-TX-
 confirmation error. That is compatible with HA still considering the API link
 online during its existing offline-detection interval; it does not establish
@@ -430,9 +430,9 @@ Ruff, Black and whitespace checks passed. This targeted run follows the earlier
 2,366-test full-suite result; it is not a new complete-suite or hardware pass.
 
 
-## Owner control/recovery permutations — 2026-11-17
+## Manual control/recovery permutations — 2026-11-17
 
-The owner subsequently confirmed successful HA restart with LilyGO online,
+Subsequent manual testing confirmed successful HA restart with LilyGO online,
 control rollback with the new message after controller shutdown, restoration of
 control/RF transmission after power-up, known-offline feedback when HA starts
 with LilyGO off, and restored control/RF transmission after LilyGO starts later.
@@ -450,7 +450,7 @@ checks. No implementation change was needed from this report.
 
 ## V08-02 registry compatibility implementation — 2026-11-18
 
-The owner confirmed a minimum of HA 2025.8.0 and requested two implementations
+The agreed minimum is HA 2025.8.0, with two implementations requested
 selected by HA version. `DeviceRegistryCompatibility` now owns device lookup and
 ownership reads. `LegacyDeviceRegistryCompatibility` is selected before 2026.8,
 retaining the old lookup and multi-entry ownership model. The modern class is
@@ -482,7 +482,7 @@ controller latency. Ruff, Black, whitespace, relative Markdown links and source
 preflight passed. Firmware is unchanged. Source inspection confirms the two
 legacy registry interfaces are used only inside the legacy class. At this
 V08-02 baseline the entity parent hints were unchanged; the following V08-03
-work removes them. Owner registry identity/parent inspection after restart/reload,
+work removes them. Manual registry identity/parent inspection after restart/reload,
 remaining communication acceptance and publication are separate from these
 software passes. All changes remain local and uncommitted.
 
@@ -512,7 +512,7 @@ production Python. Legacy HA merges identical identifiers globally, so the
 modern cross-entry ambiguity test runs only on its applicable registry model.
 
 No firmware, RF, controller-sharing policy, minimum HA version or public service
-behavior changes. Existing owner communication acceptance remains separate.
+behavior changes. Existing manual communication acceptance remains separate.
 
 V08-03 automated validation: full HA 2026.9.0 suite passed 2,391 tests
 (35 skipped, one deselected); HA 2025.8.0 passed 2,390 tests (36 skipped,
@@ -520,7 +520,7 @@ one deselected). The extra minimum-version skip is the modern-only duplicate-
 identifier parent regression. Other skips are existing external/optional checks
 and the opposite native registry model. Ruff, Black, whitespace, relative
 Markdown links and source preflight passed. Firmware remains identical to
-v0.7.1. These results do not replace owner inspection of the actual registry or
+v0.7.1. These results do not replace manual inspection of the actual registry or
 remaining public-transport hardware acceptance. All changes remain local and
 uncommitted; no GitHub issue or release was changed.
 
@@ -533,13 +533,13 @@ minimum-version metadata/testing and clearer missing-confirmation errors.
 The unimplemented V08-05 structured firmware response, capability detection
 and matching HA adapter moved to existing issue #20 for v0.8.0. Existing
 firmware remains supported through public request-correlated telemetry. Both
-public issue bodies were updated and read back after owner approval. No new
+public issue bodies were updated and read back after explicit approval. No new
 issue is needed. The local implementation branch is `issue_22-v0.7.2`.
 
 
 ## Persisted registry upgrade acceptance — 2026-11-18
 
-The owner identified a distinct upgrade risk not established by separate-version
+Manual review identified a distinct upgrade risk not established by separate-version
 unit suites. Added `scripts/validate_registry_upgrade.py`, an explicit one-off
 check that writes real HA 2025.8.0 stores, loads them under HA 2026.10.4 and
 checks the same fixture after a second modern process load. Six devices and
@@ -556,7 +556,7 @@ hardware protocol records the procedure and its precise coverage.
 
 ## Known-offline user guidance — 2026-11-18
 
-Following successful H4 testing, the owner requested that the known-offline
+Following successful H4 testing, it was requested that the known-offline
 message suggest possible causes including power-off and network/Wi-Fi loss.
 Required unavailable telemetry now raises an offline-specific subclass of the
 existing controller-unavailable exception. The user-error formatter recognizes
@@ -578,7 +578,7 @@ Validation: 381 related control/service/backend/public-transport/runtime/display
 
 ## Active ESPHome identity migration regression — 2026-11-18
 
-Read-only inspection after the owner's HA 2026.8.0 upgrade found all critical
+Read-only inspection after the manual HA 2026.8.0 upgrade found all critical
 telemetry enabled and still associated with the selected ESPHome entry. Their
 unique IDs migrated during ESPHome startup from legacy mac/type/object-ID
 strings to the API's version-3 mac/device/type/unmangled-name format. The
@@ -608,7 +608,7 @@ Correction:
   publication. Add the exact HA 2026.8.0/API 45.6.1 stack to compatibility CI.
 
 No firmware, retry, RF, registry-ownership policy or service argument change.
-Owner must restart HA to load the fix and repeat one HA command/native update;
+Manually restart HA to load the fix and repeat one HA command/native update;
 no full hardware retest is necessary for unchanged paths. The agent did not
 modify/restart the live deployment or send any packet.
 
@@ -622,4 +622,4 @@ whitespace and source preflight passed. Initial attempts included an already-
 migrated no-op test setup collision and low scratch-disk space while two test
 environments coexisted; those were corrected without product changes before
 the final full passes. No live HA restart or RF action was performed.
-Owner post-fix HA command/native-RX acceptance remains pending. No commit/push.
+Manual post-fix HA command/native-RX acceptance remains pending. No commit/push.

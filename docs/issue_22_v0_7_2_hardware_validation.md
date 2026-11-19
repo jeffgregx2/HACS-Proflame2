@@ -56,7 +56,7 @@ No test has been completed merely because a result field below exists.
    need DEBUG firmware, PCM logging, diagnostic capture mode or rebuilding.
 8. Establish an actual controller power-cycle method. Unplugging USB **does not
    turn off a battery-powered LilyGO**. Use a test unit already prepared for
-   USB-only power or another owner-approved genuine power interruption. Do not
+   USB-only power or another approved genuine power interruption. Do not
    dismantle a unit or flash v0.8.0 shutdown firmware for this protocol. If no
    safe genuine interruption is available, mark the cold-cycle test blocked;
    an ESPHome restart checks reboot recovery but does not replace cold-cycle
@@ -335,23 +335,23 @@ solely to establish registry migration.
 
 | Test | Result (not run/partial/pass/fail/blocked) | Actual receiver/HA observations and log reference |
 | --- | --- | --- |
-| H0 — Baseline/HA-only upgrade | Pass (owner report) | Existing configuration test succeeded. |
-| H1 — Physical control/timing | Pass (owner report) | Tested against the physical fireplace; successful. Exact timings and individual optional controls were not itemized. |
-| H1 — set_state service | Pass (owner report) | Service-call test successful, with rtl_433 observation. |
-| H2 — Active listening | Pass (owner report) | Successful; rtl_433 used. Physical-fireplace observation not separately reported for this case. |
-| H3 — Guided learning | Pass (owner report) | Test setup learning successful. |
-| H4 — Cold cycle/offline command/recovery | Pass (owner report) | Successful. Offline refusal named unavailable required telemetry; this is the known-offline path rather than missing completion after dispatch. |
-| H5 — Offline startup/late registration | Pass (owner report) | Successful. |
-| H6 — ESPHome reload | Pass (owner report) | Reload test successful. |
-| H6 — Entity rename/disable/re-enable/restore binding | Pass — functional binding (owner report) | Rename/live update, disabled refusal with no RF and re-enable/control recovery passed. Original ID and correct controller association are restored; owner confirms the entity updates during active listening and HA operations. Owner subsequently upgraded HA from reported 2026.3.0b0 to 2026.8.0 and the entity returned to the ESPHome device page. The presentation symptom is no longer present; its exact cause is unconfirmed. |
-| H7 — Generated extended RX/TX | Pass (owner report) | Successful; rtl_433 used. |
+| H0 — Baseline/HA-only upgrade | Pass (manual testing) | Existing configuration test succeeded. |
+| H1 — Physical control/timing | Pass (manual testing) | Tested against the physical fireplace; successful. Exact timings and individual optional controls were not itemized. |
+| H1 — set_state service | Pass (manual testing) | Service-call test successful, with rtl_433 observation. |
+| H2 — Active listening | Pass (manual testing) | Successful; rtl_433 used. Physical-fireplace observation not separately reported for this case. |
+| H3 — Guided learning | Pass (manual testing) | Test setup learning successful. |
+| H4 — Cold cycle/offline command/recovery | Pass (manual testing) | Successful. Offline refusal named unavailable required telemetry; this is the known-offline path rather than missing completion after dispatch. |
+| H5 — Offline startup/late registration | Pass (manual testing) | Successful. |
+| H6 — ESPHome reload | Pass (manual testing) | Reload test successful. |
+| H6 — Entity rename/disable/re-enable/restore binding | Pass — functional binding (manual testing) | Rename/live update, disabled refusal with no RF and re-enable/control recovery passed. Original ID and correct controller association are restored; manual testing confirms the entity updates during active listening and HA operations. HA was subsequently upgraded manually from reported 2026.3.0b0 to 2026.8.0 and the entity returned to the ESPHome device page. The presentation symptom is no longer present; its exact cause is unconfirmed. |
+| H7 — Generated extended RX/TX | Pass (manual testing) | Successful; rtl_433 used. |
 | H7 — Other band, if available | Not reported | The latest report does not identify a second-band run. |
-| H7 — Supplemental paths | Pass (owner report) | Supplemental testing reported successful; individual optional checks not itemized. Delayed retransmission applies only to LilyGO; it is not a YardStick capability. |
+| H7 — Supplemental paths | Pass (manual testing) | Supplemental testing reported successful; individual optional checks not itemized. Delayed retransmission applies only to LilyGO; it is not a YardStick capability. |
 | H8 — Persisted HA 2025.8 → 2026.10 registry upgrade | Pass (automated) | Synthetic real-storage upgrade: six devices and 16 entities preserved through migration, integration reconciliation and a second modern load. HA 2025.8.0 → 2026.10.4. No live installation or RF operation used. |
 
-### Owner acceptance report — 2026-11-18
+### Manual acceptance report — 2026-11-18
 
-Owner reports H0/H3/H1 ordinary controls/H1 set_state/H2/H4/H5/H6 reload/H7
+Manual testing showed H0/H3/H1 ordinary controls/H1 set_state/H2/H4/H5/H6 reload/H7
 extended/H7 supplemental successful. All tests used rtl_433; physical fireplace
 operation was explicitly confirmed for H1 ordinary control. Do not extend that
 physical observation to other rows. H6 binding remains pending clarification.
@@ -366,12 +366,12 @@ public endpoint appeared usable but completion telemetry never arrived. Neither
 case identifies whether loss was caused by power, Wi-Fi or another disconnection.
 The named telemetry entity is the first unavailable field encountered, not
 proof of a fault specific to that sensor. The initial report required no
-connection-handling change. At the owner’s subsequent request, the known-offline
+connection-handling change. At a subsequent request, the known-offline
 user message now names possible power-off and network/Wi-Fi causes; the
 technical field remains in logs. Disabled/missing telemetry configuration errors
 retain their specific guidance. Detection, retries and rollback are unchanged.
 
-### Owner-reported control and lifecycle results — 2026-11-17
+### Manually reported control and lifecycle results — 2026-11-17
 
 Results concern the local 0.7.2-debug candidate; firmware was most recently
 reported as v0.8.0. No new version log or timing measurements accompany this
@@ -386,7 +386,7 @@ separate.
 | Shut down LilyGO, then restart HA | Pass | The error reported ESPHome offline, distinct from missing confirmation. |
 | Start LilyGO after HA's offline startup | Pass | LilyGO returned online and fireplace control resumed; rtl_433 received packets. |
 
-The owner also reports no noticed behavior or timing difference during smoke
+Manual testing also found no noticeable behavior or timing difference during smoke
 testing. No additional fix is indicated by these results. RF packets observed
 by rtl_433 establish transmission/reception at that receiver, not an independent
 physical-fireplace acknowledgement. Guided learning, native-remote active RX,
@@ -406,7 +406,7 @@ source. No release, push or HACS review request is implied by a test pass.
 
 ### H6 binding follow-up — 2026-11-18
 
-Owner confirms the first five actions in the condensed six-action H6 checklist:
+Manual testing confirms the first five actions in the condensed six-action H6 checklist:
 selection, rename, real-time updates/control, refusal while disabled with no RF,
 and successful re-enable/recovery. The final action, restoring the original
 entity ID by removing the temporary suffix, failed: the entity disappeared
@@ -424,7 +424,7 @@ recreation or firmware operation was performed by the agent.
 
 ### H6 registry presence confirmed — 2026-11-18
 
-Owner found Last Request ID in the global Entities list with its original ID
+Manual inspection found Last Request ID in the global Entities list with its original ID
 restored and the correct test ESPHome controller association. No unexpected
 log errors were reported. The entity was therefore not deleted or detached;
 the outstanding device-page absence does not establish a transport failure.
@@ -432,7 +432,7 @@ Check Enabled/Visible settings and a command's request-ID update under the
 restored ID before marking the final action passed. No implementation fix is
 indicated by registry presence alone.
 
-Owner reports the HA debug environment version as **2026.3.0b0**. Record this
+Manual testing showed the HA debug environment version as **2026.3.0b0**. Record this
 as reported; do not infer a different HA version or a LilyGO firmware version.
 If this is HA Core, the candidate selects its pre-2026.8 legacy registry adapter,
 consistent with the supported minimum. Firmware-version confirmation remains
@@ -441,7 +441,7 @@ outstanding. No live HA operation or source-code change was made by the agent.
 
 ### H6 functional restoration accepted — 2026-11-18
 
-Owner confirms that the entity under its restored original ID updates during
+Manual testing confirms that the entity under its restored original ID updates during
 active-listening activity and HA commands. With its registry presence and
 correct controller association already confirmed, this completes functional
 H6 rename/disable/re-enable/restore acceptance. No lost binding or missing
@@ -453,7 +453,7 @@ Exact LilyGO firmware-version confirmation remains separate from H6's result.
 
 ### Device-page visibility restored after HA upgrade — 2026-11-18
 
-Owner upgraded the test HA environment from reported 2026.3.0b0 to 2026.8.0
+The test HA environment was manually upgraded from reported 2026.3.0b0 to 2026.8.0
 and confirms Last Request ID is visible on the ESPHome device again. H6
 functional binding had already passed with the restored original entity ID.
 The presentation symptom is no longer observed; no Proflame2 implementation
@@ -463,14 +463,14 @@ this as a proven HA defect or a specific upstream fix.
 HA 2026.8.0 selects the modern registry adapter. A post-upgrade HA transmission
 and native-remote update are the focused remaining smoke checks for this actual
 installation; this visibility report alone does not establish their outcome.
-The owner performed the upgrade. The agent had only initiated an image pull
+The upgrade was performed manually. The agent had only initiated an image pull
 and had not edited deployment files or stopped/recreated containers before
 handoff. No agent firmware operation, commit or push occurred.
 
 
 ### Post-upgrade control regression and fix — 2026-11-18
 
-Owner reports all controls reverting after the HA 2026.8.0 upgrade, with Last
+Manual testing showed all controls reverting after the HA 2026.8.0 upgrade, with Last
 Issue Unknown. Read-only logs/registry inspection identified active ESPHome
 unique-ID migration, which the legacy-only binding missed, and an error longer
 than HA's sensor-state limit. Local regressions reproduced both defects before
@@ -491,10 +491,10 @@ learning, complete outage cycles or entity renames unless these checks expose
 a new failure. The agent did not restart HA or generate RF during diagnosis.
 
 
-### Post-fix owner follow-up and older-HA test preparation — 2026-11-18
+### Post-fix manual follow-up and older-HA test preparation — 2026-11-18
 
-Owner reports the HA 2026.8.0 follow-up is working after the correction and asks
-about testing a fresh 2025.8 → 2026.8 upgrade. The current configuration has
+Manual follow-up testing on HA 2026.8.0 succeeded after the correction.
+A fresh 2025.8 → 2026.8 upgrade test was then requested. The current configuration has
 already passed through newer HA/ESPHome registry migrations; merely changing
 the image tag backwards would not produce a valid old-version baseline.
 Use a matching pre-upgrade backup if available, or a separate fresh deployment
@@ -506,7 +506,7 @@ container, backup restore or restart was performed by the agent.
 
 ### Final release-tag firmware compatibility accepted — 2026-11-19
 
-Owner reports completion of the agreed final compatibility smoke: current
+Manual testing completed the agreed final compatibility smoke: current
 v0.7.2 integration, HA 2026.11.2, firmware built from the exact GitHub
 v0.7.1 tag with ESPHome Builder 2026.6.0; existing entries retained, one HA
 transmission and one native-remote update. This supplements completed

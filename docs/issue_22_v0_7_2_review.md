@@ -2,11 +2,11 @@
 
 ## Candidate assessment — 2026-11-19
 
-The U0–U5 owner hardware matrix is complete: configured HA 2025.8 baseline,
+The U0–U5 manual hardware matrix is complete: configured HA 2025.8 baseline,
 staged upgrades through 2026.1/2026.8/2026.9 to 2026.11.2, and an independent
 restored-baseline 2025.8 → 2026.11.2 direct jump. The agreed per-stage checks
 cover retained entity/controller identities and settings plus live TX/RX.
-Earlier comments below marking post-fix owner TX/RX acceptance pending are
+Earlier comments below marking post-fix manual TX/RX acceptance pending are
 superseded for these tested paths. The U4 disk-space interruption was resolved.
 No further broad manual testing is recommended without a new failure/change.
 
@@ -17,8 +17,8 @@ Those are recorded runs, not reruns performed for this assessment. Source
 preflight currently passes 480 files; whitespace check passes. The transport
 continues to use public HA services and entity state interfaces.
 
-The final released-firmware-source compatibility check is complete by owner
-report on 2026-11-19: current v0.7.2 candidate on HA 2026.11.2, LilyGO built
+The final released-firmware-source compatibility check is complete through manual
+testing on 2026-11-19: current v0.7.2 candidate on HA 2026.11.2, LilyGO built
 from the exact GitHub v0.7.1 tag with ESPHome Builder 2026.6.0, and the existing
 configuration retained. The agreed check was one HA transmission and one
 native-remote update. This closes the agreed source-based compatibility gate;
@@ -33,7 +33,7 @@ candidate is uncommitted/unpublished and this assessment authorizes no release.
 
 ## Post-upgrade correction
 
-Owner testing on HA 2026.8.0 subsequently exposed an ESPHome active entity
+Manual testing on HA 2026.8.0 subsequently exposed an ESPHome active entity
 unique-ID migration that this review's original tests did not exercise. The
 original no-blocker conclusion below is historical and does not qualify the
 updated candidate. The registry-only upgrade test did not load ESPHome, so it
@@ -48,13 +48,13 @@ accepts native API v1/v2/v3 identities, retains entry/device/ambiguity checks an
 continues to ignore editable HA names/IDs. All sensor string states are bounded;
 full Last Issue remains in primary attributes and logs. HA 2026.8 is added to
 CI; regression transport fixtures now exercise legacy and modern identities.
-Final automated results and owner retesting are recorded in the design/protocol.
+Final automated results and manual retesting are recorded in the design/protocol.
 No live HA restart or RF transmission was performed by the agent.
 
 ## Conclusion
 
 No blocking implementation defect found in the pending v0.7.2 changes.
-The candidate is ready for the owner's focused hardware acceptance. This is
+The candidate is ready for focused manual hardware acceptance. This is
 not release approval or a guarantee of HACS acceptance. Changes remain local
 on `issue_22-v0.7.2`; no commit, push, release or review request was performed.
 
@@ -162,7 +162,7 @@ The remaining steps are explicit release gates:
    the current `0.7.2-debug` version is intentional for testing. Follow the
    existing release-source validator, including firmware version identification
    stamping if required; no functional firmware update is necessary for users.
-3. With owner authorization, commit/push and pass HACS, Hassfest and compatibility
+3. With explicit authorization, commit/push and pass HACS, Hassfest and compatibility
    CI on the actual final candidate, then publish a full v0.7.2 release.
 4. Return the draft HACS submission to review as requested by the maintainer.
    Reviewer acceptance remains external and cannot be guaranteed by a local audit.
@@ -182,4 +182,4 @@ whitespace and source preflight passed. Initial attempts included an already-
 migrated no-op test setup collision and low scratch-disk space while two test
 environments coexisted; those were corrected without product changes before
 the final full passes. No live HA restart or RF action was performed.
-Owner post-fix HA command/native-RX acceptance remains pending. No commit/push.
+Manual post-fix HA command/native-RX acceptance remains pending. No commit/push.

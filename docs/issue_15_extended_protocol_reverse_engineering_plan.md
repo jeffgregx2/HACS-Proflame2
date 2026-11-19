@@ -77,7 +77,7 @@ Create and maintain the following repository artifacts. Do not edit the
 original issue comment or substitute manually retyped data for raw capture
 evidence.
 
-| Artifact | Required contents | Owner task |
+| Artifact | Required contents | Manual task |
 | --- | --- | --- |
 | `docs/issue_15_extended_protocol_reverse_engineering_plan.md` | This plan, decision log, and task status. | All tasks |
 | `tests/fixtures/issue_15_tmfsla_extended_capture.json` | Immutable transcription of raw RMT rows, labels, observed state, decoded words, bit length, and source issue-comment URL. | Task 1 |
