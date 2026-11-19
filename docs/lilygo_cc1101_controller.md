@@ -61,14 +61,18 @@ integration installed in Home Assistant. Setup has five main parts:
 
 ### Home Assistant and ESPHome Builder versions
 
-Building the LilyGO firmware requires **ESPHome Builder 2026.6.0 or newer**.
-If you run **Home Assistant 2025.8–2025.12**, keep Builder on **2026.6.x**;
-2026.6.0 was used for our upgrade tests. Before installing firmware built with
-Builder **2026.7 or newer**, update Home Assistant to **2026.1 or newer** so
-the LilyGO entities can be discovered correctly.
+For new LilyGO firmware builds, use these version combinations:
 
-Existing working LilyGO firmware does **not** need to be rebuilt or updated
-when upgrading the Proflame2 integration to v0.7.2.
+| Home Assistant version | ESPHome Builder version | Guidance |
+| --- | --- | --- |
+| **2025.8 - 2025.12** | **2026.6.x** | **Builder must remain on 2026.6.x.** Firmware built with Builder 2026.7 or newer will not be discovered correctly by these HA versions. |
+| **2026.1 or newer** | **2026.6.0 or newer** | Upgrade HA first before installing firmware built with Builder 2026.7 or newer. |
+
+Our upgrade tests used **ESPHome Builder 2026.6.0**. Older Builder versions
+cannot build the current LilyGO firmware configuration.
+
+Existing v0.7.1 LilyGO firmware is compatible with the v0.7.2 Proflame2
+integration and does not require an upgrade.
 
 ## Create The ESPHome Device
 
